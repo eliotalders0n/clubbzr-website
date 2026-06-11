@@ -1,5 +1,5 @@
-import { lazy, Suspense } from 'react'
-import { Navigate, Routes, Route } from 'react-router-dom'
+import { lazy, Suspense, type ReactNode } from 'react'
+import { Navigate, Routes, Route, useLocation } from 'react-router-dom'
 import { Spinner, Center } from '@chakra-ui/react'
 import { AuthProvider, useAuth } from '@/contexts/AuthContext'
 
@@ -55,6 +55,25 @@ function RootRoute() {
   return <Landing />
 }
 
+function AdminRoute({ children }: { children: ReactNode }) {
+  const location = useLocation()
+  const { firebaseUser, user, initialized, hasRole } = useAuth()
+
+  if (!initialized) {
+    return <PageLoader />
+  }
+
+  if (!firebaseUser || !user) {
+    return <Navigate to="/auth/login" state={{ from: location }} replace />
+  }
+
+  if (!hasRole(['admin'])) {
+    return <Navigate to="/" replace />
+  }
+
+  return <>{children}</>
+}
+
 function App() {
   return (
     <AuthProvider>
@@ -99,14 +118,14 @@ function App() {
           <Route path="/privacy" element={<Privacy />} />
 
           {/* Admin Routes */}
-          <Route path="/admin" element={<AdminDashboard />} />
-          <Route path="/admin/users" element={<ManageUsers />} />
-          <Route path="/admin/sessions" element={<ManageSessions />} />
-          <Route path="/admin/quests" element={<ManageQuests />} />
-          <Route path="/admin/exhibitions" element={<ManageExhibitions />} />
-          <Route path="/admin/radio" element={<ManageRadio />} />
-          <Route path="/admin/community" element={<ManageCommunity />} />
-          <Route path="/admin/map" element={<ManageMap />} />
+          <Route path="/admin" element={<AdminRoute><AdminDashboard /></AdminRoute>} />
+          <Route path="/admin/users" element={<AdminRoute><ManageUsers /></AdminRoute>} />
+          <Route path="/admin/sessions" element={<AdminRoute><ManageSessions /></AdminRoute>} />
+          <Route path="/admin/quests" element={<AdminRoute><ManageQuests /></AdminRoute>} />
+          <Route path="/admin/exhibitions" element={<AdminRoute><ManageExhibitions /></AdminRoute>} />
+          <Route path="/admin/radio" element={<AdminRoute><ManageRadio /></AdminRoute>} />
+          <Route path="/admin/community" element={<AdminRoute><ManageCommunity /></AdminRoute>} />
+          <Route path="/admin/map" element={<AdminRoute><ManageMap /></AdminRoute>} />
         </Routes>
       </Suspense>
     </AuthProvider>
