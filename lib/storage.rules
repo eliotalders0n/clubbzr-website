@@ -1,0 +1,291 @@
+rules_version = '2';
+
+/**
+ * Firebase Storage Security Rules
+ * Club BZR - Experimental Art Community
+ */
+
+service firebase.storage {
+  match /b/{bucket}/o {
+
+    // ==========================================================================
+    // HELPER FUNCTIONS
+    // ==========================================================================
+
+    // Check if user is authenticated
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    // Get current user's ID
+    function userId() {
+      return request.auth.uid;
+    }
+
+    // Check file size (in bytes)
+    function isValidSize(maxSizeBytes) {
+      return request.resource.size <= maxSizeBytes;
+    }
+
+    // Check if file is an image
+    function isImage() {
+      return request.resource.contentType.matches('image/.*');
+    }
+
+    // Check if file is a video
+    function isVideo() {
+      return request.resource.contentType.matches('video/.*');
+    }
+
+    // Check if file is audio
+    function isAudio() {
+      return request.resource.contentType.matches('audio/.*');
+    }
+
+    // Check if file is a document (PDF, DOC, etc.)
+    function isDocument() {
+      return request.resource.contentType.matches('application/pdf')
+        || request.resource.contentType.matches('application/msword')
+        || request.resource.contentType.matches('application/vnd.openxmlformats-officedocument.*');
+    }
+
+    // Allowed image types
+    function isAllowedImageType() {
+      return request.resource.contentType == 'image/jpeg'
+        || request.resource.contentType == 'image/png'
+        || request.resource.contentType == 'image/gif'
+        || request.resource.contentType == 'image/webp'
+        || request.resource.contentType == 'image/svg+xml';
+    }
+
+    // Allowed video types
+    function isAllowedVideoType() {
+      return request.resource.contentType == 'video/mp4'
+        || request.resource.contentType == 'video/webm'
+        || request.resource.contentType == 'video/quicktime';
+    }
+
+    // Allowed audio types
+    function isAllowedAudioType() {
+      return request.resource.contentType == 'audio/mpeg'
+        || request.resource.contentType == 'audio/wav'
+        || request.resource.contentType == 'audio/ogg'
+        || request.resource.contentType == 'audio/mp3';
+    }
+
+    // Size limits
+    function isValidImageSize() {
+      return isValidSize(15 * 1024 * 1024); // 15MB
+    }
+
+    function isValidVideoSize() {
+      return isValidSize(100 * 1024 * 1024); // 100MB
+    }
+
+    function isValidAudioSize() {
+      return isValidSize(50 * 1024 * 1024); // 50MB
+    }
+
+    function isValidDocumentSize() {
+      return isValidSize(25 * 1024 * 1024); // 25MB
+    }
+
+    function isValidProfileImageSize() {
+      return isValidSize(5 * 1024 * 1024); // 5MB
+    }
+
+    // ==========================================================================
+    // PROFILE IMAGES
+    // Path: /profiles/{userId}/{filename}
+    // ==========================================================================
+
+    match /profiles/{userId}/{allPaths=**} {
+      // Anyone can read profile images
+      allow read: if true;
+
+      // Users can upload their own profile images
+      allow write: if isAuthenticated()
+        && request.auth.uid == userId
+        && isAllowedImageType()
+        && isValidProfileImageSize();
+
+      // Users can delete their own profile images
+      allow delete: if isAuthenticated()
+        && request.auth.uid == userId;
+    }
+
+    // ==========================================================================
+    // PORTFOLIO IMAGES
+    // Path: /portfolio/{userId}/{filename}
+    // ==========================================================================
+
+    match /portfolio/{userId}/{allPaths=**} {
+      // Anyone can read portfolio images
+      allow read: if true;
+
+      // Users can upload to their own portfolio
+      allow write: if isAuthenticated()
+        && request.auth.uid == userId
+        && (isAllowedImageType() || isAllowedVideoType())
+        && (isImage() ? isValidImageSize() : isValidVideoSize());
+
+      // Users can delete their own portfolio items
+      allow delete: if isAuthenticated()
+        && request.auth.uid == userId;
+    }
+
+    // ==========================================================================
+    // QUEST SUBMISSIONS
+    // Path: /quest-submissions/{userId}/{questId}/{filename}
+    // ==========================================================================
+
+    match /quest-submissions/{userId}/{allPaths=**} {
+      // Anyone authenticated can read quest submissions
+      allow read: if isAuthenticated();
+
+      // Users can upload their own quest submissions
+      allow write: if isAuthenticated()
+        && request.auth.uid == userId
+        && (isAllowedImageType() || isAllowedVideoType() || isAllowedAudioType())
+        && (
+          (isImage() && isValidImageSize()) ||
+          (isVideo() && isValidVideoSize()) ||
+          (isAudio() && isValidAudioSize())
+        );
+
+      // Users can delete their own submissions
+      allow delete: if isAuthenticated()
+        && request.auth.uid == userId;
+    }
+
+    // ==========================================================================
+    // COMMUNITY POSTS
+    // Path: /community-posts/{userId}/{filename}
+    // ==========================================================================
+
+    match /community-posts/{userId}/{allPaths=**} {
+      // Anyone authenticated can read community post media
+      allow read: if isAuthenticated();
+
+      // Users can upload media for their own posts
+      allow write: if isAuthenticated()
+        && request.auth.uid == userId
+        && (isAllowedImageType() || isAllowedVideoType())
+        && (isImage() ? isValidImageSize() : isValidVideoSize());
+
+      // Users can delete their own post media
+      allow delete: if isAuthenticated()
+        && request.auth.uid == userId;
+    }
+
+    // ==========================================================================
+    // EXHIBITION ARTWORK
+    // Path: /exhibitions/{exhibitionId}/{filename}
+    // Note: Upload permissions should be validated through Cloud Functions
+    // or by checking Firestore for curator permissions
+    // ==========================================================================
+
+    match /exhibitions/{exhibitionId}/{allPaths=**} {
+      // Anyone can view exhibition artwork
+      allow read: if true;
+
+      // Only allow uploads from authenticated users
+      // In production, this should check if user is the curator
+      // via Cloud Function or custom token claims
+      allow write: if isAuthenticated()
+        && isAllowedImageType()
+        && isValidImageSize();
+
+      // Restrict deletes to authenticated users
+      allow delete: if isAuthenticated();
+    }
+
+    // ==========================================================================
+    // ART LOCATIONS
+    // Path: /art-locations/{userId}/{filename}
+    // ==========================================================================
+
+    match /art-locations/{userId}/{allPaths=**} {
+      // Anyone can view art location images
+      allow read: if true;
+
+      // Users can upload images for locations they submit
+      allow write: if isAuthenticated()
+        && request.auth.uid == userId
+        && isAllowedImageType()
+        && isValidImageSize();
+
+      // Users can delete their own uploaded images
+      allow delete: if isAuthenticated()
+        && request.auth.uid == userId;
+    }
+
+    // ==========================================================================
+    // RADIO CONTENT
+    // Path: /radio/{filename}
+    // Note: Should be restricted to curators/admins via Cloud Functions
+    // ==========================================================================
+
+    match /radio/{allPaths=**} {
+      // Anyone can listen to radio content
+      allow read: if true;
+
+      // Restrict uploads - in production use Cloud Functions
+      // For now, allow authenticated users
+      allow write: if isAuthenticated()
+        && (isAllowedAudioType() || isAllowedImageType())
+        && (isAudio() ? isValidAudioSize() : isValidImageSize());
+
+      // Restrict deletes
+      allow delete: if isAuthenticated();
+    }
+
+    // ==========================================================================
+    // SESSION GALLERY
+    // Path: /sessions/{sessionId}/{filename}
+    // ==========================================================================
+
+    match /sessions/{sessionId}/{allPaths=**} {
+      // Anyone authenticated can view session galleries
+      allow read: if isAuthenticated();
+
+      // Authenticated users can upload to session galleries
+      // In production, restrict to facilitators and attendees
+      allow write: if isAuthenticated()
+        && (isAllowedImageType() || isAllowedVideoType())
+        && (isImage() ? isValidImageSize() : isValidVideoSize());
+
+      // Allow authenticated users to delete
+      allow delete: if isAuthenticated();
+    }
+
+    // ==========================================================================
+    // TEMPORARY UPLOADS
+    // Path: /temp/{userId}/{filename}
+    // For processing before moving to final location
+    // ==========================================================================
+
+    match /temp/{userId}/{allPaths=**} {
+      // Only the owner can read temp files
+      allow read: if isAuthenticated()
+        && request.auth.uid == userId;
+
+      // Users can upload to their temp folder
+      allow write: if isAuthenticated()
+        && request.auth.uid == userId
+        && isValidSize(100 * 1024 * 1024); // 100MB max for temp
+
+      // Users can delete their temp files
+      allow delete: if isAuthenticated()
+        && request.auth.uid == userId;
+    }
+
+    // ==========================================================================
+    // CATCH-ALL: DENY ACCESS TO UNDEFINED PATHS
+    // ==========================================================================
+
+    match /{allPaths=**} {
+      allow read, write: if false;
+    }
+  }
+}

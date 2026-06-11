@@ -1,0 +1,78 @@
+rules_version = '2';
+
+service firebase.storage {
+  match /b/{bucket}/o {
+    // Helper function to check if user is authenticated
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    // Helper function to check file size (max 10MB)
+    function isValidSize() {
+      return request.resource.size < 10 * 1024 * 1024;
+    }
+
+    // Helper function to check if file is an image
+    function isImage() {
+      return request.resource.contentType.matches('image/.*');
+    }
+
+    // Helper function to check if file is a video
+    function isVideo() {
+      return request.resource.contentType.matches('video/.*');
+    }
+
+    // Helper function to check if file is audio
+    function isAudio() {
+      return request.resource.contentType.matches('audio/.*');
+    }
+
+    // Community posts media
+    match /community/{fileName} {
+      allow read: if true;
+      allow write: if isAuthenticated() && isValidSize() && (isImage() || isVideo());
+    }
+
+    // User avatars
+    match /avatars/{userId}/{fileName} {
+      allow read: if true;
+      allow write: if isAuthenticated() && request.auth.uid == userId && isValidSize() && isImage();
+    }
+
+    // Artist portfolios
+    match /portfolios/{artistId}/{fileName} {
+      allow read: if true;
+      allow write: if isAuthenticated() && isValidSize() && (isImage() || isVideo());
+    }
+
+    // Exhibition media
+    match /exhibitions/{exhibitionId}/{fileName} {
+      allow read: if true;
+      allow write: if isAuthenticated() && isValidSize() && (isImage() || isVideo() || isAudio());
+    }
+
+    // Session/Event covers
+    match /sessions/{sessionId}/{fileName} {
+      allow read: if true;
+      allow write: if isAuthenticated() && isValidSize() && isImage();
+    }
+
+    // Quest media
+    match /quests/{questId}/{fileName} {
+      allow read: if true;
+      allow write: if isAuthenticated() && isValidSize() && (isImage() || isVideo());
+    }
+
+    // Radio content
+    match /radio/{fileName} {
+      allow read: if true;
+      allow write: if isAuthenticated() && isValidSize() && isAudio();
+    }
+
+    // Fallback - deny all other paths
+    match /{allPaths=**} {
+      allow read: if true;
+      allow write: if false;
+    }
+  }
+}

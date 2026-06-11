@@ -1,0 +1,306 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // ========================================
+    // HELPER FUNCTIONS
+    // ========================================
+
+    // Check if user is authenticated
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    // Check if user is the owner of the document
+    function isOwner(userId) {
+      return isAuthenticated() && request.auth.uid == userId;
+    }
+
+    // Check if user has admin role
+    function isAdmin() {
+      return isAuthenticated() &&
+        exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
+        get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin';
+    }
+
+    // Check if user has curator role or higher
+    function isCuratorOrAdmin() {
+      return isAuthenticated() &&
+        exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
+        get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role in ['admin', 'curator'];
+    }
+
+    // Validate that required fields exist
+    function hasRequiredFields(fields) {
+      return request.resource.data.keys().hasAll(fields);
+    }
+
+    // ========================================
+    // USERS COLLECTION
+    // ========================================
+    match /users/{userId} {
+      // Anyone can read user profiles
+      allow read: if true;
+
+      // Users can create their own profile; admins can create pending invite profiles
+      allow create: if isOwner(userId) || isAdmin();
+
+      // Users can update their own profile, admins can update any
+      allow update: if isOwner(userId) || isAdmin();
+
+      // Only admins can delete users
+      allow delete: if isAdmin();
+    }
+
+    // ========================================
+    // ARTISTS COLLECTION
+    // ========================================
+    match /artists/{artistId} {
+      // Anyone can read artist profiles
+      allow read: if true;
+
+      // Authenticated users can create artist profiles
+      allow create: if isAuthenticated();
+
+      // Artist owner or admin can update
+      allow update: if isOwner(resource.data.userId) || isAdmin();
+
+      // Only admin can delete
+      allow delete: if isAdmin();
+    }
+
+    // ========================================
+    // SESSIONS COLLECTION
+    // ========================================
+    match /sessions/{sessionId} {
+      // Anyone can read sessions
+      allow read: if true;
+
+      // Only curators and admins can create/update/delete sessions
+      allow create, update, delete: if isCuratorOrAdmin();
+
+      // Allow authenticated users to update specific fields (registration)
+      allow update: if isAuthenticated() &&
+        request.resource.data.diff(resource.data).affectedKeys().hasOnly(['registrations', 'registeredCount']);
+    }
+
+    // ========================================
+    // QUESTS COLLECTION
+    // ========================================
+    match /quests/{questId} {
+      // Anyone can read quests
+      allow read: if true;
+
+      // Only admins can create/update/delete quests
+      allow create, update, delete: if isAdmin();
+    }
+
+    // ========================================
+    // QUEST SUBMISSIONS COLLECTION
+    // ========================================
+    match /questSubmissions/{submissionId} {
+      // Anyone can read submissions
+      allow read: if true;
+
+      // Authenticated users can create submissions
+      allow create: if isAuthenticated() &&
+        request.resource.data.userId == request.auth.uid;
+
+      // Users can update their own submissions, admins can update any.
+      // Any authenticated member can update only the aggregate vote fields.
+      allow update: if isAuthenticated() && (
+        isOwner(resource.data.userId) ||
+        isAdmin() ||
+        request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+          'upvotes',
+          'downvotes',
+          'upvotesCount',
+          'downvotesCount',
+          'voteScore',
+          'updatedAt'
+        ])
+      );
+
+      // Users can delete their own, admins can delete any
+      allow delete: if isOwner(resource.data.userId) || isAdmin();
+    }
+
+    // ========================================
+    // COMMUNITY POSTS COLLECTION
+    // ========================================
+    match /communityPosts/{postId} {
+      // Anyone can read posts (that aren't hidden)
+      allow read: if true;
+
+      // TODO: Require auth in production. For dev, allow all creates/updates
+      // Authenticated users can create posts
+      allow create: if true;
+
+      // Post author can update their own posts, admins can update any
+      // Also allow updates for reactions/comments counters
+      // TODO: Require auth in production
+      allow update: if true;
+
+      // Post author or admin can delete
+      // TODO: Require auth in production
+      allow delete: if true;
+    }
+
+    // ========================================
+    // COMMENTS COLLECTION
+    // ========================================
+    match /comments/{commentId} {
+      // Anyone can read comments
+      allow read: if true;
+
+      // TODO: Require auth in production. For dev, allow all
+      allow create: if true;
+
+      // Comment author can update, admins can update any
+      // TODO: Require auth in production
+      allow update: if true;
+
+      // Comment author or admin can delete
+      // TODO: Require auth in production
+      allow delete: if true;
+    }
+
+    // ========================================
+    // EXHIBITIONS COLLECTION
+    // ========================================
+    match /exhibitions/{exhibitionId} {
+      // Anyone can read exhibitions
+      allow read: if true;
+
+      // Only curators and admins can manage exhibitions
+      allow create, update, delete: if isCuratorOrAdmin();
+
+      // Allow view count increments from anyone
+      allow update: if request.resource.data.diff(resource.data).affectedKeys().hasOnly(['viewsCount']);
+    }
+
+    // ========================================
+    // ART LOCATIONS COLLECTION
+    // ========================================
+    match /artLocations/{locationId} {
+      // Anyone can read locations
+      allow read: if true;
+
+      // Authenticated users can create locations
+      allow create: if isAuthenticated();
+
+      // Creator or admin can update
+      allow update: if isAuthenticated() && (
+        isOwner(resource.data.submittedBy) ||
+        isAdmin() ||
+        // Allow save/visit toggles
+        request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+          'savedBy', 'visitedBy', 'savesCount', 'visitsCount'
+        ])
+      );
+
+      // Creator or admin can delete
+      allow delete: if isOwner(resource.data.submittedBy) || isAdmin();
+    }
+
+    // ========================================
+    // RADIO CONTENT COLLECTION
+    // ========================================
+    match /radioContent/{contentId} {
+      // Anyone can read radio content
+      allow read: if true;
+
+      // Only admins can create/delete
+      allow create, delete: if isAdmin();
+
+      // Admins can fully update, others can only update play/like counts
+      allow update: if isAdmin() || (
+        isAuthenticated() &&
+        request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+          'playCount', 'likedBy', 'likesCount'
+        ])
+      );
+    }
+
+    // ========================================
+    // CREATIVE PASSPORTS COLLECTION
+    // ========================================
+    match /creativePassports/{passportId} {
+      // Users can read their own passport, admins can read any
+      allow read: if isOwner(passportId) || isAdmin();
+
+      // Users can create/update their own passport
+      allow create, update: if isOwner(passportId);
+
+      // Only admins can delete passports
+      allow delete: if isAdmin();
+    }
+
+    // ========================================
+    // MATCHES COLLECTION
+    // ========================================
+    match /matches/{matchId} {
+      // Users can read matches where they are involved
+      allow read: if isAuthenticated() && (
+        resource.data.userId == request.auth.uid ||
+        resource.data.matchedUserId == request.auth.uid
+      );
+
+      // System creates matches (via cloud functions ideally)
+      // For now, allow authenticated users to create
+      allow create: if isAuthenticated();
+
+      // Users involved in the match can update status
+      allow update: if isAuthenticated() && (
+        resource.data.userId == request.auth.uid ||
+        resource.data.matchedUserId == request.auth.uid
+      );
+
+      // Only admins can delete matches
+      allow delete: if isAdmin();
+    }
+
+    // ========================================
+    // NOTIFICATIONS COLLECTION
+    // ========================================
+    match /notifications/{notificationId} {
+      // Users can only read their own notifications
+      allow read: if isOwner(resource.data.userId);
+
+      // System creates notifications
+      allow create: if isAuthenticated();
+
+      // Users can mark their notifications as read
+      allow update: if isOwner(resource.data.userId) &&
+        request.resource.data.diff(resource.data).affectedKeys().hasOnly(['isRead', 'readAt']);
+
+      // Users can delete their own notifications
+      allow delete: if isOwner(resource.data.userId);
+    }
+
+    // ========================================
+    // PROMPTS COLLECTION
+    // ========================================
+    match /prompts/{promptId} {
+      // Anyone can read prompts
+      allow read: if true;
+
+      // Only admins can manage prompts
+      allow create, update, delete: if isAdmin();
+    }
+
+    // ========================================
+    // SESSION REGISTRATIONS SUBCOLLECTION
+    // ========================================
+    match /sessions/{sessionId}/registrations/{registrationId} {
+      // Anyone can read registrations
+      allow read: if true;
+
+      // Users can create their own registration
+      allow create: if isAuthenticated() && request.auth.uid == registrationId;
+
+      // Users can update/delete their own registration
+      allow update, delete: if isOwner(registrationId) || isAdmin();
+    }
+  }
+}

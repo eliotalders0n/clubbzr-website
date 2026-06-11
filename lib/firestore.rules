@@ -1,0 +1,440 @@
+rules_version = '2';
+
+/**
+ * Firestore Security Rules
+ * Club BZR - Experimental Art Community
+ *
+ * Role hierarchy: admin > curator/facilitator > artist > user
+ */
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // ==========================================================================
+    // HELPER FUNCTIONS
+    // ==========================================================================
+
+    // Check if user is authenticated
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    // Get current user's ID
+    function userId() {
+      return request.auth.uid;
+    }
+
+    // Check if user owns the resource
+    function isOwner(resourceUserId) {
+      return isAuthenticated() && userId() == resourceUserId;
+    }
+
+    // Get user document
+    function getUserData() {
+      return get(/databases/$(database)/documents/users/$(userId())).data;
+    }
+
+    // Check user role
+    function hasRole(role) {
+      return isAuthenticated() && getUserData().role == role;
+    }
+
+    // Check if user has any of the specified roles
+    function hasAnyRole(roles) {
+      return isAuthenticated() && getUserData().role in roles;
+    }
+
+    // Check if user is admin
+    function isAdmin() {
+      return hasRole('admin');
+    }
+
+    // Check if user is curator
+    function isCurator() {
+      return hasAnyRole(['admin', 'curator']);
+    }
+
+    // Check if user is facilitator
+    function isFacilitator() {
+      return hasAnyRole(['admin', 'curator', 'facilitator']);
+    }
+
+    // Check if user is artist
+    function isArtist() {
+      return hasAnyRole(['admin', 'curator', 'facilitator', 'artist']);
+    }
+
+    // Validate required fields exist
+    function hasRequiredFields(fields) {
+      return request.resource.data.keys().hasAll(fields);
+    }
+
+    // Validate field is not changed
+    function fieldUnchanged(field) {
+      return request.resource.data[field] == resource.data[field];
+    }
+
+    // Validate timestamp is server timestamp
+    function isServerTimestamp(field) {
+      return request.resource.data[field] == request.time;
+    }
+
+    // Validate string length
+    function isValidStringLength(field, min, max) {
+      let value = request.resource.data[field];
+      return value is string && value.size() >= min && value.size() <= max;
+    }
+
+    // ==========================================================================
+    // USERS COLLECTION
+    // ==========================================================================
+
+    match /users/{userId} {
+      // Anyone authenticated can read user profiles
+      allow read: if isAuthenticated();
+
+      // Users can create their own profile on signup; admins can create pending invite profiles
+      allow create: if isAdmin() || (isOwner(userId)
+        && hasRequiredFields(['uid', 'email', 'displayName', 'role', 'isOnboarded', 'isActive', 'createdAt'])
+        && request.resource.data.uid == userId
+        && request.resource.data.role == 'user'); // New users start as 'user' role
+
+      // Users can update their own profile; admins can manage profiles and roles
+      allow update: if isAdmin() || (isOwner(userId)
+        && fieldUnchanged('uid')
+        && fieldUnchanged('email') // Email change requires auth operation
+        && fieldUnchanged('createdAt')
+        && fieldUnchanged('role'));
+
+      // Users can delete their own account
+      allow delete: if isOwner(userId) || isAdmin();
+    }
+
+    // ==========================================================================
+    // CREATIVE PASSPORTS COLLECTION
+    // ==========================================================================
+
+    match /creativePassports/{passportId} {
+      // Anyone authenticated can read passports
+      allow read: if isAuthenticated();
+
+      // Passport is created with user ID as doc ID
+      allow create: if isOwner(passportId)
+        && hasRequiredFields(['userId', 'createdAt'])
+        && request.resource.data.userId == passportId;
+
+      // Users can update their own passport
+      allow update: if isOwner(resource.data.userId)
+        && fieldUnchanged('userId')
+        && fieldUnchanged('createdAt');
+
+      // Users can delete their own passport
+      allow delete: if isOwner(resource.data.userId) || isAdmin();
+    }
+
+    // ==========================================================================
+    // ARTISTS COLLECTION
+    // ==========================================================================
+
+    match /artists/{artistId} {
+      // Anyone can read artist profiles
+      allow read: if true;
+
+      // Users can create artist profile for themselves
+      allow create: if isAuthenticated()
+        && hasRequiredFields(['userId', 'name', 'createdAt'])
+        && request.resource.data.userId == userId()
+        && request.resource.data.featured == false
+        && request.resource.data.verified == false;
+
+      // Artists can update their own profile (not featured/verified status)
+      allow update: if isOwner(resource.data.userId)
+        && fieldUnchanged('userId')
+        && fieldUnchanged('createdAt')
+        && (fieldUnchanged('featured') || isCurator())
+        && (fieldUnchanged('verified') || isAdmin());
+
+      // Only admin can delete artist profiles
+      allow delete: if isOwner(resource.data.userId) || isAdmin();
+    }
+
+    // ==========================================================================
+    // SESSIONS (EVENTS) COLLECTION
+    // ==========================================================================
+
+    match /sessions/{sessionId} {
+      // Anyone can read published sessions
+      allow read: if resource.data.status == 'published'
+        || isOwner(resource.data.facilitator.userId)
+        || isFacilitator();
+
+      // Facilitators can create sessions
+      allow create: if isFacilitator()
+        && hasRequiredFields(['title', 'description', 'type', 'date', 'status', 'createdAt'])
+        && request.resource.data.facilitator.userId == userId();
+
+      // Facilitators can update their own sessions, or admin can update any
+      allow update: if (isOwner(resource.data.facilitator.userId) || isAdmin())
+        && fieldUnchanged('createdAt')
+        && fieldUnchanged('facilitator.userId');
+
+      // Only session owner or admin can delete
+      allow delete: if isOwner(resource.data.facilitator.userId) || isAdmin();
+
+      // Subcollection for session attendees
+      match /attendees/{attendeeId} {
+        allow read: if isAuthenticated();
+        allow create: if isOwner(attendeeId);
+        allow delete: if isOwner(attendeeId) || isOwner(get(/databases/$(database)/documents/sessions/$(sessionId)).data.facilitator.userId);
+      }
+    }
+
+    // ==========================================================================
+    // QUESTS COLLECTION
+    // ==========================================================================
+
+    match /quests/{questId} {
+      // Anyone can read active quests
+      allow read: if resource.data.isActive == true || isFacilitator();
+
+      // Facilitators and above can create quests
+      allow create: if isFacilitator()
+        && hasRequiredFields(['title', 'description', 'category', 'difficulty', 'isActive', 'createdAt'])
+        && request.resource.data.createdBy == userId();
+
+      // Quest creator or admin can update
+      allow update: if (isOwner(resource.data.createdBy) || isAdmin())
+        && fieldUnchanged('createdAt')
+        && fieldUnchanged('createdBy');
+
+      // Only admin can delete quests
+      allow delete: if isAdmin();
+    }
+
+    // ==========================================================================
+    // QUEST SUBMISSIONS COLLECTION
+    // ==========================================================================
+
+    match /questSubmissions/{submissionId} {
+      // Anyone authenticated can read approved submissions
+      allow read: if isAuthenticated()
+        && (resource.data.approved == true || isOwner(resource.data.userId) || isFacilitator());
+
+      // Users can create submissions
+      allow create: if isAuthenticated()
+        && hasRequiredFields(['questId', 'userId', 'content', 'createdAt'])
+        && request.resource.data.userId == userId()
+        && request.resource.data.approved == false
+        && request.resource.data.featured == false;
+
+      // Users can update their own submissions (not approved/featured).
+      // Any authenticated member can update only aggregate vote fields.
+      allow update: if (
+        isOwner(resource.data.userId)
+          && fieldUnchanged('questId')
+          && fieldUnchanged('userId')
+          && fieldUnchanged('createdAt')
+          && (fieldUnchanged('approved') || isFacilitator())
+          && (fieldUnchanged('featured') || isCurator())
+      ) || (
+        isAuthenticated()
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+            'upvotes',
+            'downvotes',
+            'upvotesCount',
+            'downvotesCount',
+            'voteScore',
+            'updatedAt'
+          ])
+      );
+
+      // Users can delete their own submissions
+      allow delete: if isOwner(resource.data.userId) || isAdmin();
+    }
+
+    // ==========================================================================
+    // COMMUNITY POSTS COLLECTION
+    // ==========================================================================
+
+    match /communityPosts/{postId} {
+      // Anyone authenticated can read approved/non-hidden posts
+      allow read: if isAuthenticated()
+        && (resource.data.isHidden == false || isOwner(resource.data.userId) || isAdmin());
+
+      // Users can create posts
+      allow create: if isAuthenticated()
+        && hasRequiredFields(['userId', 'content', 'createdAt'])
+        && request.resource.data.userId == userId()
+        && request.resource.data.isApproved == true // Auto-approve by default
+        && request.resource.data.isHidden == false
+        && request.resource.data.featured == false
+        && request.resource.data.pinned == false;
+
+      // Users can update their own posts (not admin fields), admins can moderate any post
+      allow update: if (isOwner(resource.data.userId) || isAdmin())
+        && fieldUnchanged('userId')
+        && fieldUnchanged('createdAt')
+        && (fieldUnchanged('isApproved') || isAdmin())
+        && (fieldUnchanged('isHidden') || isAdmin())
+        && (fieldUnchanged('featured') || isCurator())
+        && (fieldUnchanged('pinned') || isAdmin());
+
+      // Authenticated users can update interaction-only fields
+      allow update: if isAuthenticated()
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+          'reactions', 'reactionsCount', 'commentsCount', 'shares', 'updatedAt'
+        ]);
+
+      // Users can delete their own posts
+      allow delete: if isOwner(resource.data.userId) || isAdmin();
+    }
+
+    // ==========================================================================
+    // COMMENTS COLLECTION
+    // ==========================================================================
+
+    match /comments/{commentId} {
+      // Anyone authenticated can read comments
+      allow read: if isAuthenticated();
+
+      // Users can create comments
+      allow create: if isAuthenticated()
+        && hasRequiredFields(['parentId', 'parentType', 'userId', 'content', 'createdAt'])
+        && request.resource.data.userId == userId();
+
+      // Users can update their own comments
+      allow update: if isOwner(resource.data.userId)
+        && fieldUnchanged('parentId')
+        && fieldUnchanged('parentType')
+        && fieldUnchanged('userId')
+        && fieldUnchanged('createdAt');
+
+      // Authenticated users can update comment interaction-only fields
+      allow update: if isAuthenticated()
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+          'reactions', 'reactionsCount', 'repliesCount', 'updatedAt'
+        ]);
+
+      // Users can delete their own comments
+      allow delete: if isOwner(resource.data.userId) || isAdmin();
+    }
+
+    // ==========================================================================
+    // EXHIBITIONS COLLECTION
+    // ==========================================================================
+
+    match /exhibitions/{exhibitionId} {
+      // Anyone can read exhibitions
+      allow read: if true;
+
+      // Curators can create exhibitions
+      allow create: if isCurator()
+        && hasRequiredFields(['title', 'description', 'curator', 'startDate', 'endDate', 'createdAt'])
+        && request.resource.data.curator.userId == userId();
+
+      // Exhibition curator or admin can update
+      allow update: if (isOwner(resource.data.curator.userId) || isAdmin())
+        && fieldUnchanged('createdAt')
+        && fieldUnchanged('curator.userId');
+
+      // Allow public view count increments
+      allow update: if request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+        'viewsCount', 'updatedAt'
+      ]);
+
+      // Only admin can delete exhibitions
+      allow delete: if isAdmin();
+    }
+
+    // ==========================================================================
+    // ART LOCATIONS COLLECTION
+    // ==========================================================================
+
+    match /artLocations/{locationId} {
+      // Anyone can read verified locations
+      allow read: if resource.data.verified == true || isOwner(resource.data.submittedBy) || isCurator();
+
+      // Users can submit locations; curators/admins can create managed locations
+      allow create: if (
+          isAuthenticated()
+          && hasRequiredFields(['name', 'type', 'coordinates', 'address', 'city', 'country', 'description', 'submittedBy', 'createdAt'])
+          && request.resource.data.submittedBy == userId()
+          && request.resource.data.verified == false
+          && request.resource.data.featured == false
+        ) || (
+          isCurator()
+          && hasRequiredFields(['name', 'type', 'coordinates', 'address', 'city', 'country', 'description', 'submittedBy', 'createdAt'])
+        );
+
+      // Users can update their own submissions; curators/admins can verify and manage
+      allow update: if (isOwner(resource.data.submittedBy) || isCurator())
+        && fieldUnchanged('submittedBy')
+        && fieldUnchanged('createdAt')
+        && (fieldUnchanged('verified') || isCurator())
+        && (fieldUnchanged('featured') || isCurator());
+
+      // Only admin can delete locations
+      allow delete: if isOwner(resource.data.submittedBy) || isAdmin();
+    }
+
+    // ==========================================================================
+    // RADIO CONTENT COLLECTION
+    // ==========================================================================
+
+    match /radioContent/{contentId} {
+      // Anyone can read published content
+      allow read: if resource.data.isPublished == true || isCurator();
+
+      // Curators can create radio content
+      allow create: if isCurator()
+        && hasRequiredFields(['title', 'type', 'audioUrl', 'description', 'createdAt']);
+
+      // Curators can update radio content
+      allow update: if (
+          isCurator()
+          && fieldUnchanged('createdAt')
+        ) || (
+          isAuthenticated()
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+            'playCount', 'likedBy', 'likesCount', 'updatedAt'
+          ])
+        );
+
+      // Only admin can delete radio content
+      allow delete: if isAdmin();
+    }
+
+    // ==========================================================================
+    // NOTIFICATIONS COLLECTION
+    // ==========================================================================
+
+    match /notifications/{notificationId} {
+      // Users can only read their own notifications
+      allow read: if isOwner(resource.data.userId);
+
+      // System creates notifications (via Cloud Functions typically)
+      // For client-side, users can create notifications for themselves
+      allow create: if isAuthenticated()
+        && request.resource.data.userId == userId();
+
+      // Users can mark their own notifications as read
+      allow update: if isOwner(resource.data.userId)
+        && fieldUnchanged('userId')
+        && fieldUnchanged('type')
+        && fieldUnchanged('title')
+        && fieldUnchanged('body')
+        && fieldUnchanged('createdAt');
+
+      // Users can delete their own notifications
+      allow delete: if isOwner(resource.data.userId);
+    }
+
+    // ==========================================================================
+    // CATCH-ALL: DENY ACCESS TO UNDEFINED COLLECTIONS
+    // ==========================================================================
+
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}
