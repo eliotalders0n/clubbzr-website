@@ -1,6 +1,6 @@
 'use client'
 
-import { useMemo, useState, type FormEvent } from 'react'
+import { useMemo, useRef, useState, type ChangeEvent, type FormEvent } from 'react'
 import {
   Box,
   Flex,
@@ -17,12 +17,14 @@ import {
   Spinner,
 } from '@chakra-ui/react'
 import { motion, AnimatePresence } from 'framer-motion'
-import { CalendarDays, MapPin, Pencil, Plus, Search, Trash2, Users } from 'lucide-react'
+import { CalendarDays, ImagePlus, Link as LinkIcon, MapPin, Pencil, Plus, Search, Trash2, Users, X } from 'lucide-react'
 import { Timestamp } from 'firebase/firestore'
 
 import { AdminLayout } from '@/components/layout/AdminLayout'
+import { useAuth } from '@/contexts/AuthContext'
 import { useCollection } from '@/hooks'
 import { createDocument, deleteDocument, updateDocument } from '../../../lib/firestore'
+import { STORAGE_PATHS, uploadFileSimple, validateFile } from '../../../lib/storage'
 import type { CreateDocument, Session, SessionStatus, SessionType, UpdateDocument } from '../../../lib/schema'
 
 const MotionBox = motion.create(Box)
@@ -76,6 +78,50 @@ const statusColors: Record<SessionStatus, { bg: string; color: string }> = {
   published: { bg: 'green.500/20', color: 'green.300' },
   cancelled: { bg: 'red.500/20', color: 'red.300' },
   completed: { bg: 'blue.500/20', color: 'blue.300' },
+}
+
+const sessionTypes: Array<SessionType | 'all'> = [
+  'all',
+  'workshop',
+  'talk',
+  'open_studio',
+  'critique',
+  'collaboration',
+  'field_trip',
+  'social',
+  'online',
+]
+
+const actionButtonProps = {
+  h: '44px',
+  px: 5,
+  borderRadius: 'full',
+  fontSize: 'sm',
+  fontWeight: 'semibold',
+  lineHeight: '1',
+  whiteSpace: 'nowrap',
+} as const
+
+const filterButtonProps = {
+  h: '40px',
+  px: 4,
+  minW: 'max-content',
+  borderRadius: 'full',
+  fontSize: 'sm',
+  fontWeight: 'semibold',
+  lineHeight: '1',
+  whiteSpace: 'nowrap',
+} as const
+
+const filterSelectStyle: React.CSSProperties = {
+  width: '100%',
+  height: '46px',
+  padding: '0 16px',
+  backgroundColor: 'rgba(0,0,0,0.22)',
+  border: '1px solid rgba(255,255,255,0.16)',
+  borderRadius: '12px',
+  color: 'white',
+  outline: 'none',
 }
 
 const toDate = (value: unknown): Date | null => {
@@ -299,11 +345,11 @@ export default function ManageSessions() {
             <Heading as="h1" size="lg" color="white">Sessions</Heading>
             <Text color="whiteAlpha.600" mt={2}>Manage Firestore events, workshops, and gatherings.</Text>
           </Box>
-          <HStack gap={3} flexWrap="wrap">
-            <Button onClick={handleExport} bg="whiteAlpha.50" color="whiteAlpha.800" border="1px solid" borderColor="whiteAlpha.200" borderRadius="full" _hover={{ bg: 'whiteAlpha.100', color: 'white' }}>
+          <HStack gap={3} flexWrap="wrap" justify={{ base: 'flex-start', md: 'flex-end' }}>
+            <Button {...actionButtonProps} onClick={handleExport} bg="whiteAlpha.50" color="whiteAlpha.800" border="1px solid" borderColor="whiteAlpha.200" _hover={{ bg: 'whiteAlpha.100', color: 'white' }}>
               Export
             </Button>
-            <Button onClick={openCreate} bg="brand.500" color="white" borderRadius="full" _hover={{ bg: 'brand.600' }}>
+            <Button {...actionButtonProps} onClick={openCreate} bg="brand.500" color="white" minW="176px" _hover={{ bg: 'brand.600' }}>
               <Plus size={17} />
               Create Session
             </Button>
@@ -317,28 +363,51 @@ export default function ManageSessions() {
           <Stat label="Attendees" value={stats.attendees} color="blue.300" />
         </SimpleGrid>
 
-        <Flex direction={{ base: 'column', lg: 'row' }} gap={4} mb={6} align={{ lg: 'center' }}>
-          <Box position="relative" maxW={{ lg: '380px' }} w="full">
-            <Box position="absolute" left={4} top="50%" transform="translateY(-50%)" color="whiteAlpha.500">
-              <Search size={18} />
+        <Box p={{ base: 4, md: 5 }} bg="gray.900" border="1px solid" borderColor="whiteAlpha.100" borderRadius="2xl" mb={6}>
+          <SimpleGrid columns={{ base: 1, lg: 3 }} gap={4} alignItems="end">
+            <Box>
+              <Text color="whiteAlpha.500" fontSize="xs" fontWeight="semibold" textTransform="uppercase" letterSpacing="0.08em" mb={2}>
+                Search
+              </Text>
+              <Box position="relative">
+                <Box position="absolute" left={4} top="50%" transform="translateY(-50%)" color="whiteAlpha.500">
+                  <Search size={18} />
+                </Box>
+                <Input value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)} placeholder="Search sessions..." h="46px" pl={11} pr={4} bg="blackAlpha.300" color="white" borderColor="whiteAlpha.200" borderRadius="xl" />
+              </Box>
             </Box>
-            <Input value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)} placeholder="Search sessions..." pl={11} bg="gray.900" color="white" borderColor="whiteAlpha.200" borderRadius="full" />
-          </Box>
-          <HStack gap={2} flexWrap="wrap">
-            {(['all', 'workshop', 'talk', 'open_studio', 'critique', 'collaboration', 'field_trip', 'social', 'online'] as const).map((type) => (
-              <Button key={type} size="sm" onClick={() => setTypeFilter(type)} bg={typeFilter === type ? 'brand.500' : 'whiteAlpha.50'} color={typeFilter === type ? 'white' : 'whiteAlpha.700'} borderRadius="full" textTransform="capitalize" _hover={{ bg: typeFilter === type ? 'brand.600' : 'whiteAlpha.100' }}>
-                {type.replace('_', ' ')}
-              </Button>
-            ))}
-          </HStack>
-          <HStack gap={2} ml={{ lg: 'auto' }}>
-            {(['upcoming', 'past'] as const).map((tab) => (
-              <Button key={tab} size="sm" onClick={() => setActiveTab(tab)} bg={activeTab === tab ? 'brand.500' : 'whiteAlpha.50'} color={activeTab === tab ? 'white' : 'whiteAlpha.700'} borderRadius="full" textTransform="capitalize" _hover={{ bg: activeTab === tab ? 'brand.600' : 'whiteAlpha.100' }}>
-                {tab}
-              </Button>
-            ))}
-          </HStack>
-        </Flex>
+
+            <Box>
+              <Text color="whiteAlpha.500" fontSize="xs" fontWeight="semibold" textTransform="uppercase" letterSpacing="0.08em" mb={2}>
+                Type
+              </Text>
+              <select
+                value={typeFilter}
+                onChange={(event) => setTypeFilter(event.target.value as SessionType | 'all')}
+                style={filterSelectStyle}
+              >
+                {sessionTypes.map((type) => (
+                  <option key={type} value={type}>
+                    {type === 'all' ? 'All session types' : type.replace('_', ' ')}
+                  </option>
+                ))}
+              </select>
+            </Box>
+
+            <Box>
+              <Text color="whiteAlpha.500" fontSize="xs" fontWeight="semibold" textTransform="uppercase" letterSpacing="0.08em" mb={2}>
+                Timing
+              </Text>
+              <HStack gap={2}>
+                {(['upcoming', 'past'] as const).map((tab) => (
+                  <Button key={tab} {...filterButtonProps} h="42px" px={5} onClick={() => setActiveTab(tab)} bg={activeTab === tab ? 'brand.500' : 'whiteAlpha.50'} color={activeTab === tab ? 'white' : 'whiteAlpha.700'} border="1px solid" borderColor={activeTab === tab ? 'brand.500' : 'whiteAlpha.100'} textTransform="capitalize" _hover={{ bg: activeTab === tab ? 'brand.600' : 'whiteAlpha.100', color: 'white' }}>
+                    {tab}
+                  </Button>
+                ))}
+              </HStack>
+            </Box>
+          </SimpleGrid>
+        </Box>
 
         {loading && (
           <Flex justify="center" py={16}>
@@ -501,6 +570,57 @@ function Info({ label, value }: { label: string; value: string }) {
 }
 
 function SessionFormFields({ form, setForm }: { form: SessionForm; setForm: React.Dispatch<React.SetStateAction<SessionForm>> }) {
+  const { firebaseUser } = useAuth()
+  const fileInputRef = useRef<HTMLInputElement>(null)
+  const [isDraggingCover, setIsDraggingCover] = useState(false)
+  const [uploadingCover, setUploadingCover] = useState(false)
+  const [coverUploadError, setCoverUploadError] = useState<string | null>(null)
+  const coverImage = form.coverImage.trim()
+
+  const handleCoverFile = async (file: File | null | undefined) => {
+    if (!file || uploadingCover) return
+
+    if (!firebaseUser?.uid) {
+      setCoverUploadError('Sign in again before uploading a cover image.')
+      return
+    }
+
+    const validation = validateFile(file, {
+      maxSizeMB: 10,
+      allowedTypes: ['image/jpeg', 'image/png', 'image/webp', 'image/gif'],
+    })
+
+    if (!validation.valid) {
+      setCoverUploadError(validation.error || 'Choose a JPG, PNG, WebP, or GIF image under 10MB.')
+      return
+    }
+
+    setCoverUploadError(null)
+    setUploadingCover(true)
+
+    const result = await uploadFileSimple(file, `${STORAGE_PATHS.SESSIONS}/covers/${firebaseUser.uid}`)
+
+    setUploadingCover(false)
+
+    if (!result.success || !result.url) {
+      setCoverUploadError(result.error?.message || 'Could not upload this image.')
+      return
+    }
+
+    setForm((prev) => ({ ...prev, coverImage: result.url || '' }))
+  }
+
+  const handleCoverInput = async (event: ChangeEvent<HTMLInputElement>) => {
+    await handleCoverFile(event.target.files?.[0])
+    event.target.value = ''
+  }
+
+  const handleCoverDrop = (event: React.DragEvent<HTMLDivElement>) => {
+    event.preventDefault()
+    setIsDraggingCover(false)
+    void handleCoverFile(event.dataTransfer.files?.[0])
+  }
+
   return (
     <VStack gap={4} align="stretch">
       <Field label="Title"><Input value={form.title} onChange={(e) => setForm((prev) => ({ ...prev, title: e.target.value }))} bg="gray.800" color="white" borderColor="whiteAlpha.200" /></Field>
@@ -527,7 +647,92 @@ function SessionFormFields({ form, setForm }: { form: SessionForm; setForm: Reac
         <Field label="Capacity"><Input type="number" value={form.capacity} onChange={(e) => setForm((prev) => ({ ...prev, capacity: e.target.value }))} bg="gray.800" color="white" borderColor="whiteAlpha.200" /></Field>
       </SimpleGrid>
       <Field label="Facilitator"><Input value={form.facilitator} onChange={(e) => setForm((prev) => ({ ...prev, facilitator: e.target.value }))} bg="gray.800" color="white" borderColor="whiteAlpha.200" /></Field>
-      <Field label="Cover Image URL"><Input value={form.coverImage} onChange={(e) => setForm((prev) => ({ ...prev, coverImage: e.target.value }))} bg="gray.800" color="white" borderColor="whiteAlpha.200" /></Field>
+      <Field label="Cover Image">
+        <VStack align="stretch" gap={3}>
+          {coverImage && (
+            <Box position="relative" overflow="hidden" borderRadius="xl" border="1px solid" borderColor="whiteAlpha.150" bg="whiteAlpha.50">
+              <Image src={coverImage} alt="Session cover preview" w="full" h="150px" objectFit="cover" />
+              <Button
+                type="button"
+                position="absolute"
+                top={3}
+                right={3}
+                size="sm"
+                h="34px"
+                px={3}
+                bg="blackAlpha.700"
+                color="white"
+                borderRadius="full"
+                _hover={{ bg: 'blackAlpha.800' }}
+                onClick={() => setForm((prev) => ({ ...prev, coverImage: '' }))}
+              >
+                <X size={15} />
+                Remove
+              </Button>
+            </Box>
+          )}
+
+          <Box
+            onDragOver={(event) => {
+              event.preventDefault()
+              setIsDraggingCover(true)
+            }}
+            onDragLeave={() => setIsDraggingCover(false)}
+            onDrop={handleCoverDrop}
+            p={4}
+            bg={isDraggingCover ? 'brand.500/10' : 'whiteAlpha.50'}
+            border="1px dashed"
+            borderColor={isDraggingCover ? 'brand.500' : 'whiteAlpha.200'}
+            borderRadius="xl"
+            transition="all 0.2s"
+          >
+            <Flex align={{ base: 'stretch', sm: 'center' }} direction={{ base: 'column', sm: 'row' }} gap={3}>
+              <Flex w="44px" h="44px" align="center" justify="center" borderRadius="full" bg="gray.800" color="brand.300" flexShrink={0}>
+                <ImagePlus size={20} />
+              </Flex>
+              <Box flex={1}>
+                <Text color="white" fontWeight="semibold">Upload a cover image</Text>
+                <Text color="whiteAlpha.500" fontSize="sm" mt={1}>Drop an image here or choose a JPG, PNG, WebP, or GIF under 10MB.</Text>
+              </Box>
+              <Input ref={fileInputRef} type="file" accept="image/jpeg,image/png,image/webp,image/gif" display="none" onChange={handleCoverInput} />
+              <Button
+                type="button"
+                {...actionButtonProps}
+                h="40px"
+                px={4}
+                loading={uploadingCover}
+                bg="whiteAlpha.100"
+                color="white"
+                border="1px solid"
+                borderColor="whiteAlpha.200"
+                _hover={{ bg: 'whiteAlpha.200' }}
+                onClick={() => fileInputRef.current?.click()}
+              >
+                Choose Image
+              </Button>
+            </Flex>
+          </Box>
+
+          {coverUploadError && (
+            <Text color="red.300" fontSize="sm">{coverUploadError}</Text>
+          )}
+
+          <Box position="relative">
+            <Box position="absolute" left={3} top="50%" transform="translateY(-50%)" color="whiteAlpha.500" pointerEvents="none">
+              <LinkIcon size={16} />
+            </Box>
+            <Input
+              value={form.coverImage}
+              onChange={(e) => setForm((prev) => ({ ...prev, coverImage: e.target.value }))}
+              placeholder="Or paste an image URL"
+              pl={10}
+              bg="gray.800"
+              color="white"
+              borderColor="whiteAlpha.200"
+            />
+          </Box>
+        </VStack>
+      </Field>
       <Field label="Tags"><Input value={form.tags} onChange={(e) => setForm((prev) => ({ ...prev, tags: e.target.value }))} bg="gray.800" color="white" borderColor="whiteAlpha.200" placeholder="workshop, drawing" /></Field>
     </VStack>
   )

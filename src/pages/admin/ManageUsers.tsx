@@ -165,13 +165,18 @@ const feedbackStyles: Record<FeedbackType, { bg: string; borderColor: string; co
 
 const selectStyle: CSSProperties = {
   width: '100%',
-  height: '44px',
-  padding: '0 14px',
+  height: '48px',
+  padding: '0 16px',
   backgroundColor: '#111111',
-  border: '1px solid rgba(255,255,255,0.12)',
+  border: '1px solid rgba(255,255,255,0.16)',
   borderRadius: '12px',
   color: 'white',
   outline: 'none',
+}
+
+const filterSelectStyle: CSSProperties = {
+  ...selectStyle,
+  backgroundColor: 'rgba(0,0,0,0.24)',
 }
 
 const emptyInviteForm: InviteForm = {
@@ -660,8 +665,11 @@ export default function ManageUsers() {
               borderRadius="2xl"
               p={{ base: 4, md: 5 }}
             >
-              <Grid templateColumns={{ base: '1fr', xl: 'minmax(300px, 420px) 1fr' }} gap={4} alignItems="center">
+              <Grid templateColumns={{ base: '1fr', lg: 'minmax(280px, 1.6fr) minmax(180px, 1fr) minmax(180px, 1fr)' }} gap={4} alignItems="end">
                 <GridItem>
+                  <Text color="whiteAlpha.500" fontSize="xs" fontWeight="semibold" textTransform="uppercase" letterSpacing="0.08em" mb={2}>
+                    Search
+                  </Text>
                   <Box position="relative">
                     <Box position="absolute" left={4} top="50%" transform="translateY(-50%)" color="whiteAlpha.500">
                       <Search size={18} />
@@ -676,7 +684,7 @@ export default function ManageUsers() {
                       bg="blackAlpha.400"
                       color="white"
                       borderColor="whiteAlpha.200"
-                      borderRadius="full"
+                      borderRadius="xl"
                       h={12}
                       pl={11}
                       _placeholder={{ color: 'whiteAlpha.400' }}
@@ -685,24 +693,38 @@ export default function ManageUsers() {
                   </Box>
                 </GridItem>
                 <GridItem>
-                  <VStack align="stretch" gap={3}>
-                    <FilterPills
-                      items={roleFilters}
-                      value={roleFilter}
-                      onChange={(value) => {
-                        setRoleFilter(value as UserRole | 'all')
-                        setCurrentPage(1)
-                      }}
-                    />
-                    <FilterPills
-                      items={statusFilters}
-                      value={statusFilter}
-                      onChange={(value) => {
-                        setStatusFilter(value as UserStatus | 'all')
-                        setCurrentPage(1)
-                      }}
-                    />
-                  </VStack>
+                  <Text color="whiteAlpha.500" fontSize="xs" fontWeight="semibold" textTransform="uppercase" letterSpacing="0.08em" mb={2}>
+                    Role
+                  </Text>
+                  <select
+                    value={roleFilter}
+                    onChange={(event) => {
+                      setRoleFilter(event.target.value as UserRole | 'all')
+                      setCurrentPage(1)
+                    }}
+                    style={filterSelectStyle}
+                  >
+                    {roleFilters.map((item) => (
+                      <option key={item.value} value={item.value}>{item.label}</option>
+                    ))}
+                  </select>
+                </GridItem>
+                <GridItem>
+                  <Text color="whiteAlpha.500" fontSize="xs" fontWeight="semibold" textTransform="uppercase" letterSpacing="0.08em" mb={2}>
+                    Status
+                  </Text>
+                  <select
+                    value={statusFilter}
+                    onChange={(event) => {
+                      setStatusFilter(event.target.value as UserStatus | 'all')
+                      setCurrentPage(1)
+                    }}
+                    style={filterSelectStyle}
+                  >
+                    {statusFilters.map((item) => (
+                      <option key={item.value} value={item.value}>{item.label}</option>
+                    ))}
+                  </select>
                 </GridItem>
               </Grid>
             </Box>
@@ -1205,40 +1227,6 @@ function StatCard({
         </Flex>
       </HStack>
     </Box>
-  )
-}
-
-function FilterPills({
-  items,
-  value,
-  onChange,
-}: {
-  items: Array<{ label: string; value: string }>
-  value: string
-  onChange: (value: string) => void
-}) {
-  return (
-    <HStack gap={2} flexWrap="wrap">
-      {items.map((item) => {
-        const active = value === item.value
-        return (
-          <Button
-            key={item.value}
-            size="sm"
-            onClick={() => onChange(item.value)}
-            bg={active ? 'brand.500' : 'whiteAlpha.50'}
-            color={active ? 'white' : 'whiteAlpha.650'}
-            border="1px solid"
-            borderColor={active ? 'brand.500' : 'whiteAlpha.100'}
-            borderRadius="full"
-            px={4}
-            _hover={{ bg: active ? 'brand.600' : 'whiteAlpha.100', color: 'white' }}
-          >
-            {item.label}
-          </Button>
-        )
-      })}
-    </HStack>
   )
 }
 

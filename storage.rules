@@ -27,6 +27,13 @@ service firebase.storage {
       return request.resource.contentType.matches('audio/.*');
     }
 
+    // Helper function to check if the signed-in user can manage admin media
+    function isCuratorOrAdmin() {
+      return isAuthenticated()
+        && firestore.exists(/databases/(default)/documents/users/$(request.auth.uid))
+        && firestore.get(/databases/(default)/documents/users/$(request.auth.uid)).data.role in ['admin', 'curator'];
+    }
+
     // Community posts media
     match /community/{fileName} {
       allow read: if true;
@@ -52,9 +59,14 @@ service firebase.storage {
     }
 
     // Session/Event covers
+    match /sessions/covers/{userId}/{fileName} {
+      allow read: if true;
+      allow write: if isAuthenticated() && request.auth.uid == userId && isValidSize() && isImage();
+    }
+
     match /sessions/{sessionId}/{fileName} {
       allow read: if true;
-      allow write: if isAuthenticated() && isValidSize() && isImage();
+      allow write: if isCuratorOrAdmin() && isValidSize() && isImage();
     }
 
     // Quest media

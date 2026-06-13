@@ -1,6 +1,6 @@
 'use client'
 
-import { useMemo, useState, type Dispatch, type FormEvent, type ReactNode, type SetStateAction } from 'react'
+import { useMemo, useRef, useState, type CSSProperties, type ChangeEvent, type Dispatch, type FormEvent, type ReactNode, type SetStateAction } from 'react'
 import {
   Badge,
   Box,
@@ -28,12 +28,14 @@ import {
   Plus,
   Search,
   Trash2,
+  X,
 } from 'lucide-react'
 
 import { AdminLayout } from '@/components/layout/AdminLayout'
 import { useAuth } from '@/contexts/AuthContext'
 import { useCollection } from '@/hooks/useFirestore'
 import { createDocument, deleteDocument, updateDocument } from '../../../lib/firestore'
+import { STORAGE_PATHS, uploadFileSimple, validateFile } from '../../../lib/storage'
 import type {
   ArtMedium,
   CreateDocument,
@@ -106,6 +108,37 @@ const STATUS_FILTERS: { id: StatusFilter; label: string }[] = [
   { id: 'active', label: 'Active' },
   { id: 'archived', label: 'Archived' },
 ]
+
+const actionButtonProps = {
+  h: '44px',
+  px: 5,
+  borderRadius: 'full',
+  fontSize: 'sm',
+  fontWeight: 'semibold',
+  lineHeight: '1',
+  whiteSpace: 'nowrap',
+} as const
+
+const compactButtonProps = {
+  h: '40px',
+  px: 4,
+  borderRadius: 'lg',
+  fontSize: 'sm',
+  fontWeight: 'semibold',
+  lineHeight: '1',
+  whiteSpace: 'nowrap',
+} as const
+
+const filterSelectStyle: CSSProperties = {
+  width: '100%',
+  height: '46px',
+  padding: '0 16px',
+  backgroundColor: 'rgba(0,0,0,0.24)',
+  border: '1px solid rgba(255,255,255,0.16)',
+  borderRadius: '12px',
+  color: 'white',
+  outline: 'none',
+}
 
 const fallbackCoverImage = 'https://images.unsplash.com/photo-1634017839464-5c339bbe3c35?w=1200&q=80'
 
@@ -304,7 +337,16 @@ function Modal({
           <Heading as="h2" color="white" fontSize="xl" fontFamily="heading">
             {title}
           </Heading>
-          <Button onClick={onClose} variant="ghost" color="whiteAlpha.700" _hover={{ bg: 'whiteAlpha.100', color: 'white' }}>
+          <Button
+            type="button"
+            {...compactButtonProps}
+            onClick={onClose}
+            bg="whiteAlpha.50"
+            color="whiteAlpha.800"
+            border="1px solid"
+            borderColor="whiteAlpha.100"
+            _hover={{ bg: 'whiteAlpha.100', color: 'white' }}
+          >
             Close
           </Button>
         </Flex>
@@ -327,7 +369,19 @@ function ArtworkFields({
     <Box p={4} bg="gray.800" border="1px solid" borderColor="whiteAlpha.100" borderRadius="xl">
       <Flex justify="space-between" align="center" mb={4}>
         <Text color="white" fontWeight="medium">Artwork</Text>
-        <Button type="button" onClick={onRemove} size="sm" bg="transparent" color="red.300" _hover={{ bg: 'red.500/10' }}>
+        <Button
+          type="button"
+          {...compactButtonProps}
+          px={3}
+          minW="40px"
+          onClick={onRemove}
+          bg="transparent"
+          color="red.300"
+          border="1px solid"
+          borderColor="red.500/40"
+          _hover={{ bg: 'red.500/10' }}
+          aria-label="Remove artwork"
+        >
           <Trash2 size={16} />
         </Button>
       </Flex>
@@ -365,11 +419,55 @@ function ExhibitionFormFields({
   form: ExhibitionForm
   setForm: Dispatch<SetStateAction<ExhibitionForm>>
 }) {
+  const { firebaseUser } = useAuth()
+  const coverInputRef = useRef<HTMLInputElement>(null)
+  const [uploadingCover, setUploadingCover] = useState(false)
+  const [coverUploadError, setCoverUploadError] = useState<string | null>(null)
+  const coverImage = form.coverImage.trim()
+
   const updateArtwork = (index: number, artwork: ArtworkForm) => {
     setForm((prev) => ({
       ...prev,
       artworks: prev.artworks.map((item, itemIndex) => (itemIndex === index ? artwork : item)),
     }))
+  }
+
+  const handleCoverFile = async (file: File | null | undefined) => {
+    if (!file || uploadingCover) return
+
+    if (!firebaseUser?.uid) {
+      setCoverUploadError('Sign in again before uploading a cover image.')
+      return
+    }
+
+    const validation = validateFile(file, {
+      maxSizeMB: 10,
+      allowedTypes: ['image/jpeg', 'image/png', 'image/webp', 'image/gif'],
+    })
+
+    if (!validation.valid) {
+      setCoverUploadError(validation.error || 'Choose a JPG, PNG, WebP, or GIF image under 10MB.')
+      return
+    }
+
+    setCoverUploadError(null)
+    setUploadingCover(true)
+
+    const result = await uploadFileSimple(file, `${STORAGE_PATHS.EXHIBITIONS}/covers`)
+
+    setUploadingCover(false)
+
+    if (!result.success || !result.url) {
+      setCoverUploadError(result.error?.message || 'Could not upload this cover image.')
+      return
+    }
+
+    setForm((prev) => ({ ...prev, coverImage: result.url || '' }))
+  }
+
+  const handleCoverInput = async (event: ChangeEvent<HTMLInputElement>) => {
+    await handleCoverFile(event.target.files?.[0])
+    event.target.value = ''
   }
 
   return (
@@ -410,8 +508,59 @@ function ExhibitionFormFields({
       </Grid>
 
       <Box>
-        <FieldLabel>Cover image URL</FieldLabel>
-        <Input value={form.coverImage} onChange={(e) => setForm((prev) => ({ ...prev, coverImage: e.target.value }))} bg="gray.800" color="white" borderColor="whiteAlpha.200" />
+        <Grid templateColumns={{ base: '1fr', md: 'minmax(0, 1fr) 220px' }} gap={3} alignItems="end">
+          <Box>
+            <FieldLabel>Cover image URL</FieldLabel>
+            <Input value={form.coverImage} onChange={(e) => setForm((prev) => ({ ...prev, coverImage: e.target.value }))} h="46px" bg="gray.800" color="white" borderColor="whiteAlpha.200" placeholder="Paste an image URL" />
+          </Box>
+          <Box>
+            <FieldLabel>Upload image</FieldLabel>
+            <Input ref={coverInputRef} type="file" accept="image/jpeg,image/png,image/webp,image/gif" display="none" onChange={handleCoverInput} />
+            <Button
+              type="button"
+              {...actionButtonProps}
+              w="full"
+              h="46px"
+              loading={uploadingCover}
+              bg="whiteAlpha.100"
+              color="white"
+              border="1px solid"
+              borderColor="whiteAlpha.200"
+              _hover={{ bg: 'whiteAlpha.200' }}
+              onClick={() => coverInputRef.current?.click()}
+            >
+              <ImagePlus size={17} />
+              Choose Image
+            </Button>
+          </Box>
+        </Grid>
+
+        {coverImage && (
+          <Box mt={3} position="relative" overflow="hidden" borderRadius="xl" border="1px solid" borderColor="whiteAlpha.150" bg="whiteAlpha.50">
+            <Image src={coverImage} alt="Exhibition cover preview" w="full" h="150px" objectFit="cover" />
+            <Button
+              type="button"
+              position="absolute"
+              top={3}
+              right={3}
+              size="sm"
+              h="34px"
+              px={3}
+              bg="blackAlpha.700"
+              color="white"
+              borderRadius="full"
+              _hover={{ bg: 'blackAlpha.800' }}
+              onClick={() => setForm((prev) => ({ ...prev, coverImage: '' }))}
+            >
+              <X size={15} />
+              Remove
+            </Button>
+          </Box>
+        )}
+
+        {coverUploadError && (
+          <Text color="red.300" fontSize="sm" mt={2}>{coverUploadError}</Text>
+        )}
       </Box>
 
       <Grid templateColumns={{ base: '1fr', md: '1fr 1fr' }} gap={4}>
@@ -426,13 +575,13 @@ function ExhibitionFormFields({
       </Grid>
 
       <HStack gap={3} flexWrap="wrap">
-        <Button type="button" onClick={() => setForm((prev) => ({ ...prev, isPublished: !prev.isPublished }))} bg={form.isPublished ? 'green.500' : 'whiteAlpha.100'} color="white" _hover={{ bg: form.isPublished ? 'green.600' : 'whiteAlpha.200' }}>
+        <Button type="button" {...compactButtonProps} onClick={() => setForm((prev) => ({ ...prev, isPublished: !prev.isPublished }))} bg={form.isPublished ? 'green.500' : 'whiteAlpha.100'} color="white" _hover={{ bg: form.isPublished ? 'green.600' : 'whiteAlpha.200' }}>
           {form.isPublished ? 'Published' : 'Draft'}
         </Button>
-        <Button type="button" onClick={() => setForm((prev) => ({ ...prev, featured: !prev.featured }))} bg={form.featured ? 'brand.500' : 'whiteAlpha.100'} color="white" _hover={{ bg: form.featured ? 'brand.600' : 'whiteAlpha.200' }}>
+        <Button type="button" {...compactButtonProps} onClick={() => setForm((prev) => ({ ...prev, featured: !prev.featured }))} bg={form.featured ? 'brand.500' : 'whiteAlpha.100'} color="white" _hover={{ bg: form.featured ? 'brand.600' : 'whiteAlpha.200' }}>
           {form.featured ? 'Featured' : 'Not Featured'}
         </Button>
-        <Button type="button" onClick={() => setForm((prev) => ({ ...prev, isOnline: !prev.isOnline }))} bg={form.isOnline ? 'blue.500' : 'whiteAlpha.100'} color="white" _hover={{ bg: form.isOnline ? 'blue.600' : 'whiteAlpha.200' }}>
+        <Button type="button" {...compactButtonProps} onClick={() => setForm((prev) => ({ ...prev, isOnline: !prev.isOnline }))} bg={form.isOnline ? 'blue.500' : 'whiteAlpha.100'} color="white" _hover={{ bg: form.isOnline ? 'blue.600' : 'whiteAlpha.200' }}>
           {form.isOnline ? 'Online' : 'Physical'}
         </Button>
       </HStack>
@@ -440,7 +589,7 @@ function ExhibitionFormFields({
       <Box>
         <Flex justify="space-between" align="center" mb={3}>
           <Text color="white" fontWeight="medium">Artworks</Text>
-          <Button type="button" size="sm" onClick={() => setForm((prev) => ({ ...prev, artworks: [...prev.artworks, emptyArtwork()] }))} bg="whiteAlpha.100" color="white" _hover={{ bg: 'whiteAlpha.200' }}>
+          <Button type="button" {...compactButtonProps} onClick={() => setForm((prev) => ({ ...prev, artworks: [...prev.artworks, emptyArtwork()] }))} bg="whiteAlpha.100" color="white" _hover={{ bg: 'whiteAlpha.200' }}>
             <ImagePlus size={16} />
             Add Artwork
           </Button>
@@ -510,18 +659,21 @@ function ExhibitionCard({
           {exhibition.featured && <Text color="brand.300">Featured</Text>}
         </HStack>
         <HStack gap={2} flexWrap="wrap">
-          <Button size="sm" onClick={() => onPublishToggle(exhibition)} bg="whiteAlpha.100" color="white" _hover={{ bg: 'whiteAlpha.200' }}>
+          <Button {...compactButtonProps} onClick={() => onPublishToggle(exhibition)} bg="whiteAlpha.100" color="white" border="1px solid" borderColor="whiteAlpha.100" _hover={{ bg: 'whiteAlpha.200' }}>
             <PlayCircle size={16} />
             {exhibition.isPublished === false ? 'Publish' : 'Unpublish'}
           </Button>
-          <Button size="sm" onClick={() => onEdit(exhibition)} bg="whiteAlpha.100" color="white" _hover={{ bg: 'whiteAlpha.200' }}>
+          <Button {...compactButtonProps} onClick={() => onEdit(exhibition)} bg="whiteAlpha.100" color="white" border="1px solid" borderColor="whiteAlpha.100" _hover={{ bg: 'whiteAlpha.200' }}>
             <Pencil size={16} />
+            Edit
           </Button>
-          <Button size="sm" onClick={() => onArchive(exhibition)} bg="whiteAlpha.100" color="white" _hover={{ bg: 'whiteAlpha.200' }}>
+          <Button {...compactButtonProps} onClick={() => onArchive(exhibition)} bg="whiteAlpha.100" color="white" border="1px solid" borderColor="whiteAlpha.100" _hover={{ bg: 'whiteAlpha.200' }}>
             <Archive size={16} />
+            Archive
           </Button>
-          <Button size="sm" onClick={() => onDelete(exhibition)} bg="transparent" color="red.300" border="1px solid" borderColor="red.500/50" _hover={{ bg: 'red.500/10' }}>
+          <Button {...compactButtonProps} onClick={() => onDelete(exhibition)} bg="transparent" color="red.300" border="1px solid" borderColor="red.500/50" _hover={{ bg: 'red.500/10' }}>
             <Trash2 size={16} />
+            Delete
           </Button>
         </HStack>
       </VStack>
@@ -656,11 +808,11 @@ export default function ManageExhibitions() {
             <Text color="whiteAlpha.600">Manage public exhibitions and draft curations</Text>
           </Box>
           <Button
+            {...actionButtonProps}
             onClick={openCreate}
             bg="brand.500"
             color="white"
-            borderRadius="full"
-            whiteSpace="nowrap"
+            minW="190px"
             w={{ base: 'full', sm: 'auto' }}
             _hover={{ bg: 'brand.600' }}
           >
@@ -676,22 +828,37 @@ export default function ManageExhibitions() {
           <StatCard label="Views" value={totalViews.toLocaleString()} />
         </SimpleGrid>
 
-        <Box p={{ base: 3, md: 4 }} borderRadius="2xl" bg="gray.900" border="1px solid" borderColor="whiteAlpha.100" mb={6}>
-          <Flex direction={{ base: 'column', lg: 'row' }} justify="space-between" align={{ base: 'stretch', lg: 'center' }} gap={3}>
-            <Box position="relative" flex={{ base: '0 0 auto', lg: '1 1 320px' }} w="full" maxW={{ lg: '460px' }}>
-              <Box position="absolute" left={4} top="50%" transform="translateY(-50%)" color="whiteAlpha.500">
-                <Search size={18} />
+        <Box p={{ base: 4, md: 5 }} borderRadius="2xl" bg="gray.900" border="1px solid" borderColor="whiteAlpha.100" mb={6}>
+          <Grid templateColumns={{ base: '1fr', lg: 'minmax(280px, 1.7fr) minmax(180px, 0.8fr)' }} gap={4} alignItems="end">
+            <Box>
+              <Text color="whiteAlpha.500" fontSize="xs" fontWeight="semibold" textTransform="uppercase" letterSpacing="0.08em" mb={2}>
+                Search
+              </Text>
+              <Box position="relative">
+                <Box position="absolute" left={4} top="50%" transform="translateY(-50%)" color="whiteAlpha.500">
+                  <Search size={18} />
+                </Box>
+                <Input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search exhibitions..." pl={11} pr={4} h="46px" bg="blackAlpha.300" color="white" borderColor="whiteAlpha.200" borderRadius="xl" />
               </Box>
-              <Input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search exhibitions..." pl={11} h={11} bg="blackAlpha.300" color="white" borderColor="whiteAlpha.200" borderRadius="full" />
             </Box>
-            <HStack gap={2} flexWrap="wrap" justify={{ base: 'start', lg: 'end' }}>
-              {STATUS_FILTERS.map((item) => (
-                <Button key={item.id} size="sm" onClick={() => setFilter(item.id)} bg={filter === item.id ? 'brand.500' : 'whiteAlpha.50'} color={filter === item.id ? 'white' : 'whiteAlpha.700'} borderRadius="full" _hover={{ bg: filter === item.id ? 'brand.600' : 'whiteAlpha.100' }}>
-                  {item.label}
-                </Button>
-              ))}
-            </HStack>
-          </Flex>
+
+            <Box>
+              <Text color="whiteAlpha.500" fontSize="xs" fontWeight="semibold" textTransform="uppercase" letterSpacing="0.08em" mb={2}>
+                Status
+              </Text>
+              <select
+                value={filter}
+                onChange={(event) => setFilter(event.target.value as StatusFilter)}
+                style={filterSelectStyle}
+              >
+                {STATUS_FILTERS.map((item) => (
+                  <option key={item.id} value={item.id}>
+                    {item.label}
+                  </option>
+                ))}
+              </select>
+            </Box>
+          </Grid>
         </Box>
 
         {loading && (
@@ -731,10 +898,10 @@ export default function ManageExhibitions() {
           <form onSubmit={handleSubmit}>
             <ExhibitionFormFields form={form} setForm={setForm} />
             <HStack justify="flex-end" gap={3} mt={6}>
-              <Button type="button" onClick={closeModal} bg="whiteAlpha.100" color="white" _hover={{ bg: 'whiteAlpha.200' }}>
+              <Button type="button" {...actionButtonProps} onClick={closeModal} bg="whiteAlpha.100" color="white" _hover={{ bg: 'whiteAlpha.200' }}>
                 Cancel
               </Button>
-              <Button type="submit" loading={submitting} bg="brand.500" color="white" _hover={{ bg: 'brand.600' }}>
+              <Button type="submit" {...actionButtonProps} loading={submitting} bg="brand.500" color="white" minW="164px" _hover={{ bg: 'brand.600' }}>
                 {modalMode === 'edit' ? 'Save Changes' : 'Create Exhibition'}
               </Button>
             </HStack>

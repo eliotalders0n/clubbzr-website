@@ -1,6 +1,6 @@
 'use client'
 
-import { useMemo, useState, type CSSProperties, type FormEvent } from 'react'
+import { useMemo, useRef, useState, type CSSProperties, type ChangeEvent, type DragEvent, type FormEvent } from 'react'
 import { Link } from 'react-router-dom'
 import {
   Box,
@@ -8,6 +8,7 @@ import {
   Heading,
   Text,
   Button,
+  Image,
   Input,
   Textarea,
   VStack,
@@ -22,11 +23,14 @@ import {
   Archive,
   CheckCircle2,
   Download,
+  ImagePlus,
+  Link as LinkIcon,
   Pencil,
   Plus,
   Search,
   Star,
   Trash2,
+  X,
 } from 'lucide-react'
 
 import { AdminLayout } from '@/components/layout/AdminLayout'
@@ -34,6 +38,7 @@ import { useAuth } from '@/contexts/AuthContext'
 import { useCollection } from '@/hooks'
 import { QUEST_BADGES, type BadgeCategory } from '../../../lib/badges'
 import { createDocument, deleteDocument, updateDocument } from '../../../lib/firestore'
+import { uploadFileSimple, validateFile } from '../../../lib/storage'
 import type {
   CreateDocument,
   Quest,
@@ -63,6 +68,7 @@ interface QuestForm {
   points: string
   constraints: string
   inspirationLinks: string
+  exampleImages: string
   tags: string
   badges: string
   status: 'active' | 'draft'
@@ -118,14 +124,43 @@ const badgeCategoryMeta: Record<BadgeCategory, { label: string; color: string }>
 
 const selectStyle: CSSProperties = {
   width: '100%',
-  height: '44px',
-  padding: '0 14px',
+  height: '48px',
+  padding: '0 16px',
   backgroundColor: '#111111',
   border: '1px solid rgba(255,255,255,0.14)',
-  borderRadius: '12px',
+  borderRadius: '14px',
   color: 'white',
   outline: 'none',
 }
+
+const actionButtonProps = {
+  h: '44px',
+  px: 5,
+  borderRadius: 'full',
+  fontSize: 'sm',
+  fontWeight: 'semibold',
+  lineHeight: '1',
+  whiteSpace: 'nowrap',
+} as const
+
+const compactActionButtonProps = {
+  h: '40px',
+  px: 4,
+  borderRadius: 'lg',
+  fontSize: 'sm',
+  fontWeight: 'semibold',
+  lineHeight: '1',
+  whiteSpace: 'nowrap',
+} as const
+
+const fieldControlProps = {
+  bg: 'gray.900',
+  borderColor: 'whiteAlpha.200',
+  color: 'white',
+  borderRadius: 'xl',
+  minH: '48px',
+  _focus: { borderColor: 'brand.400', boxShadow: '0 0 0 1px var(--chakra-colors-brand-400)' },
+} as const
 
 const emptyForm: QuestForm = {
   title: '',
@@ -136,6 +171,7 @@ const emptyForm: QuestForm = {
   points: '50',
   constraints: '',
   inspirationLinks: '',
+  exampleImages: '',
   tags: '',
   badges: '',
   status: 'draft',
@@ -198,6 +234,7 @@ const questToForm = (quest: Quest): QuestForm => ({
   points: String(quest.points || 50),
   constraints: (quest.constraints || []).map((constraint) => constraint.description).join('\n'),
   inspirationLinks: (quest.inspirationLinks || []).join('\n'),
+  exampleImages: (quest.exampleImages || []).join('\n'),
   tags: (quest.tags || []).join(', '),
   badges: (quest.badges || []).join(', '),
   status: quest.isActive ? 'active' : 'draft',
@@ -215,7 +252,7 @@ const buildQuestPayload = (
   estimatedTime: form.estimatedTime.trim() || undefined,
   constraints: parseConstraints(form.constraints),
   inspirationLinks: splitList(form.inspirationLinks),
-  exampleImages: existing?.exampleImages || [],
+  exampleImages: splitList(form.exampleImages),
   isActive: form.status === 'active',
   submissions: existing?.submissions || [],
   submissionCount: existing?.submissionCount || 0,
@@ -309,9 +346,66 @@ function QuestFormFields({
   submitLabel: string
   isSaving: boolean
 }) {
+  const imageInputRef = useRef<HTMLInputElement>(null)
+  const [isDraggingImages, setIsDraggingImages] = useState(false)
+  const [uploadingImages, setUploadingImages] = useState(false)
+  const [imageUploadError, setImageUploadError] = useState<string | null>(null)
   const selectedBadges = splitList(form.badges)
+  const exampleImages = splitList(form.exampleImages)
   const catalogBadgeIds = QUEST_BADGES.map((badge) => badge.id)
   const customBadges = selectedBadges.filter((badgeId) => !catalogBadgeIds.includes(badgeId))
+  const updateForm = (updates: Partial<QuestForm>) => setForm({ ...form, ...updates })
+
+  const uploadImages = async (files: FileList | File[] | null | undefined) => {
+    const selectedFiles = Array.from(files || [])
+    if (selectedFiles.length === 0 || uploadingImages) return
+
+    setImageUploadError(null)
+    setUploadingImages(true)
+
+    const uploadedUrls: string[] = []
+
+    for (const file of selectedFiles) {
+      const validation = validateFile(file, {
+        maxSizeMB: 10,
+        allowedTypes: ['image/jpeg', 'image/png', 'image/webp', 'image/gif'],
+      })
+
+      if (!validation.valid) {
+        setImageUploadError(validation.error || 'Choose JPG, PNG, WebP, or GIF images under 10MB.')
+        continue
+      }
+
+      const result = await uploadFileSimple(file, 'quests/inspiration')
+      if (result.success && result.url) {
+        uploadedUrls.push(result.url)
+      } else {
+        setImageUploadError(result.error?.message || `Could not upload ${file.name}.`)
+      }
+    }
+
+    setUploadingImages(false)
+
+    if (uploadedUrls.length > 0) {
+      const nextImages = Array.from(new Set([...exampleImages, ...uploadedUrls]))
+      updateForm({ exampleImages: nextImages.join('\n') })
+    }
+  }
+
+  const handleImageInput = async (event: ChangeEvent<HTMLInputElement>) => {
+    await uploadImages(event.target.files)
+    event.target.value = ''
+  }
+
+  const handleImageDrop = (event: DragEvent<HTMLDivElement>) => {
+    event.preventDefault()
+    setIsDraggingImages(false)
+    void uploadImages(event.dataTransfer.files)
+  }
+
+  const removeExampleImage = (url: string) => {
+    updateForm({ exampleImages: exampleImages.filter((image) => image !== url).join('\n') })
+  }
 
   return (
     <form onSubmit={onSubmit}>
@@ -320,11 +414,9 @@ function QuestFormFields({
           <Text color="whiteAlpha.600" fontSize="sm" mb={2}>Title</Text>
           <Input
             value={form.title}
-            onChange={(event) => setForm({ ...form, title: event.target.value })}
+            onChange={(event) => updateForm({ title: event.target.value })}
             placeholder="Quest title"
-            bg="gray.900"
-            borderColor="whiteAlpha.200"
-            color="white"
+            {...fieldControlProps}
             required
           />
         </Box>
@@ -333,11 +425,9 @@ function QuestFormFields({
           <Text color="whiteAlpha.600" fontSize="sm" mb={2}>Description</Text>
           <Textarea
             value={form.description}
-            onChange={(event) => setForm({ ...form, description: event.target.value })}
+            onChange={(event) => updateForm({ description: event.target.value })}
             placeholder="Describe the creative challenge"
-            bg="gray.900"
-            borderColor="whiteAlpha.200"
-            color="white"
+            {...fieldControlProps}
             rows={4}
             required
           />
@@ -349,7 +439,7 @@ function QuestFormFields({
             <select
               style={selectStyle}
               value={form.category}
-              onChange={(event) => setForm({ ...form, category: event.target.value as QuestCategory })}
+              onChange={(event) => updateForm({ category: event.target.value as QuestCategory })}
             >
               {CATEGORIES.filter((category) => category.id !== 'all').map((category) => (
                 <option key={category.id} value={category.id}>{category.label}</option>
@@ -362,7 +452,7 @@ function QuestFormFields({
             <select
               style={selectStyle}
               value={form.difficulty}
-              onChange={(event) => setForm({ ...form, difficulty: event.target.value as QuestDifficulty })}
+              onChange={(event) => updateForm({ difficulty: event.target.value as QuestDifficulty })}
             >
               {DIFFICULTIES.filter((difficulty) => difficulty.id !== 'all').map((difficulty) => (
                 <option key={difficulty.id} value={difficulty.id}>{difficulty.label}</option>
@@ -377,7 +467,7 @@ function QuestFormFields({
             <select
               style={selectStyle}
               value={form.status}
-              onChange={(event) => setForm({ ...form, status: event.target.value as QuestForm['status'] })}
+              onChange={(event) => updateForm({ status: event.target.value as QuestForm['status'] })}
             >
               <option value="draft">Draft</option>
               <option value="active">Active</option>
@@ -386,26 +476,22 @@ function QuestFormFields({
 
           <Box>
             <Text color="whiteAlpha.600" fontSize="sm" mb={2}>Estimated Time</Text>
-            <Input
-              value={form.estimatedTime}
-              onChange={(event) => setForm({ ...form, estimatedTime: event.target.value })}
-              placeholder="30-60 mins"
-              bg="gray.900"
-              borderColor="whiteAlpha.200"
-              color="white"
+          <Input
+            value={form.estimatedTime}
+            onChange={(event) => updateForm({ estimatedTime: event.target.value })}
+            placeholder="30-60 mins"
+            {...fieldControlProps}
             />
           </Box>
 
           <Box>
             <Text color="whiteAlpha.600" fontSize="sm" mb={2}>Points</Text>
             <Input
-              type="number"
-              min={0}
-              value={form.points}
-              onChange={(event) => setForm({ ...form, points: event.target.value })}
-              bg="gray.900"
-              borderColor="whiteAlpha.200"
-              color="white"
+            type="number"
+            min={0}
+            value={form.points}
+            onChange={(event) => updateForm({ points: event.target.value })}
+            {...fieldControlProps}
             />
           </Box>
         </SimpleGrid>
@@ -414,11 +500,9 @@ function QuestFormFields({
           <Text color="whiteAlpha.600" fontSize="sm" mb={2}>Constraints</Text>
           <Textarea
             value={form.constraints}
-            onChange={(event) => setForm({ ...form, constraints: event.target.value })}
+            onChange={(event) => updateForm({ constraints: event.target.value })}
             placeholder="One constraint per line"
-            bg="gray.900"
-            borderColor="whiteAlpha.200"
-            color="white"
+            {...fieldControlProps}
             rows={3}
           />
         </Box>
@@ -427,11 +511,9 @@ function QuestFormFields({
           <Text color="whiteAlpha.600" fontSize="sm" mb={2}>Tags</Text>
           <Input
             value={form.tags}
-            onChange={(event) => setForm({ ...form, tags: event.target.value })}
+            onChange={(event) => updateForm({ tags: event.target.value })}
             placeholder="drawing, prompt, community"
-            bg="gray.900"
-            borderColor="whiteAlpha.200"
-            color="white"
+            {...fieldControlProps}
           />
         </Box>
 
@@ -481,7 +563,7 @@ function QuestFormFields({
                           border="1px solid"
                           borderColor={isSelected ? `${meta.color}.400/60` : 'whiteAlpha.100'}
                           _hover={{ bg: isSelected ? `${meta.color}.500/24` : 'whiteAlpha.100' }}
-                          onClick={() => setForm({ ...form, badges: setBadgeSelection(form.badges, badge.id) })}
+                          onClick={() => updateForm({ badges: setBadgeSelection(form.badges, badge.id) })}
                         >
                           <VStack align="start" gap={1}>
                             <Text fontSize="sm" fontWeight="semibold">{badge.label}</Text>
@@ -511,30 +593,134 @@ function QuestFormFields({
         </Box>
 
         <Box>
-          <Text color="whiteAlpha.600" fontSize="sm" mb={2}>Inspiration Links</Text>
-          <Textarea
-            value={form.inspirationLinks}
-            onChange={(event) => setForm({ ...form, inspirationLinks: event.target.value })}
-            placeholder="One URL per line"
-            bg="gray.900"
-            borderColor="whiteAlpha.200"
-            color="white"
-            rows={3}
-          />
+          <Flex justify="space-between" align={{ base: 'start', sm: 'center' }} gap={2} mb={3} flexWrap="wrap">
+            <Box>
+              <Text color="whiteAlpha.600" fontSize="sm">Inspiration Links</Text>
+              <Text color="whiteAlpha.400" fontSize="xs">Paste source URLs or upload image references for the quest.</Text>
+            </Box>
+            {exampleImages.length > 0 && (
+              <Badge bg="blue.500/15" color="blue.200" border="1px solid" borderColor="blue.400/40">
+                {exampleImages.length} image{exampleImages.length === 1 ? '' : 's'}
+              </Badge>
+            )}
+          </Flex>
+
+          <SimpleGrid columns={{ base: 1, lg: 2 }} gap={4}>
+            <Box>
+              <Flex align="center" gap={2} mb={2} color="whiteAlpha.600">
+                <LinkIcon size={16} />
+                <Text fontSize="sm">URLs</Text>
+              </Flex>
+              <Textarea
+                value={form.inspirationLinks}
+                onChange={(event) => updateForm({ inspirationLinks: event.target.value })}
+                placeholder="One URL per line"
+                {...fieldControlProps}
+                rows={6}
+              />
+            </Box>
+
+            <Box>
+              <Flex align="center" gap={2} mb={2} color="whiteAlpha.600">
+                <ImagePlus size={16} />
+                <Text fontSize="sm">Images</Text>
+              </Flex>
+              <Box
+                minH="168px"
+                p={4}
+                bg={isDraggingImages ? 'brand.500/10' : 'gray.900'}
+                border="1px dashed"
+                borderColor={isDraggingImages ? 'brand.500' : 'whiteAlpha.200'}
+                borderRadius="xl"
+                transition="all 0.2s"
+                onDragOver={(event) => {
+                  event.preventDefault()
+                  setIsDraggingImages(true)
+                }}
+                onDragLeave={() => setIsDraggingImages(false)}
+                onDrop={handleImageDrop}
+              >
+                <Input
+                  ref={imageInputRef}
+                  type="file"
+                  accept="image/jpeg,image/png,image/webp,image/gif"
+                  multiple
+                  display="none"
+                  onChange={handleImageInput}
+                />
+                <VStack align="stretch" gap={3}>
+                  <Flex align="center" gap={3}>
+                    <Flex w="42px" h="42px" align="center" justify="center" bg="whiteAlpha.100" color="brand.300" borderRadius="full" flexShrink={0}>
+                      <ImagePlus size={20} />
+                    </Flex>
+                    <Box flex={1}>
+                      <Text color="white" fontWeight="semibold">Upload inspiration images</Text>
+                      <Text color="whiteAlpha.500" fontSize="sm">Drop files here or choose images under 10MB.</Text>
+                    </Box>
+                    <Button
+                      type="button"
+                      {...compactActionButtonProps}
+                      loading={uploadingImages}
+                      bg="whiteAlpha.100"
+                      color="white"
+                      border="1px solid"
+                      borderColor="whiteAlpha.200"
+                      _hover={{ bg: 'whiteAlpha.200' }}
+                      onClick={() => imageInputRef.current?.click()}
+                    >
+                      Choose
+                    </Button>
+                  </Flex>
+
+                  {imageUploadError && (
+                    <Text color="red.300" fontSize="sm">{imageUploadError}</Text>
+                  )}
+
+                  {exampleImages.length > 0 && (
+                    <SimpleGrid columns={{ base: 2, md: 3 }} gap={3}>
+                      {exampleImages.map((url) => (
+                        <Box key={url} position="relative" overflow="hidden" borderRadius="lg" border="1px solid" borderColor="whiteAlpha.100" bg="blackAlpha.300">
+                          <Image src={url} alt="Quest inspiration" w="full" h="92px" objectFit="cover" />
+                          <Button
+                            type="button"
+                            position="absolute"
+                            top={2}
+                            right={2}
+                            h="28px"
+                            minW="28px"
+                            px={0}
+                            borderRadius="full"
+                            bg="blackAlpha.700"
+                            color="white"
+                            _hover={{ bg: 'blackAlpha.800' }}
+                            onClick={() => removeExampleImage(url)}
+                          >
+                            <X size={14} />
+                          </Button>
+                        </Box>
+                      ))}
+                    </SimpleGrid>
+                  )}
+                </VStack>
+              </Box>
+            </Box>
+          </SimpleGrid>
         </Box>
 
-        <HStack justify="flex-end" gap={3} pt={3}>
+        <HStack justify="flex-end" gap={3} pt={3} flexWrap="wrap">
           <Button
             type="button"
+            {...actionButtonProps}
             bg="transparent"
             color="whiteAlpha.700"
             border="1px solid"
             borderColor="whiteAlpha.200"
+            _hover={{ bg: 'whiteAlpha.100', color: 'white' }}
             onClick={onCancel}
           >
             Cancel
           </Button>
-          <Button type="submit" bg="brand.500" color="white" disabled={isSaving}>
+          <Button type="submit" {...actionButtonProps} bg="brand.500" color="white" disabled={isSaving} minW="148px" _hover={{ bg: 'brand.600' }}>
             {isSaving ? 'Saving...' : submitLabel}
           </Button>
         </HStack>
@@ -591,9 +777,13 @@ function QuestCard({
           </Badge>
         </HStack>
         <Button
-          size="xs"
+          h="36px"
+          minW="36px"
+          px={0}
+          borderRadius="full"
           variant="ghost"
           color={quest.featured ? 'brand.300' : 'whiteAlpha.500'}
+          _hover={{ bg: 'whiteAlpha.100', color: quest.featured ? 'brand.200' : 'white' }}
           onClick={() => onToggleFeatured(quest)}
         >
           <Star size={16} fill={quest.featured ? 'currentColor' : 'none'} />
@@ -624,19 +814,19 @@ function QuestCard({
 
       <HStack gap={2} flexWrap="wrap">
         <Link to={`/admin/quests/${quest.id}/submissions`}>
-          <Button size="sm" bg="whiteAlpha.100" color="white" _hover={{ bg: 'whiteAlpha.200' }}>
+          <Button {...compactActionButtonProps} bg="whiteAlpha.100" color="white" _hover={{ bg: 'whiteAlpha.200' }}>
             View Submissions
           </Button>
         </Link>
-        <Button size="sm" bg="transparent" color="whiteAlpha.800" border="1px solid" borderColor="whiteAlpha.200" onClick={() => onEdit(quest)}>
+        <Button {...compactActionButtonProps} bg="transparent" color="whiteAlpha.800" border="1px solid" borderColor="whiteAlpha.200" _hover={{ bg: 'whiteAlpha.100', color: 'white' }} onClick={() => onEdit(quest)}>
           <Pencil size={15} />
           Edit
         </Button>
-        <Button size="sm" bg="transparent" color="orange.300" border="1px solid" borderColor="orange.400/40" onClick={() => onToggleActive(quest)}>
+        <Button {...compactActionButtonProps} bg="transparent" color="orange.300" border="1px solid" borderColor="orange.400/40" _hover={{ bg: 'orange.500/10' }} onClick={() => onToggleActive(quest)}>
           <Archive size={15} />
           {quest.isActive ? 'Deactivate' : 'Activate'}
         </Button>
-        <Button size="sm" bg="transparent" color="red.300" border="1px solid" borderColor="red.400/40" onClick={() => onDelete(quest)}>
+        <Button {...compactActionButtonProps} bg="transparent" color="red.300" border="1px solid" borderColor="red.400/40" _hover={{ bg: 'red.500/10' }} onClick={() => onDelete(quest)}>
           <Trash2 size={15} />
           Delete
         </Button>
@@ -826,20 +1016,25 @@ export default function ManageQuests() {
             <Heading as="h1" size="lg" color="white" mb={2}>Manage Quests</Heading>
             <Text color="whiteAlpha.600">Create and manage Firestore-backed creative challenges.</Text>
           </Box>
-          <HStack gap={3}>
+          <HStack gap={3} flexWrap="wrap" justify={{ base: 'flex-start', md: 'flex-end' }}>
             <Button
+              {...actionButtonProps}
               bg="transparent"
               color="whiteAlpha.800"
               border="1px solid"
               borderColor="whiteAlpha.200"
+              _hover={{ bg: 'whiteAlpha.100', color: 'white' }}
               onClick={exportCsv}
             >
               <Download size={17} />
               Export
             </Button>
             <Button
+              {...actionButtonProps}
               bg="brand.500"
               color="white"
+              minW="150px"
+              _hover={{ bg: 'brand.600' }}
               onClick={() => {
                 setForm(emptyForm)
                 setIsCreateOpen(true)
@@ -868,9 +1063,9 @@ export default function ManageQuests() {
           <StatCard label="Submissions" value={stats.submissions} accent="blue.300" />
         </SimpleGrid>
 
-        <Box p={4} borderRadius="2xl" bg="gray.900" border="1px solid" borderColor="whiteAlpha.100" mb={6}>
-          <Flex gap={3} flexWrap="wrap" align="center">
-            <Box position="relative" flex="1 1 280px">
+        <Box p={{ base: 4, md: 5 }} borderRadius="2xl" bg="gray.900" border="1px solid" borderColor="whiteAlpha.100" mb={6}>
+          <SimpleGrid columns={{ base: 1, lg: 4 }} gap={3} alignItems="center">
+            <Box position="relative">
               <Box position="absolute" left={3} top="50%" transform="translateY(-50%)" color="whiteAlpha.400">
                 <Search size={18} />
               </Box>
@@ -879,13 +1074,12 @@ export default function ManageQuests() {
                 value={searchQuery}
                 onChange={(event) => setSearchQuery(event.target.value)}
                 placeholder="Search quests..."
+                {...fieldControlProps}
                 bg="blackAlpha.300"
-                borderColor="whiteAlpha.200"
-                color="white"
               />
             </Box>
 
-            <Box flex="1 1 180px">
+            <Box>
               <select
                 style={selectStyle}
                 value={selectedCategory}
@@ -897,7 +1091,7 @@ export default function ManageQuests() {
               </select>
             </Box>
 
-            <Box flex="1 1 180px">
+            <Box>
               <select
                 style={selectStyle}
                 value={selectedDifficulty}
@@ -909,7 +1103,7 @@ export default function ManageQuests() {
               </select>
             </Box>
 
-            <Box flex="1 1 160px">
+            <Box>
               <select
                 style={selectStyle}
                 value={selectedStatus}
@@ -920,7 +1114,7 @@ export default function ManageQuests() {
                 ))}
               </select>
             </Box>
-          </Flex>
+          </SimpleGrid>
         </Box>
 
         {isLoading ? (

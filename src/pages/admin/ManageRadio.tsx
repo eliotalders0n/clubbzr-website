@@ -1,6 +1,6 @@
 'use client'
 
-import { useMemo, useState, type FormEvent, type ReactNode } from 'react'
+import { useMemo, useState, type CSSProperties, type FormEvent, type ReactNode } from 'react'
 import {
   Badge,
   Box,
@@ -44,6 +44,12 @@ import type {
 const MotionBox = motion.create(Box)
 
 type RadioFilter = 'all' | 'published' | 'draft'
+
+const STATUS_FILTERS: { id: RadioFilter; label: string }[] = [
+  { id: 'all', label: 'All content' },
+  { id: 'published', label: 'Published' },
+  { id: 'draft', label: 'Drafts' },
+]
 
 const RADIO_TYPES: RadioContentType[] = [
   'mix',
@@ -93,6 +99,42 @@ const emptyForm: RadioForm = {
   isPublished: true,
   tags: '',
   tracklist: '',
+}
+
+const actionButtonProps = {
+  h: '44px',
+  px: 5,
+  borderRadius: 'full',
+  fontSize: 'sm',
+  fontWeight: 'semibold',
+  lineHeight: '1',
+  whiteSpace: 'nowrap',
+} as const
+
+const compactButtonProps = {
+  h: '40px',
+  px: 4,
+  borderRadius: 'lg',
+  fontSize: 'sm',
+  fontWeight: 'semibold',
+  lineHeight: '1',
+  whiteSpace: 'nowrap',
+} as const
+
+const selectStyle: CSSProperties = {
+  width: '100%',
+  height: '46px',
+  padding: '0 16px',
+  backgroundColor: '#1f1f1f',
+  border: '1px solid rgba(255,255,255,0.16)',
+  borderRadius: '12px',
+  color: 'white',
+  outline: 'none',
+}
+
+const filterSelectStyle: CSSProperties = {
+  ...selectStyle,
+  backgroundColor: 'rgba(0,0,0,0.24)',
 }
 
 const fallbackCoverImage = 'https://images.unsplash.com/photo-1493225457124-a3eb161ffa5f?w=1200&q=80'
@@ -245,7 +287,16 @@ function Modal({
           <Heading as="h2" color="white" fontSize="xl" fontFamily="heading">
             {title}
           </Heading>
-          <Button onClick={onClose} variant="ghost" color="whiteAlpha.700" _hover={{ bg: 'whiteAlpha.100', color: 'white' }}>
+          <Button
+            type="button"
+            {...compactButtonProps}
+            onClick={onClose}
+            bg="whiteAlpha.50"
+            color="whiteAlpha.800"
+            border="1px solid"
+            borderColor="whiteAlpha.100"
+            _hover={{ bg: 'whiteAlpha.100', color: 'white' }}
+          >
             Close
           </Button>
         </Flex>
@@ -282,7 +333,7 @@ function RadioFormFields({
           <select
             value={form.type}
             onChange={(e) => setForm((prev) => ({ ...prev, type: e.target.value as RadioContentType }))}
-            className="h-10 w-full rounded-md border border-white/20 bg-gray-800 px-3 text-white"
+            style={selectStyle}
           >
             {RADIO_TYPES.map((type) => (
               <option key={type} value={type}>
@@ -344,6 +395,7 @@ function RadioFormFields({
       <HStack gap={3} flexWrap="wrap">
         <Button
           type="button"
+          {...compactButtonProps}
           onClick={() => setForm((prev) => ({ ...prev, isPublished: !prev.isPublished }))}
           bg={form.isPublished ? 'green.500' : 'whiteAlpha.100'}
           color="white"
@@ -353,6 +405,7 @@ function RadioFormFields({
         </Button>
         <Button
           type="button"
+          {...compactButtonProps}
           onClick={() => setForm((prev) => ({ ...prev, featured: !prev.featured }))}
           bg={form.featured ? 'brand.500' : 'whiteAlpha.100'}
           color="white"
@@ -423,16 +476,18 @@ function RadioCard({
               </HStack>
               <Text>{formatDate(content.publishedAt)}</Text>
             </HStack>
-            <HStack gap={2}>
-              <Button size="sm" onClick={() => onPublishToggle(content)} bg="whiteAlpha.100" color="white" _hover={{ bg: 'whiteAlpha.200' }}>
+            <HStack gap={2} flexWrap="wrap" justify={{ base: 'flex-start', md: 'flex-end' }}>
+              <Button {...compactButtonProps} onClick={() => onPublishToggle(content)} bg="whiteAlpha.100" color="white" border="1px solid" borderColor="whiteAlpha.100" _hover={{ bg: 'whiteAlpha.200' }}>
                 {content.isPublished !== false ? <PauseCircle size={16} /> : <PlayCircle size={16} />}
                 {content.isPublished !== false ? 'Unpublish' : 'Publish'}
               </Button>
-              <Button size="sm" onClick={() => onEdit(content)} bg="whiteAlpha.100" color="white" _hover={{ bg: 'whiteAlpha.200' }}>
+              <Button {...compactButtonProps} onClick={() => onEdit(content)} bg="whiteAlpha.100" color="white" border="1px solid" borderColor="whiteAlpha.100" _hover={{ bg: 'whiteAlpha.200' }}>
                 <Pencil size={16} />
+                Edit
               </Button>
-              <Button size="sm" onClick={() => onDelete(content)} bg="transparent" color="red.300" border="1px solid" borderColor="red.500/50" _hover={{ bg: 'red.500/10' }}>
+              <Button {...compactButtonProps} onClick={() => onDelete(content)} bg="transparent" color="red.300" border="1px solid" borderColor="red.500/50" _hover={{ bg: 'red.500/10' }}>
                 <Trash2 size={16} />
+                Delete
               </Button>
             </HStack>
           </Flex>
@@ -551,11 +606,11 @@ export default function ManageRadio() {
             <Text color="whiteAlpha.600">Manage public BZR Radio content</Text>
           </Box>
           <Button
+            {...actionButtonProps}
             onClick={openCreate}
             bg="brand.500"
             color="white"
-            borderRadius="full"
-            whiteSpace="nowrap"
+            minW="190px"
             w={{ base: 'full', sm: 'auto' }}
             _hover={{ bg: 'brand.600' }}
           >
@@ -571,22 +626,37 @@ export default function ManageRadio() {
           <StatCard label="Plays" value={totalPlays.toLocaleString()} />
         </SimpleGrid>
 
-        <Box p={{ base: 3, md: 4 }} borderRadius="2xl" bg="gray.900" border="1px solid" borderColor="whiteAlpha.100" mb={6}>
-          <Flex direction={{ base: 'column', lg: 'row' }} justify="space-between" align={{ base: 'stretch', lg: 'center' }} gap={3}>
-            <Box position="relative" flex={{ base: '0 0 auto', lg: '1 1 320px' }} w="full" maxW={{ lg: '460px' }}>
-              <Box position="absolute" left={4} top="50%" transform="translateY(-50%)" color="whiteAlpha.500">
-                <Search size={18} />
+        <Box p={{ base: 4, md: 5 }} borderRadius="2xl" bg="gray.900" border="1px solid" borderColor="whiteAlpha.100" mb={6}>
+          <Grid templateColumns={{ base: '1fr', lg: 'minmax(280px, 1.7fr) minmax(180px, 0.8fr)' }} gap={4} alignItems="end">
+            <Box>
+              <Text color="whiteAlpha.500" fontSize="xs" fontWeight="semibold" textTransform="uppercase" letterSpacing="0.08em" mb={2}>
+                Search
+              </Text>
+              <Box position="relative">
+                <Box position="absolute" left={4} top="50%" transform="translateY(-50%)" color="whiteAlpha.500">
+                  <Search size={18} />
+                </Box>
+                <Input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search radio..." pl={11} pr={4} h="46px" bg="blackAlpha.300" color="white" borderColor="whiteAlpha.200" borderRadius="xl" />
               </Box>
-              <Input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search radio..." pl={11} h={11} bg="blackAlpha.300" color="white" borderColor="whiteAlpha.200" borderRadius="full" />
             </Box>
-            <HStack gap={2} flexWrap="wrap" justify={{ base: 'start', lg: 'end' }}>
-              {(['all', 'published', 'draft'] as const).map((item) => (
-                <Button key={item} size="sm" onClick={() => setFilter(item)} bg={filter === item ? 'brand.500' : 'whiteAlpha.50'} color={filter === item ? 'white' : 'whiteAlpha.700'} borderRadius="full" textTransform="capitalize" _hover={{ bg: filter === item ? 'brand.600' : 'whiteAlpha.100' }}>
-                  {item}
-                </Button>
-              ))}
-            </HStack>
-          </Flex>
+
+            <Box>
+              <Text color="whiteAlpha.500" fontSize="xs" fontWeight="semibold" textTransform="uppercase" letterSpacing="0.08em" mb={2}>
+                Status
+              </Text>
+              <select
+                value={filter}
+                onChange={(event) => setFilter(event.target.value as RadioFilter)}
+                style={filterSelectStyle}
+              >
+                {STATUS_FILTERS.map((item) => (
+                  <option key={item.id} value={item.id}>
+                    {item.label}
+                  </option>
+                ))}
+              </select>
+            </Box>
+          </Grid>
         </Box>
 
         {loading && (
@@ -628,10 +698,10 @@ export default function ManageRadio() {
           <form onSubmit={handleSubmit}>
             <RadioFormFields form={form} setForm={setForm} />
             <HStack justify="flex-end" gap={3} mt={6}>
-              <Button type="button" onClick={closeModal} bg="whiteAlpha.100" color="white" _hover={{ bg: 'whiteAlpha.200' }}>
+              <Button type="button" {...actionButtonProps} onClick={closeModal} bg="whiteAlpha.100" color="white" _hover={{ bg: 'whiteAlpha.200' }}>
                 Cancel
               </Button>
-              <Button type="submit" loading={submitting} bg="brand.500" color="white" _hover={{ bg: 'brand.600' }}>
+              <Button type="submit" {...actionButtonProps} loading={submitting} bg="brand.500" color="white" minW="150px" _hover={{ bg: 'brand.600' }}>
                 {modalMode === 'edit' ? 'Save Changes' : 'Create Content'}
               </Button>
             </HStack>

@@ -4,6 +4,7 @@ import { useMemo, useState, type CSSProperties } from 'react'
 import {
   Box,
   Flex,
+  Grid,
   Heading,
   Text,
   Button,
@@ -59,14 +60,39 @@ const statusStyles: Record<PostStatus, { bg: string; color: string; borderColor:
 
 const selectStyle: CSSProperties = {
   width: '100%',
-  height: '44px',
-  padding: '0 14px',
+  height: '46px',
+  padding: '0 16px',
   backgroundColor: '#111111',
-  border: '1px solid rgba(255,255,255,0.14)',
+  border: '1px solid rgba(255,255,255,0.16)',
   borderRadius: '12px',
   color: 'white',
   outline: 'none',
 }
+
+const filterSelectStyle: CSSProperties = {
+  ...selectStyle,
+  backgroundColor: 'rgba(0,0,0,0.24)',
+}
+
+const actionButtonProps = {
+  h: '44px',
+  px: 5,
+  borderRadius: 'full',
+  fontSize: 'sm',
+  fontWeight: 'semibold',
+  lineHeight: '1',
+  whiteSpace: 'nowrap',
+} as const
+
+const compactButtonProps = {
+  h: '40px',
+  px: 4,
+  borderRadius: 'lg',
+  fontSize: 'sm',
+  fontWeight: 'semibold',
+  lineHeight: '1',
+  whiteSpace: 'nowrap',
+} as const
 
 const toDate = (value: unknown): Date | null => {
   if (!value) return null
@@ -287,23 +313,23 @@ function PostCard({
           >
             <HStack gap={2} flexWrap="wrap" mt={4} pt={4} borderTop="1px solid" borderColor="whiteAlpha.100">
               {status !== 'published' && (
-                <Button size="sm" bg="green.500" color="white" onClick={(event) => { event.stopPropagation(); onApprove() }}>
+                <Button {...compactButtonProps} bg="green.500" color="white" onClick={(event) => { event.stopPropagation(); onApprove() }}>
                   <CheckCircle2 size={15} />
                   Approve
                 </Button>
               )}
               {status === 'hidden' ? (
-                <Button size="sm" bg="whiteAlpha.100" color="white" onClick={(event) => { event.stopPropagation(); onUnhide() }}>
+                <Button {...compactButtonProps} bg="whiteAlpha.100" color="white" onClick={(event) => { event.stopPropagation(); onUnhide() }}>
                   <ShieldCheck size={15} />
                   Unhide
                 </Button>
               ) : (
-                <Button size="sm" bg="orange.500" color="white" onClick={(event) => { event.stopPropagation(); onHide() }}>
+                <Button {...compactButtonProps} bg="orange.500" color="white" onClick={(event) => { event.stopPropagation(); onHide() }}>
                   <EyeOff size={15} />
                   Hide
                 </Button>
               )}
-              <Button size="sm" bg="red.500" color="white" onClick={(event) => { event.stopPropagation(); onDelete() }}>
+              <Button {...compactButtonProps} bg="red.500" color="white" onClick={(event) => { event.stopPropagation(); onDelete() }}>
                 <Trash2 size={15} />
                 Delete
               </Button>
@@ -458,6 +484,7 @@ export default function ManageCommunity() {
             <Text color="whiteAlpha.600">Moderate real Firestore posts, comments, and visibility states.</Text>
           </Box>
           <Button
+            {...actionButtonProps}
             bg="transparent"
             color="whiteAlpha.800"
             border="1px solid"
@@ -486,46 +513,58 @@ export default function ManageCommunity() {
           <StatCard label="Comments" value={stats.comments} accent="blue.300" />
         </SimpleGrid>
 
-        <Box p={4} borderRadius="2xl" bg="gray.900" border="1px solid" borderColor="whiteAlpha.100" mb={6}>
-          <Flex gap={3} align="center" flexWrap="wrap">
-            <HStack gap={2} flexWrap="wrap">
-              {tabOptions.map((tab) => {
-                const count = tab.id === 'posts' ? stats.total : tab.id === 'review' ? stats.review : stats.hidden
-                return (
-                  <Button
-                    key={tab.id}
-                    size="sm"
-                    bg={activeTab === tab.id ? 'brand.500' : 'transparent'}
-                    color={activeTab === tab.id ? 'white' : 'whiteAlpha.700'}
-                    border="1px solid"
-                    borderColor={activeTab === tab.id ? 'brand.500' : 'whiteAlpha.200'}
-                    onClick={() => setActiveTab(tab.id)}
-                  >
-                    {tab.label}
-                    <Badge ml={2} bg="whiteAlpha.200" color="white">{count}</Badge>
-                  </Button>
-                )
-              })}
-            </HStack>
-
-            <Box position="relative" flex="1 1 260px">
-              <Box position="absolute" left={3} top="50%" transform="translateY(-50%)" color="whiteAlpha.400">
-                <Search size={18} />
+        <Box p={{ base: 4, md: 5 }} borderRadius="2xl" bg="gray.900" border="1px solid" borderColor="whiteAlpha.100" mb={6}>
+          <Grid templateColumns={{ base: '1fr', lg: 'minmax(280px, 1.6fr) minmax(180px, 0.8fr) minmax(180px, 0.8fr)' }} gap={4} alignItems="end">
+            <Box>
+              <Text color="whiteAlpha.500" fontSize="xs" fontWeight="semibold" textTransform="uppercase" letterSpacing="0.08em" mb={2}>
+                Search
+              </Text>
+              <Box position="relative">
+                <Box position="absolute" left={4} top="50%" transform="translateY(-50%)" color="whiteAlpha.500">
+                  <Search size={18} />
+                </Box>
+                <Input
+                  h="46px"
+                  pl={11}
+                  pr={4}
+                  value={searchQuery}
+                  onChange={(event) => setSearchQuery(event.target.value)}
+                  placeholder="Search content, author, or tag..."
+                  bg="blackAlpha.300"
+                  borderColor="whiteAlpha.200"
+                  borderRadius="xl"
+                  color="white"
+                  _placeholder={{ color: 'whiteAlpha.400' }}
+                />
               </Box>
-              <Input
-                pl={10}
-                value={searchQuery}
-                onChange={(event) => setSearchQuery(event.target.value)}
-                placeholder="Search content, author, or tag..."
-                bg="blackAlpha.300"
-                borderColor="whiteAlpha.200"
-                color="white"
-              />
             </Box>
 
-            <Box flex="0 1 170px">
+            <Box>
+              <Text color="whiteAlpha.500" fontSize="xs" fontWeight="semibold" textTransform="uppercase" letterSpacing="0.08em" mb={2}>
+                View
+              </Text>
               <select
-                style={selectStyle}
+                style={filterSelectStyle}
+                value={activeTab}
+                onChange={(event) => setActiveTab(event.target.value as CommunityTab)}
+              >
+                {tabOptions.map((tab) => {
+                  const count = tab.id === 'posts' ? stats.total : tab.id === 'review' ? stats.review : stats.hidden
+                  return (
+                    <option key={tab.id} value={tab.id}>
+                      {tab.label} ({count})
+                    </option>
+                  )
+                })}
+              </select>
+            </Box>
+
+            <Box>
+              <Text color="whiteAlpha.500" fontSize="xs" fontWeight="semibold" textTransform="uppercase" letterSpacing="0.08em" mb={2}>
+                Status
+              </Text>
+              <select
+                style={filterSelectStyle}
                 value={statusFilter}
                 onChange={(event) => setStatusFilter(event.target.value as PostStatus | 'all')}
               >
@@ -535,7 +574,7 @@ export default function ManageCommunity() {
                 <option value="hidden">Hidden</option>
               </select>
             </Box>
-          </Flex>
+          </Grid>
         </Box>
 
         {isLoading ? (
