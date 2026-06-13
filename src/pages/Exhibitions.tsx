@@ -93,7 +93,7 @@ const transformExhibition = (doc: FirebaseExhibition): Exhibition => {
     description: doc.description || 'A Club BZR exhibition.',
     curatorName: doc.curator?.name || 'Club BZR Curator',
     curatorAvatar: doc.curator?.photoURL,
-    artistCount: new Set(artworks.map((artwork) => artwork.artistId)).size,
+    artistCount: new Set(artworks.map((artwork) => artwork.artistId).filter(Boolean)).size,
     startDate,
     endDate,
     status: getExhibitionStatus(startDate, endDate),

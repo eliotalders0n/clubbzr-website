@@ -564,6 +564,100 @@ function CommunityHighlightsSection() {
   )
 }
 
+function TestimonialsSection() {
+  const testimonials = [
+    {
+      name: 'Jehu',
+      quote: ['Best place in the city to make art with a bunch of cool people. Highly recommend!'],
+    },
+    {
+      name: 'Kupa',
+      quote: ['I feel like being a part of Club BZR has not only changed but enhanced my view of art and what it means to be an artist.'],
+    },
+    {
+      name: 'Jolezya',
+      quote: ['Club BZR has been a great way for me to meet many creatives who each have their own niche, yet are always willing to explore and learn other creative practices.'],
+    },
+    {
+      name: 'Claire',
+      quote: [
+        'Club BZR grounds me.',
+        'It is a space that allows me to challenge myself creatively without feeling as though I have failed, regardless of the creative work we choose to explore or the different mediums we use. The environment encourages me to discover new aspects of my artistic capabilities while giving me the confidence to trust my process and abilities.',
+        'What makes it even more special are the people who support and inspire one another along the way. It is both fun and heartwarming to be part of a community built on creativity, encouragement, and genuine connection.',
+      ],
+    },
+  ]
+
+  return (
+    <Box as="section" py={{ base: 24, md: 32 }} bg="gray.950">
+      <Container maxW="1440px" px={{ base: 6, md: 12, lg: 16, xl: 20 }}>
+        <Grid templateColumns={{ base: '1fr', lg: '0.8fr 1.2fr' }} gap={{ base: 12, lg: 20 }} alignItems="start">
+          <MotionBox
+            initial={{ opacity: 0, x: -30 }}
+            whileInView={{ opacity: 1, x: 0 }}
+            transition={{ duration: 0.8 }}
+            viewport={{ once: true }}
+          >
+            <Text
+              color="brand.500"
+              fontSize="sm"
+              textTransform="uppercase"
+              letterSpacing="0.3em"
+              mb={6}
+            >
+              Member Voices
+            </Text>
+
+            <Heading
+              as="h2"
+              fontSize={{ base: '2rem', md: '3rem', lg: '3.5rem' }}
+              lineHeight={1.1}
+              color="white"
+              fontFamily="heading"
+              mb={6}
+            >
+              What Our Members Say
+            </Heading>
+
+            <Text color="whiteAlpha.500" fontSize="md" lineHeight="relaxed" maxW="md">
+              The best measure of Club BZR is how people feel after making, sharing, and learning together.
+            </Text>
+          </MotionBox>
+
+          <SimpleGrid columns={{ base: 1, md: 2 }} gap={5}>
+            {testimonials.map((testimonial, index) => (
+              <MotionBox
+                key={testimonial.name}
+                initial={{ opacity: 0, y: 24 }}
+                whileInView={{ opacity: 1, y: 0 }}
+                transition={{ duration: 0.5, delay: index * 0.08 }}
+                viewport={{ once: true }}
+                gridColumn={{ base: 'auto', md: testimonial.name === 'Claire' ? 'span 2' : 'auto' }}
+                p={{ base: 5, md: 6 }}
+                borderRadius="2xl"
+                bg="gray.900"
+                border="1px solid"
+                borderColor="whiteAlpha.100"
+              >
+                <Text color="brand.500" fontSize="sm" fontWeight="semibold" mb={4}>
+                  {testimonial.name}
+                </Text>
+                <VStack align="stretch" gap={4}>
+                  {testimonial.quote.map((paragraph) => (
+                    <Text key={paragraph} color="whiteAlpha.700" fontSize={{ base: 'sm', md: 'md' }} lineHeight="relaxed">
+                      "{paragraph}"
+                    </Text>
+                  ))}
+                </VStack>
+              </MotionBox>
+            ))}
+          </SimpleGrid>
+        </Grid>
+      </Container>
+    </Box>
+  )
+}
+
 function GallerySection() {
   const items = [
     { title: 'Sketch Sessions', desc: 'Drawing explorations in relaxed settings.', image: eventImg1 },
@@ -932,6 +1026,7 @@ export default function Landing() {
         <AboutSection />
         <ProjectsSection />
         <CommunityHighlightsSection />
+        <TestimonialsSection />
         <GallerySection />
         <ContactSection />
         <RecentWorkSection />

@@ -20,21 +20,11 @@ const firebaseConfig = {
 };
 
 // Initialize Firebase (singleton pattern)
-let app: FirebaseApp;
-let auth: Auth;
-let db: Firestore;
-let storage: FirebaseStorage;
+const app: FirebaseApp = getApps().length ? getApps()[0] : initializeApp(firebaseConfig);
+const auth: Auth = getAuth(app);
+const db: Firestore = getFirestore(app);
+const storage: FirebaseStorage = getStorage(app);
 let analytics: Analytics | null = null;
-
-if (!getApps().length) {
-  app = initializeApp(firebaseConfig);
-} else {
-  app = getApps()[0];
-}
-
-auth = getAuth(app);
-db = getFirestore(app);
-storage = getStorage(app);
 
 // Initialize Analytics (client-side only)
 export function initializeAnalytics(): Analytics | null {
@@ -70,6 +60,7 @@ export const COLLECTIONS = {
   USERS: 'users',
   ARTISTS: 'artists',
   ARTIST_FOLLOWS: 'artistFollows',
+  ARTWORKS: 'artworks',
   SESSIONS: 'sessions',
   QUESTS: 'quests',
   QUEST_SUBMISSIONS: 'questSubmissions',

@@ -176,9 +176,9 @@ export const ArtistCard: React.FC<ArtistCardProps> = ({
 
       {/* Avatar section */}
       <div className="relative aspect-square overflow-hidden">
-        {artist.portfolio[0]?.thumbnailUrl ? (
+        {artist.photoURL ? (
           <img
-            src={artist.portfolio[0].thumbnailUrl}
+            src={artist.photoURL}
             alt={displayName}
             className="w-full h-full object-cover transition-transform duration-500 group-hover:scale-110"
           />

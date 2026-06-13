@@ -127,6 +127,8 @@ export interface User extends BaseDocument {
   website?: string;
   socialLinks?: SocialLinks;
   preferences?: UserPreferences;
+  lovedArtworkKeys?: string[];
+  bookmarkedArtworkKeys?: string[];
   isOnboarded: boolean;
   isActive: boolean;
   lastActiveAt?: FirestoreTimestamp;
@@ -245,6 +247,7 @@ export interface Artist extends BaseDocument {
   userId: string;
   name: string;
   artistName?: string; // Stage name or artist alias
+  photoURL?: string;
   bio: string;
   statement?: string; // Artist statement
 
@@ -300,6 +303,36 @@ export interface PortfolioItem {
   order: number;
 }
 
+/**
+ * Artwork - Public artwork uploaded by artists
+ * Stored in: /artworks/{artworkId}
+ */
+export interface Artwork extends BaseDocument {
+  artistId?: string;
+  artistName: string;
+  artistPhotoURL?: string;
+  artistExternalUrl?: string;
+  creditType?: 'club_artist' | 'external_credit';
+
+  title: string;
+  description?: string;
+  medium: ArtMedium;
+  imageUrl: string;
+  thumbnailUrl?: string;
+  mediaUrls: string[];
+
+  genres: string[];
+  tags: string[];
+  location?: string;
+  artworkDate?: FirestoreTimestamp;
+  year?: number;
+
+  featured: boolean;
+  visibility: 'public' | 'unlisted';
+  likesCount: number;
+  savesCount: number;
+}
+
 /** Artist availability status */
 export interface ArtistAvailability {
   forCommissions: boolean;
@@ -320,6 +353,7 @@ export interface Session extends BaseDocument {
   title: string;
   description: string;
   shortDescription?: string;
+  about?: string;
 
   // Event details
   type: SessionType;
@@ -607,8 +641,11 @@ export interface CuratorInfo {
 /** Exhibition artwork */
 export interface ExhibitionArtwork {
   id: string;
-  artistId: string;
+  artistId?: string;
   artistName: string;
+  artistPhotoURL?: string;
+  artistExternalUrl?: string;
+  creditType?: 'club_artist' | 'external_credit';
 
   title: string;
   description?: string;
@@ -620,6 +657,13 @@ export interface ExhibitionArtwork {
 
   order: number;
   curatorNote?: string;
+
+  // Engagement
+  likedBy?: string[];
+  likesCount?: number;
+  savedBy?: string[];
+  savesCount?: number;
+  sharesCount?: number;
 }
 
 // =============================================================================
@@ -880,6 +924,7 @@ export interface CollectionTypes {
   creativePassports: CreativePassport;
   artists: Artist;
   artistFollows: ArtistFollow;
+  artworks: Artwork;
   sessions: Session;
   quests: Quest;
   questSubmissions: QuestSubmission;

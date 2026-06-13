@@ -85,6 +85,26 @@ service cloud.firestore {
       return value is string && value.size() >= min && value.size() <= max;
     }
 
+    // Validate the current user is the only item added to a list field
+    function currentUserAddedToList(field) {
+      return resource.data[field] is list
+        && request.resource.data[field] is list
+        && !(userId() in resource.data[field])
+        && userId() in request.resource.data[field]
+        && request.resource.data[field].size() == resource.data[field].size() + 1
+        && request.resource.data[field].hasAll(resource.data[field]);
+    }
+
+    // Validate the current user is the only item removed from a list field
+    function currentUserRemovedFromList(field) {
+      return resource.data[field] is list
+        && request.resource.data[field] is list
+        && userId() in resource.data[field]
+        && !(userId() in request.resource.data[field])
+        && request.resource.data[field].size() == resource.data[field].size() - 1
+        && resource.data[field].hasAll(request.resource.data[field]);
+    }
+
     // ==========================================================================
     // USERS COLLECTION
     // ==========================================================================
@@ -178,6 +198,30 @@ service cloud.firestore {
         && fieldUnchanged('createdAt')
         && fieldUnchanged('facilitator.userId');
 
+      // Signed-in users can only register or cancel their own registration
+      allow update: if isAuthenticated()
+        && resource.data.status == 'published'
+        && isServerTimestamp('updatedAt')
+        && (
+          (
+            request.resource.data.diff(resource.data).affectedKeys().hasOnly(['attendees', 'updatedAt'])
+            && (
+              (
+                currentUserAddedToList('attendees')
+                && request.resource.data.attendees.size() <= resource.data.capacity
+              )
+              || currentUserRemovedFromList('attendees')
+            )
+          )
+          || (
+            request.resource.data.diff(resource.data).affectedKeys().hasOnly(['waitlist', 'updatedAt'])
+            && (
+              currentUserAddedToList('waitlist')
+              || currentUserRemovedFromList('waitlist')
+            )
+          )
+        );
+
       // Only session owner or admin can delete
       allow delete: if isOwner(resource.data.facilitator.userId) || isAdmin();
 
@@ -187,6 +231,31 @@ service cloud.firestore {
         allow create: if isOwner(attendeeId);
         allow delete: if isOwner(attendeeId) || isOwner(get(/databases/$(database)/documents/sessions/$(sessionId)).data.facilitator.userId);
       }
+    }
+
+    // ==========================================================================
+    // ARTWORKS COLLECTION
+    // ==========================================================================
+
+    match /artworks/{artworkId} {
+      // Anyone can read public artwork
+      allow read: if true;
+
+      // Artists can create their own artwork documents
+      allow create: if isAuthenticated()
+        && exists(/databases/$(database)/documents/artists/$(request.auth.uid))
+        && request.resource.data.artistId == userId()
+        && request.resource.data.title is string
+        && request.resource.data.imageUrl is string;
+
+      // Artwork owners or admins can update artwork without reassigning ownership
+      allow update: if isAuthenticated()
+        && (resource.data.artistId == userId() || isAdmin())
+        && request.resource.data.artistId == resource.data.artistId;
+
+      // Artwork owners or admins can delete artwork
+      allow delete: if isAuthenticated()
+        && (resource.data.artistId == userId() || isAdmin());
     }
 
     // ==========================================================================

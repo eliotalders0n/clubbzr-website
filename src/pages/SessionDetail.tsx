@@ -1,7 +1,7 @@
 'use client'
 
 import { useState, useMemo } from 'react'
-import { useParams, Link, useNavigate } from 'react-router-dom'
+import { useParams, useNavigate } from 'react-router-dom'
 import {
   Box,
   Container,
@@ -23,8 +23,9 @@ import { Timestamp, arrayUnion, arrayRemove } from 'firebase/firestore'
 import { Header } from '@/components/layout/Header'
 import { Footer } from '@/components/layout/Footer'
 import { SessionGallery } from '@/components/features/sessions'
+import { useAuth } from '@/contexts/AuthContext'
 import { useDocument, useMutation } from '@/hooks/useFirestore'
-import type { Session, SessionReflection, SessionType } from '../../lib/schema'
+import type { SessionReflection, SessionType } from '../../lib/schema'
 
 // Fallback image
 import eventImgFallback from '@/assets/images/events/IMG_9074.jpeg'
@@ -50,16 +51,12 @@ const typeColors: Record<SessionType, { bg: string; text: string }> = {
   online: { bg: 'teal.500', text: 'white' },
 }
 
-// TODO: Replace with actual auth hook
-const useAuth = () => ({
-  user: { uid: 'demo-user-id', displayName: 'Demo User' },
-  isAuthenticated: true,
-})
-
 export default function SessionDetail() {
   const { id } = useParams<{ id: string }>()
   const navigate = useNavigate()
-  const { user, isAuthenticated } = useAuth()
+  const { user, initialized: authInitialized } = useAuth()
+  const userId = user?.uid
+  const isAuthenticated = Boolean(userId)
 
   // Fetch session from Firebase
   const { data: session, loading, error, refetch } = useDocument('sessions', id)
@@ -68,6 +65,7 @@ export default function SessionDetail() {
   // Local state for reflections
   const [newReflection, setNewReflection] = useState('')
   const [submittingReflection, setSubmittingReflection] = useState(false)
+  const [registrationError, setRegistrationError] = useState<string | null>(null)
 
   // Computed values
   const sessionData = useMemo(() => {
@@ -80,8 +78,8 @@ export default function SessionDetail() {
     const spotsLeft = session.capacity - attendeeCount
     const progressPercent = session.capacity > 0 ? (attendeeCount / session.capacity) * 100 : 0
     const isPast = sessionDate < new Date()
-    const isRegistered = session.attendees?.includes(user?.uid || '')
-    const isOnWaitlist = session.waitlist?.includes(user?.uid || '')
+    const isRegistered = Boolean(userId && session.attendees?.includes(userId))
+    const isOnWaitlist = Boolean(userId && session.waitlist?.includes(userId))
     const isFull = spotsLeft <= 0
 
     return {
@@ -96,40 +94,68 @@ export default function SessionDetail() {
       isOnWaitlist,
       isFull,
     }
-  }, [session, user?.uid])
+  }, [session, userId])
 
   // Handle registration
   const handleRegister = async () => {
-    if (!session || !id || !user?.uid) return
+    if (!userId) {
+      navigate('/auth/login')
+      return
+    }
+    if (!session || !id) return
+
+    setRegistrationError(null)
 
     if (sessionData?.isFull) {
       // Add to waitlist
-      await updateSession(id, {
-        waitlist: arrayUnion(user.uid) as unknown as string[],
+      const result = await updateSession(id, {
+        waitlist: arrayUnion(userId) as unknown as string[],
       })
+      if (!result.success) {
+        setRegistrationError(result.error?.message || 'Unable to join the waitlist.')
+        return
+      }
     } else {
       // Add to attendees
-      await updateSession(id, {
-        attendees: arrayUnion(user.uid) as unknown as string[],
+      const result = await updateSession(id, {
+        attendees: arrayUnion(userId) as unknown as string[],
       })
+      if (!result.success) {
+        setRegistrationError(result.error?.message || 'Unable to register for this session.')
+        return
+      }
     }
-    refetch()
+    await refetch()
   }
 
   // Handle unregistration
   const handleUnregister = async () => {
-    if (!session || !id || !user?.uid) return
+    if (!userId) {
+      navigate('/auth/login')
+      return
+    }
+    if (!session || !id) return
+
+    setRegistrationError(null)
 
     if (sessionData?.isOnWaitlist) {
-      await updateSession(id, {
-        waitlist: arrayRemove(user.uid) as unknown as string[],
+      const result = await updateSession(id, {
+        waitlist: arrayRemove(userId) as unknown as string[],
       })
+      if (!result.success) {
+        setRegistrationError(result.error?.message || 'Unable to leave the waitlist.')
+        return
+      }
     } else {
-      await updateSession(id, {
-        attendees: arrayRemove(user.uid) as unknown as string[],
+      const result = await updateSession(id, {
+        attendees: arrayRemove(userId) as unknown as string[],
       })
+      if (!result.success) {
+        setRegistrationError(result.error?.message || 'Unable to cancel your registration.')
+        return
+      }
     }
-    refetch()
+    await refetch()
   }
 
   // Handle reflection submission
@@ -200,6 +226,7 @@ export default function SessionDetail() {
   }
 
   const typeStyle = typeColors[session.type] || { bg: 'gray.500', text: 'white' }
+  const sessionAbout = session.about?.trim()
 
   return (
     <Box bg="gray.950" minH="100vh">
@@ -287,31 +314,27 @@ export default function SessionDetail() {
             <Grid templateColumns={{ base: '1fr', lg: '2fr 1fr' }} gap={{ base: 8, lg: 12 }}>
               {/* Main Content */}
               <VStack align="stretch" gap={8}>
-                <MotionBox
-                  initial={{ opacity: 0, y: 20 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  transition={{ duration: 0.6, delay: 0.2 }}
-                  p={8}
-                  borderRadius="2xl"
-                  bg="gray.900"
-                  border="1px solid"
-                  borderColor="whiteAlpha.100"
-                >
-                  <Heading as="h2" fontSize="xl" color="white" fontFamily="heading" mb={4}>
-                    About This Session
-                  </Heading>
-                  <VStack align="stretch" gap={4} color="whiteAlpha.600">
-                    <Text>
-                      Join us for an immersive workshop exploring the art of portrait drawing.
-                      Whether you're picking up a pencil for the first time or looking to refine
-                      your existing skills, this session offers something for everyone.
-                    </Text>
-                    <Text>
-                      We'll cover fundamental techniques including proportions, shading, and
-                      capturing likeness. All materials will be provided.
-                    </Text>
-                  </VStack>
-                </MotionBox>
+                {sessionAbout && (
+                  <MotionBox
+                    initial={{ opacity: 0, y: 20 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    transition={{ duration: 0.6, delay: 0.2 }}
+                    p={8}
+                    borderRadius="2xl"
+                    bg="gray.900"
+                    border="1px solid"
+                    borderColor="whiteAlpha.100"
+                  >
+                    <Heading as="h2" fontSize="xl" color="white" fontFamily="heading" mb={4}>
+                      About This Session
+                    </Heading>
+                    <VStack align="stretch" gap={4} color="whiteAlpha.600">
+                      <Text whiteSpace="pre-line">
+                        {sessionAbout}
+                      </Text>
+                    </VStack>
+                  </MotionBox>
+                )}
 
                 {/* Facilitator */}
                 <MotionBox
@@ -477,7 +500,18 @@ export default function SessionDetail() {
                   {/* Registration CTA */}
                   {!sessionData?.isPast && session.status === 'published' && (
                     <>
-                      {!isAuthenticated ? (
+                      {!authInitialized ? (
+                        <Button
+                          w="full"
+                          bg="whiteAlpha.100"
+                          color="white"
+                          size="lg"
+                          borderRadius="xl"
+                          disabled
+                        >
+                          <Spinner size="sm" />
+                        </Button>
+                      ) : !isAuthenticated ? (
                         <Button
                           w="full"
                           bg="brand.500"
@@ -485,7 +519,7 @@ export default function SessionDetail() {
                           size="lg"
                           borderRadius="xl"
                           _hover={{ bg: 'brand.600' }}
-                          onClick={() => navigate('/login')}
+                          onClick={() => navigate('/auth/login')}
                         >
                           Sign in to Register
                         </Button>
@@ -548,6 +582,11 @@ export default function SessionDetail() {
                             'Register Now'
                           )}
                         </Button>
+                      )}
+                      {registrationError && (
+                        <Text color="red.300" fontSize="sm" textAlign="center" mt={3}>
+                          {registrationError}
+                        </Text>
                       )}
                     </>
                   )}

@@ -38,6 +38,7 @@ import { createDocument, deleteDocument, updateDocument } from '../../../lib/fir
 import { STORAGE_PATHS, uploadFileSimple, validateFile } from '../../../lib/storage'
 import type {
   ArtMedium,
+  Artist,
   CreateDocument,
   Exhibition,
   ExhibitionArtwork,
@@ -54,6 +55,7 @@ type ArtworkForm = {
   title: string
   artistId: string
   artistName: string
+  artistExternalUrl: string
   description: string
   medium: ArtMedium
   year: string
@@ -177,6 +179,10 @@ function displayMedium(value: string): string {
   return value.replace(/_/g, ' ')
 }
 
+function getArtistDisplayName(artist: Artist): string {
+  return artist.artistName || artist.name || 'Untitled artist'
+}
+
 function getStatus(exhibition: AdminExhibition): Exclude<StatusFilter, 'all'> {
   if (exhibition.isPublished === false) return 'draft'
   const now = Date.now()
@@ -194,6 +200,7 @@ function emptyArtwork(): ArtworkForm {
     title: '',
     artistId: '',
     artistName: '',
+    artistExternalUrl: '',
     description: '',
     medium: 'digital',
     year: '',
@@ -226,8 +233,9 @@ function artworkToForm(artwork: ExhibitionArtwork): ArtworkForm {
   return {
     id: artwork.id,
     title: artwork.title,
-    artistId: artwork.artistId,
+    artistId: artwork.artistId || '',
     artistName: artwork.artistName,
+    artistExternalUrl: artwork.artistExternalUrl || '',
     description: artwork.description || '',
     medium: artwork.medium,
     year: artwork.year ? String(artwork.year) : '',
@@ -263,10 +271,13 @@ function buildPayload(form: ExhibitionForm, viewsCount = 0): ExhibitionWrite {
     .map((artwork, index): ExhibitionArtwork => {
       const thumbnailUrl = artwork.thumbnailUrl.trim() || coverImage
       const year = Number(artwork.year)
+      const artistId = artwork.artistId.trim()
+      const artistExternalUrl = artwork.artistExternalUrl.trim()
       return {
         id: artwork.id || `artwork-${index}`,
-        artistId: artwork.artistId.trim() || artwork.artistName.trim().toLowerCase().replace(/\s+/g, '-'),
+        ...(artistId ? { artistId, creditType: 'club_artist' as const } : { creditType: 'external_credit' as const }),
         artistName: artwork.artistName.trim(),
+        ...(artistExternalUrl ? { artistExternalUrl } : {}),
         title: artwork.title.trim(),
         description: artwork.description.trim(),
         medium: artwork.medium,
@@ -358,13 +369,34 @@ function Modal({
 
 function ArtworkFields({
   artwork,
+  artistOptions,
+  artistsLoading,
   onUpdate,
   onRemove,
 }: {
   artwork: ArtworkForm
+  artistOptions: Artist[]
+  artistsLoading: boolean
   onUpdate: (artwork: ArtworkForm) => void
   onRemove: () => void
 }) {
+  const selectedArtistExists = artistOptions.some((artist) => artist.id === artwork.artistId)
+
+  const selectExistingArtist = (artistId: string) => {
+    if (!artistId) {
+      onUpdate({ ...artwork, artistId: '' })
+      return
+    }
+
+    const selectedArtist = artistOptions.find((artist) => artist.id === artistId)
+    onUpdate({
+      ...artwork,
+      artistId,
+      artistName: selectedArtist ? getArtistDisplayName(selectedArtist) : artwork.artistName,
+      artistExternalUrl: '',
+    })
+  }
+
   return (
     <Box p={4} bg="gray.800" border="1px solid" borderColor="whiteAlpha.100" borderRadius="xl">
       <Flex justify="space-between" align="center" mb={4}>
@@ -389,7 +421,28 @@ function ArtworkFields({
       <Grid templateColumns={{ base: '1fr', md: '1fr 1fr' }} gap={3}>
         <Input value={artwork.title} onChange={(e) => onUpdate({ ...artwork, title: e.target.value })} placeholder="Artwork title" bg="gray.900" color="white" borderColor="whiteAlpha.200" />
         <Input value={artwork.artistName} onChange={(e) => onUpdate({ ...artwork, artistName: e.target.value })} placeholder="Artist name" bg="gray.900" color="white" borderColor="whiteAlpha.200" />
-        <Input value={artwork.artistId} onChange={(e) => onUpdate({ ...artwork, artistId: e.target.value })} placeholder="Artist ID or slug" bg="gray.900" color="white" borderColor="whiteAlpha.200" />
+        <select
+          value={artwork.artistId}
+          onChange={(e) => selectExistingArtist(e.target.value)}
+          className="h-10 rounded-md border border-white/20 bg-gray-900 px-3 text-white"
+          aria-label="Select existing Club BZR artist"
+          disabled={artistsLoading}
+        >
+          <option value="">
+            {artistsLoading ? 'Loading Club BZR artists...' : 'External/manual credit'}
+          </option>
+          {artwork.artistId && !selectedArtistExists && (
+            <option value={artwork.artistId}>
+              Current linked artist ID: {artwork.artistId}
+            </option>
+          )}
+          {artistOptions.map((artist) => (
+            <option key={artist.id} value={artist.id}>
+              {getArtistDisplayName(artist)}
+            </option>
+          ))}
+        </select>
+        <Input value={artwork.artistExternalUrl} onChange={(e) => onUpdate({ ...artwork, artistExternalUrl: e.target.value })} placeholder="External artist URL (optional)" bg="gray.900" color="white" borderColor="whiteAlpha.200" />
         <select
           value={artwork.medium}
           onChange={(e) => onUpdate({ ...artwork, medium: e.target.value as ArtMedium })}
@@ -423,6 +476,11 @@ function ExhibitionFormFields({
   const coverInputRef = useRef<HTMLInputElement>(null)
   const [uploadingCover, setUploadingCover] = useState(false)
   const [coverUploadError, setCoverUploadError] = useState<string | null>(null)
+  const { data: artistOptionsData, loading: artistsLoading } = useCollection('artists', {
+    orderBy: 'createdAt',
+    orderDirection: 'desc',
+  })
+  const artistOptions = (artistOptionsData as Artist[]) || []
   const coverImage = form.coverImage.trim()
 
   const updateArtwork = (index: number, artwork: ArtworkForm) => {
@@ -599,6 +657,8 @@ function ExhibitionFormFields({
             <ArtworkFields
               key={artwork.id}
               artwork={artwork}
+              artistOptions={artistOptions}
+              artistsLoading={artistsLoading}
               onUpdate={(updated) => updateArtwork(index, updated)}
               onRemove={() => setForm((prev) => ({ ...prev, artworks: prev.artworks.filter((_, itemIndex) => itemIndex !== index) }))}
             />

@@ -414,6 +414,175 @@ img, video {
   will-change: transform;
 }
 
+/* Immersive gallery artwork hotspots */
+.club-wall-artwork-hotspot {
+  width: clamp(300px, 31vw, 500px);
+  max-width: calc(100vw - 40px);
+  pointer-events: auto;
+  transform-origin: center center;
+  will-change: transform;
+  contain: layout paint style;
+}
+
+.club-wall-artwork-card {
+  display: block;
+  width: 100%;
+  margin: 0;
+  padding: 0;
+  overflow: hidden;
+  border: 1px solid rgba(255, 255, 255, 0.28);
+  border-radius: 26px;
+  background: rgba(18, 18, 18, 0.72);
+  color: #fff;
+  font: inherit;
+  font-family: var(--font-body);
+  text-align: left;
+  cursor: pointer;
+  box-shadow: 0 26px 70px rgba(0, 0, 0, 0.36);
+  backdrop-filter: blur(18px);
+  -webkit-backdrop-filter: blur(18px);
+  transform: translateZ(0);
+  backface-visibility: hidden;
+  transition: border-color 0.2s ease, box-shadow 0.2s ease, background-color 0.2s ease;
+}
+
+.club-wall-artwork-card:hover,
+.club-wall-artwork-card.is-active {
+  border-color: rgba(255, 255, 255, 0.5);
+  background: rgba(18, 18, 18, 0.78);
+  box-shadow: 0 34px 90px rgba(0, 0, 0, 0.48);
+}
+
+.club-wall-artwork-card:focus-visible {
+  outline: 2px solid rgba(255, 255, 255, 0.86);
+  outline-offset: 4px;
+}
+
+.club-wall-artwork-media {
+  width: 100%;
+  height: min(36vh, 410px);
+  min-height: 280px;
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.club-wall-artwork-image {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.club-wall-artwork-empty {
+  display: flex;
+  width: 100%;
+  height: 100%;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  color: rgba(255, 255, 255, 0.58);
+  font-size: 0.95rem;
+  text-align: center;
+}
+
+.club-wall-artwork-body {
+  display: flex;
+  height: 178px;
+  flex-direction: column;
+  gap: 14px;
+  padding: 20px;
+  background: rgba(18, 18, 18, 0.82);
+}
+
+.club-wall-artwork-header {
+  display: flex;
+  gap: 16px;
+  align-items: flex-start;
+  justify-content: space-between;
+}
+
+.club-wall-artwork-title-group {
+  min-width: 0;
+}
+
+.club-wall-artwork-title {
+  display: -webkit-box;
+  margin: 0;
+  overflow: hidden;
+  color: #fff;
+  font-family: var(--font-heading);
+  font-size: 1.625rem;
+  font-weight: 700;
+  line-height: 1.12;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+.club-wall-artwork-meta {
+  margin: 6px 0 0;
+  overflow: hidden;
+  color: rgba(255, 255, 255, 0.64);
+  font-size: 0.95rem;
+  line-height: 1.35;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.club-wall-artwork-count {
+  flex-shrink: 0;
+  padding-top: 4px;
+  color: rgba(255, 255, 255, 0.68);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+  font-size: 0.78rem;
+  line-height: 1;
+}
+
+.club-wall-artwork-description {
+  display: -webkit-box;
+  margin: 0;
+  overflow: hidden;
+  color: rgba(255, 255, 255, 0.84);
+  font-size: 1rem;
+  line-height: 1.55;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+}
+
+@media (max-width: 767px) {
+  .club-wall-artwork-hotspot {
+    width: min(74vw, 360px);
+    min-width: 260px;
+  }
+
+  .club-wall-artwork-card {
+    border-radius: 22px;
+  }
+
+  .club-wall-artwork-media {
+    height: 34vh;
+    min-height: 220px;
+  }
+
+  .club-wall-artwork-body {
+    height: 156px;
+    gap: 10px;
+    padding: 16px;
+  }
+
+  .club-wall-artwork-title {
+    font-size: 1.25rem;
+  }
+
+  .club-wall-artwork-meta {
+    font-size: 0.82rem;
+  }
+
+  .club-wall-artwork-description {
+    font-size: 0.9rem;
+    line-height: 1.45;
+    -webkit-line-clamp: 2;
+  }
+}
+
 /* Reduced motion */
 @media (prefers-reduced-motion: reduce) {
   * {

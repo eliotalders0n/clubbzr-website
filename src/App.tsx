@@ -10,6 +10,7 @@ const QuestDetail = lazy(() => import('@/pages/QuestDetail'))
 const Sessions = lazy(() => import('@/pages/Sessions'))
 const SessionDetail = lazy(() => import('@/pages/SessionDetail'))
 const Artists = lazy(() => import('@/pages/Artists'))
+const ArtworkDetail = lazy(() => import('@/pages/ArtworkDetail'))
 const ArtistCreate = lazy(() => import('@/pages/ArtistCreate'))
 const ArtistProfile = lazy(() => import('@/pages/ArtistProfile'))
 const CommunityWall = lazy(() => import('@/pages/CommunityWall'))
@@ -92,6 +93,7 @@ function App() {
 
           {/* Artists */}
           <Route path="/artists" element={<Artists />} />
+          <Route path="/artworks/:id" element={<ArtworkDetail />} />
           <Route path="/artists/create" element={<ArtistCreate />} />
           <Route path="/artists/:id" element={<ArtistProfile />} />
 

@@ -1,6 +1,6 @@
 'use client'
 
-import { useState } from 'react'
+import { useMemo, useState } from 'react'
 import { useParams, Link } from 'react-router-dom'
 import { doc } from 'firebase/firestore'
 import {
@@ -24,9 +24,10 @@ import { Header } from '@/components/layout/Header'
 import { Footer } from '@/components/layout/Footer'
 import { PortfolioGallery } from '@/components/features/artists'
 import { useAuth } from '@/contexts/AuthContext'
-import { useDocument } from '@/hooks/useFirestore'
+import { useCollection, useDocument } from '@/hooks/useFirestore'
+import { resolveProfileIdentity } from '@/lib/profileIdentity'
 import { db, executeTransaction, increment, serverTimestamp } from '../../lib/firestore'
-import type { Artist, ArtMedium } from '../../lib/schema'
+import type { Artist, ArtMedium, PortfolioItem } from '../../lib/schema'
 
 const MotionBox = motion.create(Box)
 
@@ -49,6 +50,11 @@ const getAvailabilityText = (artist: Artist): string => {
   return available.length > 0 ? `Available for ${available.join(', ')}` : 'Currently busy'
 }
 
+const getTimestampMs = (value: unknown) =>
+  value && typeof (value as { toMillis?: unknown }).toMillis === 'function'
+    ? (value as { toMillis: () => number }).toMillis()
+    : 0
+
 export default function ArtistProfile() {
   const { id } = useParams()
   const { firebaseUser } = useAuth()
@@ -59,6 +65,11 @@ export default function ArtistProfile() {
 
   // Fetch artist from Firebase
   const { data: artist, loading, error, refetch } = useDocument('artists', id)
+  const { data: artistUser } = useDocument('users', artist?.userId, { skip: !artist?.userId })
+  const { data: uploadedArtworks } = useCollection('artworks', {
+    where: id ? [{ field: 'artistId', operator: '==', value: id }] : [],
+    skip: !id,
+  })
   const isOwnProfile = !!firebaseUser?.uid && !!artist && (artist.userId === firebaseUser.uid || id === firebaseUser.uid)
   const followDocId = firebaseUser?.uid && id ? `${firebaseUser.uid}_${id}` : undefined
   const {
@@ -67,6 +78,30 @@ export default function ArtistProfile() {
     refetch: refetchFollowRecord,
   } = useDocument('artistFollows', followDocId, { skip: !followDocId || isOwnProfile })
   const isFollowing = optimisticFollow?.docId === followDocId ? optimisticFollow.value : !!followRecord
+  const uploadedPortfolio = useMemo<PortfolioItem[]>(
+    () =>
+      uploadedArtworks
+        .filter((artwork) => artwork.visibility !== 'unlisted')
+        .sort((a, b) => getTimestampMs(b.createdAt) - getTimestampMs(a.createdAt))
+        .map((artwork, index) => ({
+          id: artwork.id,
+          title: artwork.title,
+          ...(artwork.description ? { description: artwork.description } : {}),
+          medium: artwork.medium,
+          ...(artwork.year ? { year: artwork.year } : {}),
+          mediaUrls: artwork.mediaUrls?.length ? artwork.mediaUrls : [artwork.imageUrl],
+          thumbnailUrl: artwork.thumbnailUrl || artwork.imageUrl,
+          externalUrl: artwork.imageUrl,
+          featured: artwork.featured,
+          order: index,
+        })),
+    [uploadedArtworks]
+  )
+  const displayPortfolio = useMemo(
+    () => (uploadedPortfolio.length > 0 ? uploadedPortfolio : artist?.portfolio || []),
+    [artist?.portfolio, uploadedPortfolio]
+  )
+  const worksCount = Math.max(artist?.worksCount || 0, displayPortfolio.length)
 
   // Handle follow/unfollow
   const handleFollow = async () => {
@@ -175,7 +210,12 @@ export default function ArtistProfile() {
     )
   }
 
-  const displayName = artist.artistName || artist.name
+  const identity = resolveProfileIdentity({
+    artist,
+    user: artistUser,
+    fallbackName: artist.artistName || artist.name,
+  })
+  const displayName = identity.displayName
   const isAvailable = isArtistAvailable(artist)
   const availabilityColor = isAvailable ? 'green.400' : 'orange.400'
 
@@ -218,9 +258,9 @@ export default function ArtistProfile() {
                   justifyContent="center"
                   overflow="hidden"
                 >
-                  {artist.portfolio[0]?.thumbnailUrl ? (
+                  {identity.avatar ? (
                     <img
-                      src={artist.portfolio[0].thumbnailUrl}
+                      src={identity.avatar}
                       alt={displayName}
                       style={{ width: '100%', height: '100%', objectFit: 'cover' }}
                     />
@@ -234,9 +274,9 @@ export default function ArtistProfile() {
                 <Heading as="h1" fontSize={{ base: 'xl', md: '2xl' }} color="white" fontFamily="heading" mb={2}>
                   {displayName}
                 </Heading>
-                {artist.artistName && artist.name !== artist.artistName && (
+                {identity.accountName && identity.accountName !== displayName && (
                   <Text color="whiteAlpha.500" fontSize="sm" mb={2}>
-                    {artist.name}
+                    {identity.accountName}
                   </Text>
                 )}
 
@@ -257,7 +297,7 @@ export default function ArtistProfile() {
                     <Text as="span" color="white" fontWeight="bold">{artist.followersCount}</Text> followers
                   </Text>
                   <Text color="whiteAlpha.600" fontSize="sm">
-                    <Text as="span" color="white" fontWeight="bold">{artist.worksCount}</Text> works
+                    <Text as="span" color="white" fontWeight="bold">{worksCount}</Text> works
                   </Text>
                 </HStack>
 
@@ -360,6 +400,96 @@ export default function ArtistProfile() {
 
             {/* Main Content */}
             <VStack align="stretch" gap={{ base: 5, md: 8 }} minW={0}>
+              {/* Portfolio Section */}
+              {displayPortfolio.length > 0 && (
+                <MotionBox
+                  initial={{ opacity: 0, y: 20 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  transition={{ duration: 0.6, delay: 0.05 }}
+                >
+                  <Flex justify="space-between" align="center" mb={5}>
+                    <Heading as="h2" fontSize={{ base: 'xl', md: '2xl' }} color="white" fontFamily="heading">
+                      Works
+                    </Heading>
+                    <Text color="whiteAlpha.500" fontSize="sm">
+                      {displayPortfolio.length} work{displayPortfolio.length === 1 ? '' : 's'}
+                    </Text>
+                  </Flex>
+
+                  <SimpleGrid columns={{ base: 1, sm: 2, xl: 3 }} gap={5}>
+                    {displayPortfolio.map((item, i) => (
+                      <MotionBox
+                        key={item.id}
+                        initial={{ opacity: 0, y: 20 }}
+                        whileInView={{ opacity: 1, y: 0 }}
+                        transition={{ duration: 0.45, delay: i * 0.04 }}
+                        viewport={{ once: true }}
+                        whileHover={{ y: -6 }}
+                        borderRadius="2xl"
+                        overflow="hidden"
+                        bg="gray.900"
+                        border="1px solid"
+                        borderColor="whiteAlpha.100"
+                        cursor="pointer"
+                        role="group"
+                        onClick={() => {
+                          setGalleryIndex(i)
+                          setShowGallery(true)
+                        }}
+                      >
+                        <Box
+                          position="relative"
+                          aspectRatio={i % 3 === 1 ? '4 / 5' : 1}
+                          bg="gray.800"
+                          display="flex"
+                          alignItems="center"
+                          justifyContent="center"
+                          overflow="hidden"
+                        >
+                          {item.thumbnailUrl ? (
+                            <img
+                              src={item.thumbnailUrl}
+                              alt={item.title}
+                              style={{ width: '100%', height: '100%', objectFit: 'cover' }}
+                            />
+                          ) : (
+                            <Text color="whiteAlpha.300">Artwork</Text>
+                          )}
+
+                          <Box
+                            position="absolute"
+                            inset={0}
+                            bgGradient="linear(to-t, blackAlpha.800, transparent)"
+                            opacity={0}
+                            _groupHover={{ opacity: 1 }}
+                            transition="opacity 0.3s"
+                            display="flex"
+                            alignItems="flex-end"
+                            p={5}
+                          >
+                            <Box>
+                              <Heading as="h3" fontSize="lg" color="white" fontFamily="heading">
+                                {item.title}
+                              </Heading>
+                              <HStack gap={2} mt={1}>
+                                <Text color="whiteAlpha.500" fontSize="sm">
+                                  {formatMedium(item.medium)}
+                                </Text>
+                                {item.year && (
+                                  <Text color="whiteAlpha.500" fontSize="sm">
+                                    {item.year}
+                                  </Text>
+                                )}
+                              </HStack>
+                            </Box>
+                          </Box>
+                        </Box>
+                      </MotionBox>
+                    ))}
+                  </SimpleGrid>
+                </MotionBox>
+              )}
+
               {/* About */}
               <MotionBox
                 initial={{ opacity: 0, y: 20 }}
@@ -417,7 +547,7 @@ export default function ArtistProfile() {
                   initial={{ opacity: 0, y: 20 }}
                   animate={{ opacity: 1, y: 0 }}
                   transition={{ duration: 0.6, delay: 0.3 }}
-                p={{ base: 5, md: 8 }}
+                  p={{ base: 5, md: 8 }}
                   borderRadius="2xl"
                   bg="gray.900"
                   border="1px solid"
@@ -497,7 +627,7 @@ export default function ArtistProfile() {
                     textAlign="center"
                   >
                     <Text color="green.400" fontSize="3xl" fontFamily="heading" fontWeight="bold">
-                      {artist.worksCount}
+                      {worksCount}
                     </Text>
                     <Text color="whiteAlpha.500" fontSize="sm" mt={1}>
                       Works
@@ -508,102 +638,15 @@ export default function ArtistProfile() {
             </VStack>
           </Grid>
 
-          {/* Portfolio Section */}
-          {artist.portfolio.length > 0 && (
-            <MotionBox
-              initial={{ opacity: 0, y: 30 }}
-              whileInView={{ opacity: 1, y: 0 }}
-              transition={{ duration: 0.6 }}
-              viewport={{ once: true }}
-              mt={16}
-            >
-              <Heading as="h2" fontSize="2xl" color="white" fontFamily="heading" mb={8}>
-                Portfolio
-              </Heading>
-
-              <SimpleGrid columns={{ base: 1, sm: 2, lg: 3 }} gap={6}>
-                {artist.portfolio.map((item, i) => (
-                  <MotionBox
-                    key={item.id}
-                    initial={{ opacity: 0, y: 20 }}
-                    whileInView={{ opacity: 1, y: 0 }}
-                    transition={{ duration: 0.5, delay: i * 0.1 }}
-                    viewport={{ once: true }}
-                    whileHover={{ y: -8 }}
-                    borderRadius="2xl"
-                    overflow="hidden"
-                    bg="gray.900"
-                    border="1px solid"
-                    borderColor="whiteAlpha.100"
-                    cursor="pointer"
-                    role="group"
-                    onClick={() => {
-                      setGalleryIndex(i)
-                      setShowGallery(true)
-                    }}
-                  >
-                    <Box
-                      position="relative"
-                      aspectRatio={1}
-                      bg="gray.800"
-                      display="flex"
-                      alignItems="center"
-                      justifyContent="center"
-                      overflow="hidden"
-                    >
-                      {item.thumbnailUrl ? (
-                        <img
-                          src={item.thumbnailUrl}
-                          alt={item.title}
-                          style={{ width: '100%', height: '100%', objectFit: 'cover' }}
-                        />
-                      ) : (
-                        <Text color="whiteAlpha.300">Artwork</Text>
-                      )}
-
-                      {/* Hover overlay */}
-                      <Box
-                        position="absolute"
-                        inset={0}
-                        bgGradient="linear(to-t, blackAlpha.800, transparent)"
-                        opacity={0}
-                        _groupHover={{ opacity: 1 }}
-                        transition="opacity 0.3s"
-                        display="flex"
-                        alignItems="flex-end"
-                        p={5}
-                      >
-                        <Box>
-                          <Heading as="h3" fontSize="lg" color="white" fontFamily="heading">
-                            {item.title}
-                          </Heading>
-                          <HStack gap={2} mt={1}>
-                            <Text color="whiteAlpha.500" fontSize="sm">
-                              {formatMedium(item.medium)}
-                            </Text>
-                            {item.year && (
-                              <Text color="whiteAlpha.500" fontSize="sm">
-                                {item.year}
-                              </Text>
-                            )}
-                          </HStack>
-                        </Box>
-                      </Box>
-                    </Box>
-                  </MotionBox>
-                ))}
-              </SimpleGrid>
-            </MotionBox>
-          )}
         </Container>
       </Box>
 
       <Footer />
 
       {/* Portfolio Gallery Modal */}
-      {showGallery && artist.portfolio.length > 0 && (
+      {showGallery && displayPortfolio.length > 0 && (
         <PortfolioGallery
-          items={artist.portfolio}
+          items={displayPortfolio}
           artistName={displayName}
           initialIndex={galleryIndex}
           onClose={() => setShowGallery(false)}

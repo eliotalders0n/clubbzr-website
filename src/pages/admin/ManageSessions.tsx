@@ -34,6 +34,7 @@ type TabFilter = 'upcoming' | 'past'
 interface SessionForm {
   title: string
   description: string
+  about: string
   type: SessionType
   status: SessionStatus
   date: string
@@ -49,6 +50,7 @@ interface SessionForm {
 const emptyForm: SessionForm = {
   title: '',
   description: '',
+  about: '',
   type: 'workshop',
   status: 'published',
   date: '',
@@ -164,6 +166,7 @@ const toInputTime = (value: unknown): string => {
 const toForm = (session: Session): SessionForm => ({
   title: session.title || '',
   description: session.description || '',
+  about: session.about || '',
   type: session.type || 'workshop',
   status: session.status || 'draft',
   date: toInputDate(session.date),
@@ -194,6 +197,7 @@ const buildPayload = (form: SessionForm, existing?: Session): CreateDocument<Ses
     title: form.title.trim(),
     description: form.description.trim(),
     shortDescription: form.description.trim().slice(0, 140),
+    about: form.about.trim(),
     type: form.type,
     date: start,
     ...(end ? { endDate: end } : {}),
@@ -249,6 +253,7 @@ export default function ManageSessions() {
         !query ||
         session.title.toLowerCase().includes(query) ||
         session.description.toLowerCase().includes(query) ||
+        (session.about || '').toLowerCase().includes(query) ||
         (session.facilitator?.name || '').toLowerCase().includes(query)
       const matchesType = typeFilter === 'all' || session.type === typeFilter
       return matchesTab && matchesSearch && matchesType
@@ -471,6 +476,12 @@ export default function ManageSessions() {
                 </HStack>
                 <Heading as="h2" size="md" color="white">{detailSession.title}</Heading>
                 <Text color="whiteAlpha.650" mt={2}>{detailSession.description}</Text>
+                {detailSession.about && (
+                  <Box mt={4} p={4} borderRadius="xl" bg="whiteAlpha.50" border="1px solid" borderColor="whiteAlpha.100">
+                    <Text color="whiteAlpha.500" fontSize="xs" textTransform="uppercase" letterSpacing="wider" mb={2}>About This Session</Text>
+                    <Text color="whiteAlpha.700" whiteSpace="pre-line">{detailSession.about}</Text>
+                  </Box>
+                )}
               </Box>
               <SimpleGrid columns={{ base: 1, sm: 2 }} gap={4}>
                 <Info label="Date" value={`${formatDate(detailSession.date)} ${formatTime(detailSession.date)}`} />
@@ -624,7 +635,8 @@ function SessionFormFields({ form, setForm }: { form: SessionForm; setForm: Reac
   return (
     <VStack gap={4} align="stretch">
       <Field label="Title"><Input value={form.title} onChange={(e) => setForm((prev) => ({ ...prev, title: e.target.value }))} bg="gray.800" color="white" borderColor="whiteAlpha.200" /></Field>
-      <Field label="Description"><Textarea value={form.description} onChange={(e) => setForm((prev) => ({ ...prev, description: e.target.value }))} bg="gray.800" color="white" borderColor="whiteAlpha.200" rows={4} /></Field>
+      <Field label="Hero Description"><Textarea value={form.description} onChange={(e) => setForm((prev) => ({ ...prev, description: e.target.value }))} bg="gray.800" color="white" borderColor="whiteAlpha.200" rows={3} placeholder="Short public summary shown in the hero and session cards." /></Field>
+      <Field label="About This Session"><Textarea value={form.about} onChange={(e) => setForm((prev) => ({ ...prev, about: e.target.value }))} bg="gray.800" color="white" borderColor="whiteAlpha.200" rows={5} placeholder="What will happen at the event, format, materials, schedule, or expectations." /></Field>
       <SimpleGrid columns={{ base: 1, md: 2 }} gap={4}>
         <Field label="Type">
           <select value={form.type} onChange={(e) => setForm((prev) => ({ ...prev, type: e.target.value as SessionType }))} style={selectStyle}>

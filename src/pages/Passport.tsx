@@ -14,7 +14,7 @@ import {
   SimpleGrid,
   Spinner,
 } from '@chakra-ui/react';
-import { Award, CheckCircle2, Eye, Pencil, UserRound } from 'lucide-react';
+import { Award, Bookmark, CheckCircle2, Eye, Heart, ImageIcon, Pencil, UserRound } from 'lucide-react';
 import { Header } from '@/components/layout/Header';
 import { Footer } from '@/components/layout/Footer';
 import { Section } from '@/components/layout/Section';
@@ -24,11 +24,21 @@ import { useCollection, useDocument } from '@/hooks/useFirestore';
 import { Timestamp } from 'firebase/firestore';
 import { createQuestCompletionBadges, getBadgeVisual } from '../../lib/badges';
 import { createDocumentWithId } from '../../lib/firestore';
+import {
+  buildDiscoveryArtworks,
+  formatMedium,
+  getArtworkEngagementKey,
+  type DiscoveryArtwork,
+} from '@/lib/artworkDiscovery';
+import { resolveProfileIdentity } from '@/lib/profileIdentity';
 import type {
+  Artist,
   Badge as PassportBadge,
   CreativePassport,
   CommunityPost,
   CreateDocument,
+  Artwork,
+  Exhibition,
   Quest,
   QuestSubmission,
 } from '../../lib/schema';
@@ -46,6 +56,111 @@ const toMillis = (value: unknown): number => {
   }
   return 0;
 };
+
+const readKeyList = (value: unknown): string[] => (Array.isArray(value) ? value.filter((item): item is string => typeof item === 'string') : []);
+
+type ArtworkStripProps = {
+  title: string;
+  icon: React.ReactNode;
+  items: DiscoveryArtwork[];
+  isLoading: boolean;
+  emptyTitle: string;
+  emptyDescription: string;
+};
+
+const ArtworkStrip: React.FC<ArtworkStripProps> = ({ title, icon, items, isLoading, emptyTitle, emptyDescription }) => (
+  <Box
+    p={{ base: 5, md: 6 }}
+    borderRadius="xl"
+    bg="gray.900"
+    border="1px solid"
+    borderColor="whiteAlpha.100"
+  >
+    <HStack justify="space-between" align="center" mb={5}>
+      <HStack gap={3}>
+        <Flex w={10} h={10} borderRadius="full" bg="whiteAlpha.50" color="brand.300" align="center" justify="center">
+          {icon}
+        </Flex>
+        <Box>
+          <Heading as="h3" fontSize="lg" color="white">{title}</Heading>
+          <Text color="whiteAlpha.500" fontSize="sm">{items.length} {items.length === 1 ? 'item' : 'items'}</Text>
+        </Box>
+      </HStack>
+      <Link to="/artists">
+        <ChakraButton
+          size="sm"
+          bg="whiteAlpha.50"
+          color="whiteAlpha.800"
+          border="1px solid"
+          borderColor="whiteAlpha.100"
+          borderRadius="full"
+          _hover={{ bg: 'whiteAlpha.100' }}
+        >
+          Browse
+        </ChakraButton>
+      </Link>
+    </HStack>
+
+    {isLoading ? (
+      <HStack gap={3} color="whiteAlpha.500">
+        <Spinner size="sm" color="brand.500" />
+        <Text fontSize="sm">Loading artwork...</Text>
+      </HStack>
+    ) : items.length > 0 ? (
+      <SimpleGrid columns={{ base: 2, md: 3, xl: 4 }} gap={4}>
+        {items.slice(0, 8).map((artwork) => (
+          <Link key={artwork.id} to={artwork.detailHref} style={{ display: 'block', minWidth: 0 }}>
+            <Box
+              borderRadius="xl"
+              overflow="hidden"
+              bg="whiteAlpha.50"
+              border="1px solid"
+              borderColor="whiteAlpha.100"
+              _hover={{ transform: 'translateY(-2px)', borderColor: 'brand.400/40', bg: 'whiteAlpha.100' }}
+              transition="transform 160ms ease, border-color 160ms ease, background 160ms ease"
+            >
+              <Box aspectRatio={1} bg="gray.800" overflow="hidden">
+                <img
+                  src={artwork.imageUrl}
+                  alt={artwork.title}
+                  loading="lazy"
+                  style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block' }}
+                />
+              </Box>
+              <Box p={3}>
+                <Text color="white" fontSize="sm" fontWeight="bold" lineClamp={1}>{artwork.title}</Text>
+                <Text color="whiteAlpha.500" fontSize="xs" lineClamp={1}>{artwork.credit.name}</Text>
+                <Text color="whiteAlpha.400" fontSize="xs" mt={1}>{formatMedium(artwork.medium)}</Text>
+              </Box>
+            </Box>
+          </Link>
+        ))}
+      </SimpleGrid>
+    ) : (
+      <Flex
+        minH="180px"
+        borderRadius="xl"
+        border="1px dashed"
+        borderColor="whiteAlpha.200"
+        bg="blackAlpha.200"
+        align="center"
+        justify="center"
+        textAlign="center"
+        px={6}
+      >
+        <VStack gap={3}>
+          <Flex w={12} h={12} borderRadius="full" bg="whiteAlpha.50" color="whiteAlpha.500" align="center" justify="center">
+            <ImageIcon size={20} />
+          </Flex>
+          <Box>
+            <Text color="white" fontWeight="bold">{emptyTitle}</Text>
+            <Text color="whiteAlpha.500" fontSize="sm" maxW="sm">{emptyDescription}</Text>
+          </Box>
+        </VStack>
+      </Flex>
+    )}
+  </Box>
+);
 
 const Passport: React.FC = () => {
   const [isCreating, setIsCreating] = useState(false);
@@ -83,6 +198,24 @@ const Passport: React.FC = () => {
     loading: questsLoading,
   } = useCollection('quests', {
     skip: !firebaseUser?.uid,
+  });
+  const {
+    data: artists,
+    loading: artistsLoading,
+  } = useCollection('artists', {
+    skip: !firebaseUser?.uid || !passport,
+  });
+  const {
+    data: uploadedArtworks,
+    loading: uploadedArtworksLoading,
+  } = useCollection('artworks', {
+    skip: !firebaseUser?.uid || !passport,
+  });
+  const {
+    data: exhibitions,
+    loading: exhibitionsLoading,
+  } = useCollection('exhibitions', {
+    skip: !firebaseUser?.uid || !passport,
   });
 
   const liveActivity = useMemo(() => {
@@ -149,6 +282,25 @@ const Passport: React.FC = () => {
       badges: Array.from(badgeMap.values()).sort((a, b) => toMillis(b.earnedAt) - toMillis(a.earnedAt)),
     };
   }, [communityPosts, passport, questSubmissions, quests]);
+
+  const savedArtwork = useMemo(() => {
+    const allArtwork = buildDiscoveryArtworks({
+      artists: (artists as Artist[]) || [],
+      uploadedArtworks: (uploadedArtworks as Artwork[]) || [],
+      exhibitions: (exhibitions as Exhibition[]) || [],
+    });
+    const byKey = new Map(allArtwork.map((artwork) => [getArtworkEngagementKey(artwork), artwork]));
+    const loved = readKeyList(authUser?.lovedArtworkKeys)
+      .map((key) => byKey.get(key))
+      .filter((artwork): artwork is DiscoveryArtwork => Boolean(artwork));
+    const bookmarked = readKeyList(authUser?.bookmarkedArtworkKeys)
+      .map((key) => byKey.get(key))
+      .filter((artwork): artwork is DiscoveryArtwork => Boolean(artwork));
+
+    return { loved, bookmarked };
+  }, [artists, authUser?.bookmarkedArtworkKeys, authUser?.lovedArtworkKeys, exhibitions, uploadedArtworks]);
+
+  const savedArtworkLoading = artistsLoading || uploadedArtworksLoading || exhibitionsLoading;
 
   // Loading state
   const isLoading = authLoading || passportLoading || questSubmissionsLoading || communityPostsLoading || questsLoading || !initialized;
@@ -404,11 +556,16 @@ const Passport: React.FC = () => {
   }
 
   // Transform passport data for display
+  const identity = resolveProfileIdentity({
+    artist: artistProfile,
+    user: authUser,
+    firebaseUser,
+  });
   const displayUser = {
     id: passport.id,
-    displayName: firebaseUser?.displayName || authUser?.displayName || 'Creative',
-    username: firebaseUser?.email?.split('@')[0] || 'user',
-    avatar: firebaseUser?.photoURL || undefined,
+    displayName: identity.accountName,
+    username: identity.username,
+    avatar: identity.avatar,
     bio: undefined, // Bio is in User doc, not passport
     location: undefined, // Location is in User doc
     joinedAt: passport.stats?.joinedAt as Timestamp | undefined,
@@ -815,6 +972,25 @@ const Passport: React.FC = () => {
                 </VStack>
               )}
             </Box>
+          </SimpleGrid>
+
+          <SimpleGrid columns={{ base: 1, xl: 2 }} gap={6} mt={8}>
+            <ArtworkStrip
+              title="Liked Artwork"
+              icon={<Heart size={18} fill="currentColor" />}
+              items={savedArtwork.loved}
+              isLoading={savedArtworkLoading}
+              emptyTitle="No liked artwork yet"
+              emptyDescription="Love artwork from exhibitions or the artwork viewer and it will collect here."
+            />
+            <ArtworkStrip
+              title="Bookmarked Artwork"
+              icon={<Bookmark size={18} fill="currentColor" />}
+              items={savedArtwork.bookmarked}
+              isLoading={savedArtworkLoading}
+              emptyTitle="No bookmarks yet"
+              emptyDescription="Bookmark pieces you want to revisit and they will stay available from your Passport."
+            />
           </SimpleGrid>
         </ChakraContainer>
       </Box>
