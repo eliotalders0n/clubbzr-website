@@ -12,6 +12,11 @@ service firebase.storage {
       return request.resource.size < 10 * 1024 * 1024;
     }
 
+    // Helper function to check audio file size (max 50MB)
+    function isValidAudioSize() {
+      return request.resource.size <= 50 * 1024 * 1024;
+    }
+
     // Helper function to check if file is an image
     function isImage() {
       return request.resource.contentType.matches('image/.*');
@@ -78,7 +83,7 @@ service firebase.storage {
     // Radio content
     match /radio/{fileName} {
       allow read: if true;
-      allow write: if isAuthenticated() && isValidSize() && isAudio();
+      allow write: if isCuratorOrAdmin() && isValidAudioSize() && isAudio();
     }
 
     // Fallback - deny all other paths

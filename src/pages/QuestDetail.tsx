@@ -44,7 +44,81 @@ const REACTION_TYPES: { type: ReactionType; emoji: string }[] = [
   { type: 'curious', emoji: '🤔' },
 ]
 
+const IMAGE_URL_PATTERN = /\.(avif|gif|jpe?g|png|webp)(?:$|[?#])/i
+
 const getLevelForPoints = (points: number) => Math.max(1, Math.floor(points / 100) + 1)
+
+const isImageUrl = (url: string): boolean => {
+  const value = url.trim()
+  if (!value) return false
+  if (value.startsWith('data:image/') || value.startsWith('blob:')) return true
+
+  try {
+    const parsed = value.startsWith('/') ? new URL(value, window.location.origin) : new URL(value)
+    return IMAGE_URL_PATTERN.test(parsed.pathname) || IMAGE_URL_PATTERN.test(parsed.href)
+  } catch {
+    return IMAGE_URL_PATTERN.test(value)
+  }
+}
+
+function InspirationLink({ link, index }: { link: string; index: number }) {
+  const [imageFailed, setImageFailed] = useState(false)
+  const trimmedLink = link.trim()
+  const shouldPreviewImage = isImageUrl(trimmedLink) && !imageFailed
+
+  if (shouldPreviewImage) {
+    return (
+      <a href={trimmedLink} target="_blank" rel="noopener noreferrer" style={{ display: 'block', textDecoration: 'none' }}>
+        <Box
+          borderRadius="xl"
+          overflow="hidden"
+          bg="blackAlpha.300"
+          border="1px solid"
+          borderColor="whiteAlpha.100"
+          _hover={{ borderColor: 'green.400/50' }}
+          transition="border-color 0.2s"
+        >
+          <Box
+            h={{ base: '220px', md: '360px' }}
+            maxH={{ base: '45vh', md: '420px' }}
+            display="flex"
+            alignItems="center"
+            justifyContent="center"
+            bg="blackAlpha.400"
+          >
+            <Image
+              src={trimmedLink}
+              alt={`Quest inspiration ${index + 1}`}
+              w="full"
+              h="full"
+              objectFit="contain"
+              onError={() => setImageFailed(true)}
+            />
+          </Box>
+          <Text
+            color="whiteAlpha.500"
+            fontSize="xs"
+            px={3}
+            py={2}
+            overflow="hidden"
+            textOverflow="ellipsis"
+            whiteSpace="nowrap"
+          >
+            {trimmedLink}
+          </Text>
+        </Box>
+      </a>
+    )
+  }
+
+  return (
+    <a href={trimmedLink} target="_blank" rel="noopener noreferrer">
+      <Text color="blue.400" fontSize="sm" _hover={{ textDecor: 'underline' }} overflowWrap="anywhere">
+        {trimmedLink}
+      </Text>
+    </a>
+  )
+}
 
 function formatDate(timestamp: Timestamp | { seconds: number } | undefined): string {
   if (!timestamp) return ''
@@ -595,11 +669,7 @@ export default function QuestDetail() {
                   </Text>
                   <VStack align="stretch" gap={2}>
                     {quest.inspirationLinks.map((link, i) => (
-                      <a key={i} href={link} target="_blank" rel="noopener noreferrer">
-                        <Text color="blue.400" fontSize="sm" _hover={{ textDecor: 'underline' }} overflowWrap="anywhere">
-                          {link}
-                        </Text>
-                      </a>
+                      <InspirationLink key={`${link}-${i}`} link={link} index={i} />
                     ))}
                   </VStack>
                 </Box>

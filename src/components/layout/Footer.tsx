@@ -17,6 +17,7 @@ const NAV_LINKS = [
   { label: 'Sessions', href: '/sessions' },
   { label: 'Side Quests', href: '/quests' },
   { label: 'Artists', href: '/artists' },
+  { label: 'About', href: '/about' },
 ]
 
 export function Footer() {

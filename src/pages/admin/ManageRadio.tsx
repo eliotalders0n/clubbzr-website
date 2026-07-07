@@ -1,6 +1,6 @@
 'use client'
 
-import { useMemo, useState, type CSSProperties, type FormEvent, type ReactNode } from 'react'
+import { useMemo, useRef, useState, type CSSProperties, type ChangeEvent, type FormEvent, type ReactNode } from 'react'
 import {
   Badge,
   Box,
@@ -20,6 +20,7 @@ import {
 import { Timestamp } from 'firebase/firestore'
 import { motion } from 'framer-motion'
 import {
+  FileAudio,
   Headphones,
   PauseCircle,
   Pencil,
@@ -33,6 +34,7 @@ import {
 import { AdminLayout } from '@/components/layout/AdminLayout'
 import { useCollection } from '@/hooks/useFirestore'
 import { createDocument, deleteDocument, updateDocument } from '../../../lib/firestore'
+import { STORAGE_PATHS, uploadFileSimple, validateFile, VALIDATION_PRESETS } from '../../../lib/storage'
 import type {
   CreateDocument,
   RadioContent,
@@ -138,6 +140,31 @@ const filterSelectStyle: CSSProperties = {
 }
 
 const fallbackCoverImage = 'https://images.unsplash.com/photo-1493225457124-a3eb161ffa5f?w=1200&q=80'
+
+function getAudioDuration(file: File): Promise<number | null> {
+  return new Promise((resolve) => {
+    const audio = document.createElement('audio')
+    const objectUrl = URL.createObjectURL(file)
+
+    const cleanup = () => {
+      audio.removeAttribute('src')
+      audio.load()
+      URL.revokeObjectURL(objectUrl)
+    }
+
+    audio.preload = 'metadata'
+    audio.onloadedmetadata = () => {
+      const duration = Number.isFinite(audio.duration) ? Math.round(audio.duration) : null
+      cleanup()
+      resolve(duration)
+    }
+    audio.onerror = () => {
+      cleanup()
+      resolve(null)
+    }
+    audio.src = objectUrl
+  })
+}
 
 function toMillis(value: RadioContent['publishedAt'] | undefined): number {
   if (!value) return 0
@@ -317,10 +344,58 @@ function FieldLabel({ children }: { children: ReactNode }) {
 function RadioFormFields({
   form,
   setForm,
+  uploadingAudio,
+  setUploadingAudio,
 }: {
   form: RadioForm
   setForm: React.Dispatch<React.SetStateAction<RadioForm>>
+  uploadingAudio: boolean
+  setUploadingAudio: React.Dispatch<React.SetStateAction<boolean>>
 }) {
+  const audioInputRef = useRef<HTMLInputElement | null>(null)
+  const [audioUploadError, setAudioUploadError] = useState<string | null>(null)
+  const [audioFileName, setAudioFileName] = useState<string | null>(null)
+
+  const handleAudioFileChange = async (event: ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0]
+    event.target.value = ''
+
+    if (!file) return
+
+    setAudioUploadError(null)
+
+    const validation = validateFile(file, VALIDATION_PRESETS.audio)
+    if (!validation.valid) {
+      setAudioUploadError(validation.error || 'Choose a valid audio file.')
+      return
+    }
+
+    setUploadingAudio(true)
+    setAudioFileName(file.name)
+
+    try {
+      const [duration, uploadResult] = await Promise.all([
+        getAudioDuration(file),
+        uploadFileSimple(file, STORAGE_PATHS.RADIO),
+      ])
+
+      if (!uploadResult.success || !uploadResult.url) {
+        throw new Error(uploadResult.error?.message || 'Audio upload failed.')
+      }
+
+      setForm((prev) => ({
+        ...prev,
+        audioUrl: uploadResult.url!,
+        duration: duration && duration > 0 ? String(duration) : prev.duration,
+      }))
+    } catch (error) {
+      setAudioUploadError(error instanceof Error ? error.message : 'Audio upload failed.')
+      setAudioFileName(null)
+    } finally {
+      setUploadingAudio(false)
+    }
+  }
+
   return (
     <VStack align="stretch" gap={4}>
       <Grid templateColumns={{ base: '1fr', md: '1.3fr 0.7fr' }} gap={4}>
@@ -359,6 +434,67 @@ function RadioFormFields({
           <Input type="number" min={0} value={form.duration} onChange={(e) => setForm((prev) => ({ ...prev, duration: e.target.value }))} bg="gray.800" color="white" borderColor="whiteAlpha.200" required />
         </Box>
       </Grid>
+
+      <Box
+        p={4}
+        borderRadius="xl"
+        bg="blackAlpha.300"
+        border="1px dashed"
+        borderColor="whiteAlpha.200"
+      >
+        <input
+          ref={audioInputRef}
+          type="file"
+          accept="audio/*,.mp3,.wav,.ogg,.m4a,.aac,.flac"
+          onChange={handleAudioFileChange}
+          style={{ display: 'none' }}
+        />
+        <Flex align={{ base: 'stretch', md: 'center' }} gap={4} direction={{ base: 'column', md: 'row' }}>
+          <Flex
+            w="44px"
+            h="44px"
+            align="center"
+            justify="center"
+            bg="brand.500/15"
+            color="brand.300"
+            borderRadius="full"
+            flexShrink={0}
+          >
+            <FileAudio size={20} />
+          </Flex>
+          <Box flex={1} minW={0}>
+            <Text color="white" fontWeight="semibold">
+              Upload audio file
+            </Text>
+            <Text color="whiteAlpha.500" fontSize="sm">
+              MP3, WAV, OGG, M4A, AAC, or FLAC up to 50MB. The uploaded URL will fill the Audio URL field.
+            </Text>
+            {audioFileName && (
+              <Text color="whiteAlpha.600" fontSize="xs" mt={2} truncate>
+                {uploadingAudio ? 'Uploading' : 'Uploaded'}: {audioFileName}
+              </Text>
+            )}
+            {audioUploadError && (
+              <Text color="red.300" fontSize="sm" mt={2}>
+                {audioUploadError}
+              </Text>
+            )}
+          </Box>
+          <Button
+            type="button"
+            {...compactButtonProps}
+            loading={uploadingAudio}
+            bg="whiteAlpha.100"
+            color="white"
+            border="1px solid"
+            borderColor="whiteAlpha.200"
+            _hover={{ bg: 'whiteAlpha.200' }}
+            onClick={() => audioInputRef.current?.click()}
+          >
+            Choose Audio
+          </Button>
+        </Flex>
+      </Box>
 
       <Grid templateColumns={{ base: '1fr', md: '1fr 1fr' }} gap={4}>
         <Box>
@@ -508,6 +644,7 @@ export default function ManageRadio() {
   const [editing, setEditing] = useState<RadioContent | null>(null)
   const [modalMode, setModalMode] = useState<'create' | 'edit' | null>(null)
   const [submitting, setSubmitting] = useState(false)
+  const [uploadingAudio, setUploadingAudio] = useState(false)
 
   const radioContent = useMemo(
     () => [...data].sort((a, b) => toMillis(b.publishedAt) - toMillis(a.publishedAt)),
@@ -532,12 +669,14 @@ export default function ManageRadio() {
   const openCreate = () => {
     setEditing(null)
     setForm({ ...emptyForm, publishedAt: timestampToInput(Timestamp.now()) })
+    setUploadingAudio(false)
     setModalMode('create')
   }
 
   const openEdit = (content: RadioContent) => {
     setEditing(content)
     setForm(toForm(content))
+    setUploadingAudio(false)
     setModalMode('edit')
   }
 
@@ -545,10 +684,13 @@ export default function ManageRadio() {
     setModalMode(null)
     setEditing(null)
     setForm(emptyForm)
+    setUploadingAudio(false)
   }
 
   const handleSubmit = async (event: FormEvent) => {
     event.preventDefault()
+    if (uploadingAudio) return
+
     setSubmitting(true)
 
     const payload = buildPayload(form, editing || undefined)
@@ -696,12 +838,26 @@ export default function ManageRadio() {
       {modalMode && (
         <Modal title={modalMode === 'edit' ? 'Edit Radio Content' : 'Add Radio Content'} onClose={closeModal}>
           <form onSubmit={handleSubmit}>
-            <RadioFormFields form={form} setForm={setForm} />
+            <RadioFormFields
+              form={form}
+              setForm={setForm}
+              uploadingAudio={uploadingAudio}
+              setUploadingAudio={setUploadingAudio}
+            />
             <HStack justify="flex-end" gap={3} mt={6}>
               <Button type="button" {...actionButtonProps} onClick={closeModal} bg="whiteAlpha.100" color="white" _hover={{ bg: 'whiteAlpha.200' }}>
                 Cancel
               </Button>
-              <Button type="submit" {...actionButtonProps} loading={submitting} bg="brand.500" color="white" minW="150px" _hover={{ bg: 'brand.600' }}>
+              <Button
+                type="submit"
+                {...actionButtonProps}
+                loading={submitting || uploadingAudio}
+                disabled={uploadingAudio}
+                bg="brand.500"
+                color="white"
+                minW="150px"
+                _hover={{ bg: 'brand.600' }}
+              >
                 {modalMode === 'edit' ? 'Save Changes' : 'Create Content'}
               </Button>
             </HStack>

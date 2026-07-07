@@ -19,6 +19,7 @@ import {
   Spinner,
   Text,
   VStack,
+  VisuallyHidden,
 } from '@chakra-ui/react'
 import { motion } from 'framer-motion'
 import { Timestamp } from 'firebase/firestore'
@@ -299,7 +300,7 @@ function PlayerPanel({
   onSeek: (time: number) => void
   onVolumeChange: (volume: number) => void
 }) {
-  const progress = duration > 0 ? Math.min(100, (currentTime / duration) * 100) : 0
+  const seekValue = duration > 0 ? Math.min(duration, currentTime) : 0
 
   return (
     <Box
@@ -330,20 +331,31 @@ function PlayerPanel({
             <Text color="whiteAlpha.500" fontSize="xs" fontFamily="mono" minW="42px">
               {formatDuration(currentTime)}
             </Text>
-            <Box
+            <Slider.Root
+              value={[seekValue]}
+              min={0}
+              max={Math.max(duration, 0)}
+              step={1}
               flex={1}
-              h="6px"
-              bg="whiteAlpha.100"
-              borderRadius="full"
-              cursor="pointer"
-              onClick={(event) => {
-                const rect = event.currentTarget.getBoundingClientRect()
-                const nextTime = ((event.clientX - rect.left) / rect.width) * duration
-                onSeek(nextTime)
-              }}
+              disabled={duration <= 0}
+              onValueChange={(details) => onSeek(details.value[0] ?? seekValue)}
             >
-              <Box w={`${progress}%`} h="full" bg="brand.500" borderRadius="full" />
-            </Box>
+              <VisuallyHidden>
+                <Text as="span">Seek audio position</Text>
+              </VisuallyHidden>
+              <Slider.Control h="18px">
+                <Slider.Track h="6px" bg="whiteAlpha.100" borderRadius="full">
+                  <Slider.Range bg="brand.500" borderRadius="full" />
+                </Slider.Track>
+                <Slider.Thumbs
+                  boxSize="14px"
+                  bg="white"
+                  border="2px solid"
+                  borderColor="brand.500"
+                  boxShadow="0 0 0 4px rgba(255, 107, 53, 0.14)"
+                />
+              </Slider.Control>
+            </Slider.Root>
             <Text color="whiteAlpha.500" fontSize="xs" fontFamily="mono" minW="42px" textAlign="right">
               {formatDuration(duration)}
             </Text>
@@ -373,13 +385,17 @@ function PlayerPanel({
               min={0}
               max={1}
               step={0.05}
+              flex={1}
               onValueChange={(details) => onVolumeChange(details.value[0] ?? volume)}
             >
-              <Slider.Control>
-                <Slider.Track bg="whiteAlpha.200">
-                  <Slider.Range bg="brand.500" />
+              <VisuallyHidden>
+                <Text as="span">Volume</Text>
+              </VisuallyHidden>
+              <Slider.Control h="18px">
+                <Slider.Track h="5px" bg="whiteAlpha.200" borderRadius="full">
+                  <Slider.Range bg="brand.500" borderRadius="full" />
                 </Slider.Track>
-                <Slider.Thumbs />
+                <Slider.Thumbs boxSize="12px" bg="white" border="2px solid" borderColor="whiteAlpha.700" />
               </Slider.Control>
             </Slider.Root>
           </HStack>
@@ -535,6 +551,7 @@ export default function Radio() {
 
   const audioRef = useRef<HTMLAudioElement | null>(null)
   const loadedContentIdRef = useRef<string | null>(null)
+  const loadedAudioUrlRef = useRef<string | null>(null)
   const countedPlaysRef = useRef(new Set<string>())
 
   const { data: fetchedContent, loading, error } = useCollection('radioContent', {
@@ -581,42 +598,64 @@ export default function Radio() {
   }, [activeFilter, content, searchQuery])
 
   useEffect(() => {
-    if (!currentContent) return
-
-    if (!audioRef.current) {
-      audioRef.current = new Audio()
-    }
-
     const audio = audioRef.current
+    if (!audio || !currentContent) return
 
-    if (loadedContentIdRef.current !== currentContent.id) {
+    if (
+      loadedContentIdRef.current !== currentContent.id ||
+      loadedAudioUrlRef.current !== currentContent.audioUrl
+    ) {
       audio.pause()
       audio.src = currentContent.audioUrl
+      audio.preload = 'metadata'
       audio.volume = volume
       audio.load()
       loadedContentIdRef.current = currentContent.id
+      loadedAudioUrlRef.current = currentContent.audioUrl
+      setCurrentTime(0)
+      setAudioDuration(currentContent.duration || 0)
     }
+  }, [currentContent, volume])
 
+  useEffect(() => {
+    const audio = audioRef.current
+    if (!audio) return
+
+    const getNativeDuration = () => (
+      Number.isFinite(audio.duration) && audio.duration > 0
+        ? audio.duration
+        : currentContent?.duration || 0
+    )
     const handleTimeUpdate = () => setCurrentTime(audio.currentTime)
-    const handleLoadedMetadata = () => setAudioDuration(audio.duration || currentContent.duration || 0)
+    const handleLoadedMetadata = () => setAudioDuration(getNativeDuration())
+    const handleDurationChange = () => setAudioDuration(getNativeDuration())
+    const handlePlay = () => setIsPlaying(true)
+    const handlePause = () => setIsPlaying(false)
     const handleEnded = () => {
       setIsPlaying(false)
       setCurrentTime(0)
+      audio.currentTime = 0
     }
     const handleError = () => setIsPlaying(false)
 
     audio.addEventListener('timeupdate', handleTimeUpdate)
     audio.addEventListener('loadedmetadata', handleLoadedMetadata)
+    audio.addEventListener('durationchange', handleDurationChange)
+    audio.addEventListener('play', handlePlay)
+    audio.addEventListener('pause', handlePause)
     audio.addEventListener('ended', handleEnded)
     audio.addEventListener('error', handleError)
 
     return () => {
       audio.removeEventListener('timeupdate', handleTimeUpdate)
       audio.removeEventListener('loadedmetadata', handleLoadedMetadata)
+      audio.removeEventListener('durationchange', handleDurationChange)
+      audio.removeEventListener('play', handlePlay)
+      audio.removeEventListener('pause', handlePause)
       audio.removeEventListener('ended', handleEnded)
       audio.removeEventListener('error', handleError)
     }
-  }, [currentContent, volume])
+  }, [currentContent?.duration])
 
   useEffect(() => {
     if (audioRef.current) {
@@ -638,16 +677,41 @@ export default function Radio() {
   }, [isPlaying, currentContent?.id])
 
   useEffect(() => {
+    const audio = audioRef.current
+
+    return () => {
+      audio?.pause()
+    }
+  }, [])
+
+  useEffect(() => {
     if (!isPlaying || !currentContent || countedPlaysRef.current.has(currentContent.id)) return
 
     countedPlaysRef.current.add(currentContent.id)
     void incrementField('radioContent', currentContent.id, 'playCount', 1)
   }, [currentContent, isPlaying])
 
+  const handlePlayPause = useCallback(() => {
+    const audio = audioRef.current
+
+    if (!audio) {
+      setIsPlaying((playing) => !playing)
+      return
+    }
+
+    if (audio.paused || audio.ended) {
+      setIsPlaying(true)
+      return
+    }
+
+    audio.pause()
+    setIsPlaying(false)
+  }, [])
+
   const handlePlayContent = useCallback(
     (nextContent: RadioContent) => {
       if (currentContent?.id === nextContent.id) {
-        setIsPlaying((playing) => !playing)
+        handlePlayPause()
         return
       }
 
@@ -656,16 +720,22 @@ export default function Radio() {
       setAudioDuration(nextContent.duration || 0)
       setIsPlaying(true)
     },
-    [currentContent?.id]
+    [currentContent?.id, handlePlayPause]
   )
 
   const handleSeek = useCallback((time: number) => {
-    const safeTime = Number.isFinite(time) ? Math.max(0, time) : 0
+    const duration = audioDuration || currentContent?.duration || 0
+    const maxTime = duration > 0 ? duration : Number.POSITIVE_INFINITY
+    const safeTime = Number.isFinite(time) ? Math.min(Math.max(0, time), maxTime) : 0
     setCurrentTime(safeTime)
     if (audioRef.current) {
-      audioRef.current.currentTime = safeTime
+      try {
+        audioRef.current.currentTime = safeTime
+      } catch (seekError) {
+        console.error('Radio seek failed:', seekError)
+      }
     }
-  }, [])
+  }, [audioDuration, currentContent?.duration])
 
   const handleLike = useCallback(
     async (item: RadioContent) => {
@@ -709,6 +779,7 @@ export default function Radio() {
 
   return (
     <Box bg="gray.950" minH="100vh">
+      <audio ref={audioRef} preload="metadata" />
       <Header />
 
       <Box as="main" pt={{ base: 28, md: 32 }} pb={{ base: 16, md: 20 }}>
@@ -840,7 +911,7 @@ export default function Radio() {
                 currentTime={currentTime}
                 duration={displayDuration}
                 volume={volume}
-                onPlayPause={() => setIsPlaying((playing) => !playing)}
+                onPlayPause={handlePlayPause}
                 onSeek={handleSeek}
                 onVolumeChange={setVolume}
               />

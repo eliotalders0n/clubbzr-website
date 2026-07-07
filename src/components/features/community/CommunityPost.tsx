@@ -4,6 +4,7 @@ import React, { useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { clsx } from 'clsx';
 import { twMerge } from 'tailwind-merge';
+import { LogIn } from 'lucide-react';
 import type { CommunityPost as CommunityPostType, ReactionType, Comment } from '../../../../lib/schema';
 import { Timestamp } from 'firebase/firestore';
 import { ReactionBar } from './ReactionBar';
@@ -18,6 +19,7 @@ interface CommunityPostProps {
   currentUserId?: string;
   onReaction?: (reactionType: ReactionType) => void;
   onComment?: (content: string) => void | Promise<void>;
+  onAuthRequired?: () => void;
   onCommentsOpen?: () => void | Promise<void>;
   onLoadMoreComments?: () => void | Promise<void>;
   onEdit?: () => void;
@@ -388,6 +390,7 @@ export const CommunityPost: React.FC<CommunityPostProps> = ({
   currentUserId,
   onReaction,
   onComment,
+  onAuthRequired,
   onCommentsOpen,
   onLoadMoreComments,
   onEdit,
@@ -603,9 +606,51 @@ export const CommunityPost: React.FC<CommunityPostProps> = ({
           >
             <div style={{ padding: '18px clamp(16px, 4vw, 24px) 20px' }}>
               {/* Comment input first */}
-              {onComment && (
+              {onComment ? (
                 <div style={{ marginBottom: comments.length > 0 || commentsLoading ? '18px' : 0 }}>
                   <CommentInput onSubmit={onComment} />
+                </div>
+              ) : (
+                <div
+                  style={{
+                    marginBottom: comments.length > 0 || commentsLoading ? '18px' : 0,
+                    padding: '14px 16px',
+                    borderRadius: '16px',
+                    backgroundColor: 'rgba(31, 41, 55, 0.72)',
+                    border: '1px solid rgba(255, 255, 255, 0.08)',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'space-between',
+                    gap: '14px',
+                    flexWrap: 'wrap',
+                  }}
+                >
+                  <span style={{ color: '#D1D5DB', fontSize: '14px', lineHeight: 1.45 }}>
+                    Sign in or create an account to comment on this post.
+                  </span>
+                  <motion.button
+                    type="button"
+                    onClick={onAuthRequired}
+                    style={{
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      gap: '8px',
+                      minHeight: '38px',
+                      padding: '0 16px',
+                      borderRadius: '9999px',
+                      backgroundColor: '#FF6B35',
+                      color: '#fff',
+                      fontSize: '13px',
+                      fontWeight: 600,
+                      border: 'none',
+                      cursor: 'pointer',
+                    }}
+                    whileHover={{ scale: 1.02 }}
+                    whileTap={{ scale: 0.98 }}
+                  >
+                    <LogIn size={15} strokeWidth={2} />
+                    Sign in
+                  </motion.button>
                 </div>
               )}
 

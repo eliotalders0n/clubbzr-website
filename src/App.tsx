@@ -5,6 +5,7 @@ import { AuthProvider, useAuth } from '@/contexts/AuthContext'
 
 // Lazy load pages for code splitting
 const Landing = lazy(() => import('@/pages/Landing'))
+const About = lazy(() => import('@/pages/About'))
 const Quests = lazy(() => import('@/pages/Quests'))
 const QuestDetail = lazy(() => import('@/pages/QuestDetail'))
 const Sessions = lazy(() => import('@/pages/Sessions'))
@@ -82,6 +83,7 @@ function App() {
         <Routes>
           {/* Public Routes */}
           <Route path="/" element={<RootRoute />} />
+          <Route path="/about" element={<About />} />
 
           {/* Quests */}
           <Route path="/quests" element={<Quests />} />

@@ -29,6 +29,7 @@ import {
   Spinner,
 } from '@chakra-ui/react'
 import { motion } from 'framer-motion'
+import { Image as ImageIcon, LockKeyhole, LogIn, UserPlus } from 'lucide-react'
 
 import { Header } from '@/components/layout/Header'
 import { Footer } from '@/components/layout/Footer'
@@ -59,6 +60,8 @@ import type {
 const MotionBox = motion.create(Box)
 const POST_PAGE_SIZE = 8
 const POST_RENDER_BATCH_SIZE = 8
+const GUEST_READABLE_FEED_ITEM_COUNT = 2
+const GUEST_LOCKED_PREVIEW_COUNT = 3
 const COMMENTS_PAGE_SIZE = 5
 
 const communityPrompts = [
@@ -212,6 +215,225 @@ const ConversationStarters = ({
   </Box>
 )
 
+const GuestPostComposer = ({
+  selectedPrompt,
+  onSignIn,
+  onSignUp,
+}: {
+  selectedPrompt?: string | null
+  onSignIn: () => void
+  onSignUp: () => void
+}) => (
+  <Box
+    bg="gray.900"
+    border="1px solid"
+    borderColor="whiteAlpha.100"
+    borderRadius="2xl"
+    overflow="hidden"
+  >
+    <Flex p={{ base: 5, md: 6 }} gap={4} align="flex-start">
+      <Box
+        w="44px"
+        h="44px"
+        borderRadius="full"
+        bg="whiteAlpha.100"
+        color="whiteAlpha.500"
+        display="flex"
+        alignItems="center"
+        justifyContent="center"
+        flexShrink={0}
+      >
+        <LockKeyhole size={20} strokeWidth={1.8} />
+      </Box>
+
+      <Box flex={1} minW={0} pt={1}>
+        <HStack gap={2} mb={2} color="white">
+          <Text fontSize={{ base: 'md', md: 'lg' }} fontWeight="semibold" lineHeight={1.2}>
+            Sign in to post on the wall
+          </Text>
+        </HStack>
+        <Text color="whiteAlpha.600" fontSize={{ base: 'sm', md: 'md' }} lineHeight={1.6} maxW="xl">
+          Community posts are for members. Sign in or create an account to share work, respond to prompts, and join the conversation.
+        </Text>
+
+        {selectedPrompt && (
+          <HStack gap={2} mt={4} align="center" flexWrap="wrap">
+            <Text color="whiteAlpha.400" fontSize="xs" textTransform="uppercase" letterSpacing="0.08em">
+              Prompt
+            </Text>
+            <Text
+              color="whiteAlpha.800"
+              fontSize="sm"
+              bg="whiteAlpha.100"
+              borderRadius="full"
+              px={3}
+              py={1}
+            >
+              {selectedPrompt}
+            </Text>
+          </HStack>
+        )}
+      </Box>
+    </Flex>
+
+    <Flex
+      align="center"
+      justify="space-between"
+      gap={4}
+      p={{ base: 4, md: 5 }}
+      borderTop="1px solid"
+      borderColor="whiteAlpha.100"
+      bg="blackAlpha.200"
+      flexWrap={{ base: 'wrap', sm: 'nowrap' }}
+    >
+      <HStack gap={2} color="whiteAlpha.400" fontSize="sm">
+        <ImageIcon size={20} strokeWidth={1.8} />
+        <Text>Media posting unlocks after sign in</Text>
+      </HStack>
+
+      <HStack gap={3} flexShrink={0}>
+        <Button
+          onClick={onSignIn}
+          size="sm"
+          h="46px"
+          minW="118px"
+          px={5}
+          gap={2}
+          borderRadius="full"
+          bg="whiteAlpha.100"
+          color="white"
+          fontSize="md"
+          whiteSpace="nowrap"
+          _hover={{ bg: 'whiteAlpha.200' }}
+        >
+          <LogIn size={16} />
+          Sign in
+        </Button>
+        <Button
+          onClick={onSignUp}
+          size="sm"
+          h="46px"
+          minW="126px"
+          px={5}
+          gap={2}
+          borderRadius="full"
+          bg="brand.500"
+          color="white"
+          fontSize="md"
+          whiteSpace="nowrap"
+          _hover={{ bg: 'brand.600' }}
+        >
+          <UserPlus size={16} />
+          Sign up
+        </Button>
+      </HStack>
+    </Flex>
+  </Box>
+)
+
+const GuestFeedGate = ({
+  onSignIn,
+  onSignUp,
+}: {
+  onSignIn: () => void
+  onSignUp: () => void
+}) => (
+  <Box position="relative" pt={2}>
+    <VStack
+      align="stretch"
+      gap={4}
+      filter="blur(10px)"
+      opacity={0.38}
+      pointerEvents="none"
+      userSelect="none"
+      aria-hidden="true"
+    >
+      {Array.from({ length: GUEST_LOCKED_PREVIEW_COUNT }).map((_, index) => (
+        <CommunityPostSkeleton key={index} />
+      ))}
+    </VStack>
+
+    <Box
+      position="absolute"
+      insetX={0}
+      top={{ base: 8, md: 12 }}
+      px={{ base: 3, md: 8 }}
+      pointerEvents="none"
+    >
+      <Box
+        maxW="520px"
+        mx="auto"
+        p={{ base: 5, md: 6 }}
+        borderRadius="2xl"
+        bg="rgba(17, 17, 17, 0.92)"
+        border="1px solid"
+        borderColor="whiteAlpha.200"
+        boxShadow="0 24px 80px rgba(0, 0, 0, 0.55)"
+        backdropFilter="blur(16px)"
+        pointerEvents="auto"
+        textAlign="center"
+      >
+        <Box
+          w={12}
+          h={12}
+          mx="auto"
+          mb={4}
+          borderRadius="full"
+          bg="brand.500/15"
+          color="brand.300"
+          display="flex"
+          alignItems="center"
+          justifyContent="center"
+        >
+          <LockKeyhole size={22} strokeWidth={1.9} />
+        </Box>
+        <Text color="white" fontSize={{ base: 'lg', md: 'xl' }} fontWeight="semibold" mb={2}>
+          Sign in to keep reading
+        </Text>
+        <Text color="whiteAlpha.600" fontSize="sm" lineHeight={1.6} mb={5}>
+          Guests can preview the first two posts. Join Club BZR to see the full wall, react, comment, and post.
+        </Text>
+        <HStack gap={3} justify="center" flexWrap="wrap">
+          <Button
+            onClick={onSignIn}
+            size="sm"
+            h="46px"
+            minW="118px"
+            px={5}
+            gap={2}
+            borderRadius="full"
+            bg="whiteAlpha.100"
+            color="white"
+            fontSize="md"
+            whiteSpace="nowrap"
+            _hover={{ bg: 'whiteAlpha.200' }}
+          >
+            <LogIn size={16} />
+            Sign in
+          </Button>
+          <Button
+            onClick={onSignUp}
+            size="sm"
+            h="46px"
+            minW="126px"
+            px={5}
+            gap={2}
+            borderRadius="full"
+            bg="brand.500"
+            color="white"
+            fontSize="md"
+            whiteSpace="nowrap"
+            _hover={{ bg: 'brand.600' }}
+          >
+            <UserPlus size={16} />
+            Sign up
+          </Button>
+        </HStack>
+      </Box>
+    </Box>
+  </Box>
+)
+
 export default function CommunityWall() {
   const location = useLocation()
   const navigate = useNavigate()
@@ -233,6 +455,15 @@ export default function CommunityWall() {
   const currentUserId = firebaseUser?.uid || null
   const currentUserName = user?.displayName || firebaseUser?.displayName || 'Anonymous'
   const currentUserPhoto = user?.photoURL || firebaseUser?.photoURL || null
+  const isGuest = !currentUserId
+
+  const handleSignIn = useCallback(() => {
+    navigate('/auth/login')
+  }, [navigate])
+
+  const handleSignUp = useCallback(() => {
+    navigate('/auth/signup')
+  }, [navigate])
 
   // Check for prompt passed from navigation (e.g., from Quests page)
   useEffect(() => {
@@ -393,8 +624,13 @@ export default function CommunityWall() {
     return feedItems.slice(0, renderedFeedCount)
   }, [feedItems, renderedFeedCount])
 
+  const displayFeedItems = useMemo(() => {
+    return isGuest ? feedItems.slice(0, GUEST_READABLE_FEED_ITEM_COUNT) : visibleFeedItems
+  }, [feedItems, isGuest, visibleFeedItems])
+
   const hasHiddenLoadedFeedItems = renderedFeedCount < feedItems.length
-  const canLoadMorePosts = hasHiddenLoadedFeedItems || hasMore
+  const canLoadMorePosts = !isGuest && (hasHiddenLoadedFeedItems || hasMore)
+  const hasGuestLockedFeed = isGuest && (feedItems.length > GUEST_READABLE_FEED_ITEM_COUNT || hasMore)
 
   const handleLoadMorePosts = useCallback(() => {
     if (postsLoading || postLoadInFlightRef.current) return
@@ -501,6 +737,11 @@ export default function CommunityWall() {
 
   // Handle creating a new post
   const handleCreatePost = useCallback(async (postData: CreateDocument<CommunityPostType>) => {
+    if (!currentUserId) {
+      handleSignIn()
+      return
+    }
+
     console.log('Creating post with data:', postData)
     const result = await createDocument('communityPosts', postData)
     console.log('Create result:', result)
@@ -512,7 +753,7 @@ export default function CommunityWall() {
     } else {
       console.error('Failed to create post:', result.error)
     }
-  }, [refetchPosts])
+  }, [currentUserId, handleSignIn, refetchPosts])
 
   const handleSubmissionVote = useCallback(async (submission: QuestSubmission, vote: SubmissionVoteValue) => {
     if (!currentUserId) {
@@ -733,14 +974,22 @@ export default function CommunityWall() {
                 transition={{ duration: 0.6, delay: 0.2 }}
                 mb={6}
               >
-                <PostForm
-                  userId={currentUserId || ''}
-                  userName={currentUserName}
-                  userPhotoURL={currentUserPhoto}
-                  onSubmit={handleCreatePost}
-                  initialPrompt={selectedPrompt || undefined}
-                  onPromptClear={() => setSelectedPrompt(null)}
-                />
+                {currentUserId ? (
+                  <PostForm
+                    userId={currentUserId}
+                    userName={currentUserName}
+                    userPhotoURL={currentUserPhoto}
+                    onSubmit={handleCreatePost}
+                    initialPrompt={selectedPrompt || undefined}
+                    onPromptClear={() => setSelectedPrompt(null)}
+                  />
+                ) : (
+                  <GuestPostComposer
+                    selectedPrompt={selectedPrompt}
+                    onSignIn={handleSignIn}
+                    onSignUp={handleSignUp}
+                  />
+                )}
               </MotionBox>
 
               {/* Quick Prompts - Mobile only, below composer */}
@@ -856,7 +1105,7 @@ export default function CommunityWall() {
                     </Text>
                   </Box>
                 ) : (
-                  visibleFeedItems.map((item, i) => {
+                  displayFeedItems.map((item, i) => {
                     if (item.type !== 'post') {
                       return (
                         <MotionBox
@@ -906,7 +1155,8 @@ export default function CommunityWall() {
                           commentsHasMore={commentPage?.hasMore || false}
                           currentUserId={currentUserId || undefined}
                           onReaction={(reactionType) => handleReaction(post.id, reactionType, displayPost.reactions)}
-                          onComment={(content) => handleComment(post.id, content)}
+                          onComment={currentUserId ? (content) => handleComment(post.id, content) : undefined}
+                          onAuthRequired={handleSignIn}
                           onCommentsOpen={() => handleCommentsOpen(post.id)}
                           onLoadMoreComments={() => loadPostComments(post.id)}
                           onEdit={() => handleEditPost(post.id, post.content)}
@@ -928,6 +1178,10 @@ export default function CommunityWall() {
                       </MotionBox>
                     )
                   })
+                )}
+
+                {hasGuestLockedFeed && (
+                  <GuestFeedGate onSignIn={handleSignIn} onSignUp={handleSignUp} />
                 )}
 
                 {/* Load more button */}
