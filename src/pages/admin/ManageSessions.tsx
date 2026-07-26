@@ -28,6 +28,7 @@ import { getRegistrationCounts, getSessionRegistrationId, normalizeSessionRegist
 import { STORAGE_PATHS, uploadFileSimple, validateFile } from '../../../lib/storage'
 import type {
   CreateDocument,
+  GalleryItem,
   Session,
   SessionAccessMode,
   SessionApprovalMode,
@@ -66,6 +67,7 @@ interface SessionForm {
   paymentInstructions: string
   facilitator: string
   coverImage: string
+  gallery: GalleryItem[]
   tags: string
 }
 
@@ -97,6 +99,7 @@ const emptyForm: SessionForm = {
   paymentInstructions: '',
   facilitator: '',
   coverImage: '',
+  gallery: [],
   tags: '',
 }
 
@@ -364,6 +367,7 @@ const toForm = (session: Session): SessionForm => ({
   paymentInstructions: session.paymentInstructions || '',
   facilitator: session.facilitator?.name || '',
   coverImage: session.coverImage || '',
+  gallery: session.gallery || [],
   tags: (session.tags || []).join(', '),
 })
 
@@ -413,8 +417,8 @@ const buildPayload = (
       userId: existing?.facilitator?.userId || currentUserId || 'admin',
       name: form.facilitator.trim() || 'Club BZR',
     },
-    ...(coverImage ? { coverImage } : {}),
-    gallery: existing?.gallery || [],
+    coverImage,
+    gallery: form.gallery,
     reflections: existing?.reflections || [],
     status: form.status,
     featured: existing?.featured || false,
@@ -885,7 +889,23 @@ export default function ManageSessions() {
                 <Info label="Waitlist" value={String(getSessionWaitlistCount(detailSession, registrationsBySessionId))} />
                 <Info label="Access" value={(detailSession.accessMode || 'open').replace('_', ' ')} />
                 <Info label="Payment" value={normalizeSessionRegistrationConfig(detailSession).paymentMode === 'paid' ? `${detailSession.currency || 'ZMW'} ${Number(detailSession.price || 0).toFixed(2)}` : 'Free'} />
+                <Info label="Gallery" value={`${detailSession.gallery?.length || 0} images`} />
               </SimpleGrid>
+              {detailSession.gallery && detailSession.gallery.length > 0 && (
+                <SimpleGrid columns={{ base: 2, sm: 3 }} gap={3}>
+                  {detailSession.gallery.slice(0, 6).map((item) => (
+                    <Image
+                      key={item.id}
+                      src={item.thumbnailUrl || item.url}
+                      alt={item.caption || 'Session gallery image'}
+                      borderRadius="xl"
+                      h="108px"
+                      w="full"
+                      objectFit="cover"
+                    />
+                  ))}
+                </SimpleGrid>
+              )}
               <RegistrationManager
                 session={detailSession}
                 users={userDocs}
@@ -1388,10 +1408,15 @@ function SignupSection({
 function SessionFormFields({ form, setForm }: { form: SessionForm; setForm: React.Dispatch<React.SetStateAction<SessionForm>> }) {
   const { firebaseUser } = useAuth()
   const fileInputRef = useRef<HTMLInputElement>(null)
+  const galleryInputRef = useRef<HTMLInputElement>(null)
   const [isDraggingCover, setIsDraggingCover] = useState(false)
+  const [isDraggingGallery, setIsDraggingGallery] = useState(false)
   const [uploadingCover, setUploadingCover] = useState(false)
+  const [uploadingGallery, setUploadingGallery] = useState(false)
   const [coverUploadError, setCoverUploadError] = useState<string | null>(null)
+  const [galleryUploadError, setGalleryUploadError] = useState<string | null>(null)
   const coverImage = form.coverImage.trim()
+  const galleryItems = form.gallery || []
 
   const handleCoverFile = async (file: File | null | undefined) => {
     if (!file || uploadingCover) return
@@ -1435,6 +1460,69 @@ function SessionFormFields({ form, setForm }: { form: SessionForm; setForm: Reac
     event.preventDefault()
     setIsDraggingCover(false)
     void handleCoverFile(event.dataTransfer.files?.[0])
+  }
+
+  const handleGalleryFiles = async (fileList: FileList | File[] | null | undefined) => {
+    const files = Array.from(fileList || [])
+    if (files.length === 0 || uploadingGallery) return
+
+    if (!firebaseUser?.uid) {
+      setGalleryUploadError('Sign in again before uploading gallery images.')
+      return
+    }
+
+    const invalidFile = files.find((file) => {
+      const validation = validateFile(file, {
+        maxSizeMB: 10,
+        allowedTypes: ['image/jpeg', 'image/png', 'image/webp', 'image/gif'],
+      })
+      return !validation.valid
+    })
+
+    if (invalidFile) {
+      setGalleryUploadError(`${invalidFile.name} must be a JPG, PNG, WebP, or GIF under 10MB.`)
+      return
+    }
+
+    setGalleryUploadError(null)
+    setUploadingGallery(true)
+
+    const uploadedItems: GalleryItem[] = []
+
+    for (const [index, file] of files.entries()) {
+      const result = await uploadFileSimple(file, `${STORAGE_PATHS.SESSIONS}/gallery/${firebaseUser.uid}`)
+
+      if (!result.success || !result.url) {
+        setGalleryUploadError(result.error?.message || `Could not upload ${file.name}.`)
+        setUploadingGallery(false)
+        return
+      }
+
+      uploadedItems.push({
+        id: `${Date.now()}-${index}-${file.name.replace(/[^a-zA-Z0-9]/g, '').slice(0, 24)}`,
+        url: result.url,
+        thumbnailUrl: result.url,
+        uploadedBy: firebaseUser.uid,
+        uploadedAt: Timestamp.now(),
+      })
+    }
+
+    setForm((prev) => ({
+      ...prev,
+      gallery: [...(prev.gallery || []), ...uploadedItems],
+    }))
+    setUploadingGallery(false)
+  }
+
+  const handleGalleryInput = async (event: ChangeEvent<HTMLInputElement>) => {
+    await handleGalleryFiles(event.target.files)
+    event.target.value = ''
+  }
+
+  const handleGalleryDrop = (event: React.DragEvent<HTMLDivElement>) => {
+    event.preventDefault()
+    setIsDraggingGallery(false)
+    void handleGalleryFiles(event.dataTransfer.files)
   }
 
   return (
@@ -1596,6 +1684,83 @@ function SessionFormFields({ form, setForm }: { form: SessionForm; setForm: Reac
               borderColor="whiteAlpha.200"
             />
           </Box>
+        </VStack>
+      </Field>
+      <Field label="Gallery Images">
+        <VStack align="stretch" gap={3}>
+          {galleryItems.length > 0 && (
+            <SimpleGrid columns={{ base: 2, md: 3 }} gap={3}>
+              {galleryItems.map((item) => (
+                <Box key={item.id} position="relative" overflow="hidden" borderRadius="xl" border="1px solid" borderColor="whiteAlpha.150" bg="whiteAlpha.50">
+                  <Image src={item.thumbnailUrl || item.url} alt={item.caption || 'Session gallery image'} w="full" h="118px" objectFit="cover" />
+                  <Button
+                    type="button"
+                    position="absolute"
+                    top={2}
+                    right={2}
+                    size="xs"
+                    h="30px"
+                    px={3}
+                    bg="blackAlpha.700"
+                    color="white"
+                    borderRadius="full"
+                    _hover={{ bg: 'blackAlpha.800' }}
+                    onClick={() => setForm((prev) => ({
+                      ...prev,
+                      gallery: (prev.gallery || []).filter((galleryItem) => galleryItem.id !== item.id),
+                    }))}
+                  >
+                    <X size={14} />
+                  </Button>
+                </Box>
+              ))}
+            </SimpleGrid>
+          )}
+
+          <Box
+            onDragOver={(event) => {
+              event.preventDefault()
+              setIsDraggingGallery(true)
+            }}
+            onDragLeave={() => setIsDraggingGallery(false)}
+            onDrop={handleGalleryDrop}
+            p={4}
+            bg={isDraggingGallery ? 'brand.500/10' : 'whiteAlpha.50'}
+            border="1px dashed"
+            borderColor={isDraggingGallery ? 'brand.500' : 'whiteAlpha.200'}
+            borderRadius="xl"
+            transition="all 0.2s"
+          >
+            <Flex align={{ base: 'stretch', sm: 'center' }} direction={{ base: 'column', sm: 'row' }} gap={3}>
+              <Flex w="44px" h="44px" align="center" justify="center" borderRadius="full" bg="gray.800" color="brand.300" flexShrink={0}>
+                <ImagePlus size={20} />
+              </Flex>
+              <Box flex={1}>
+                <Text color="white" fontWeight="semibold">Upload gallery images</Text>
+                <Text color="whiteAlpha.500" fontSize="sm" mt={1}>Drop images here or choose multiple JPG, PNG, WebP, or GIF files under 10MB each.</Text>
+              </Box>
+              <Input ref={galleryInputRef} type="file" accept="image/jpeg,image/png,image/webp,image/gif" multiple display="none" onChange={handleGalleryInput} />
+              <Button
+                type="button"
+                {...actionButtonProps}
+                h="40px"
+                px={4}
+                loading={uploadingGallery}
+                bg="whiteAlpha.100"
+                color="white"
+                border="1px solid"
+                borderColor="whiteAlpha.200"
+                _hover={{ bg: 'whiteAlpha.200' }}
+                onClick={() => galleryInputRef.current?.click()}
+              >
+                Choose Images
+              </Button>
+            </Flex>
+          </Box>
+
+          {galleryUploadError && (
+            <Text color="red.300" fontSize="sm">{galleryUploadError}</Text>
+          )}
         </VStack>
       </Field>
       <Field label="Tags"><Input value={form.tags} onChange={(e) => setForm((prev) => ({ ...prev, tags: e.target.value }))} bg="gray.800" color="white" borderColor="whiteAlpha.200" placeholder="workshop, drawing" /></Field>

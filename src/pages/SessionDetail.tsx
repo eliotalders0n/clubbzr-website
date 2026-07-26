@@ -803,8 +803,8 @@ export default function SessionDetail() {
           </Container>
         </Box>
 
-        {/* Gallery Section - Only show for past events with gallery items */}
-        {sessionData?.isPast && session.gallery && session.gallery.length > 0 && (
+        {/* Gallery Section */}
+        {session.gallery && session.gallery.length > 0 && (
           <Box py={{ base: 12, md: 20 }} bg="gray.900">
             <Container maxW="1440px" px={{ base: 6, md: 12, lg: 16, xl: 20 }}>
               <MotionBox
