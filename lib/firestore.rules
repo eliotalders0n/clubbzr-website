@@ -234,6 +234,54 @@ service cloud.firestore {
     }
 
     // ==========================================================================
+    // SESSION REGISTRATIONS COLLECTION
+    // ==========================================================================
+
+    match /sessionRegistrations/{registrationId} {
+      function registrationSession() {
+        return get(/databases/$(database)/documents/sessions/$(request.resource.data.sessionId)).data;
+      }
+
+      function canCreateSelfRegistration() {
+        return isAuthenticated()
+          && request.resource.data.userId == userId()
+          && hasRequiredFields(['sessionId', 'userId', 'displayName', 'email', 'status', 'paymentStatus', 'requestedAt', 'createdAt'])
+          && registrationSession().status == 'published'
+          && (!('accessMode' in registrationSession()) || registrationSession().accessMode == 'open')
+          && request.resource.data.status in ['requested', 'pending_payment', 'waitlisted', 'confirmed']
+          && request.resource.data.paymentStatus in ['not_required', 'unpaid']
+          && (
+            request.resource.data.status != 'confirmed'
+            || (
+              registrationSession().isFree == true
+              && (!('approvalMode' in registrationSession()) || registrationSession().approvalMode == 'auto')
+              && (!('accessMode' in registrationSession()) || registrationSession().accessMode == 'open')
+            )
+          );
+      }
+
+      function canCancelSelfRegistration() {
+        return isOwner(resource.data.userId)
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'cancelledAt', 'cancelledBy', 'updatedAt'])
+          && request.resource.data.status == 'cancelled'
+          && request.resource.data.cancelledBy == userId();
+      }
+
+      function canResubmitSelfRegistration() {
+        return isOwner(resource.data.userId)
+          && resource.data.status in ['cancelled', 'declined']
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'paymentStatus', 'requestedAt', 'updatedAt'])
+          && request.resource.data.status in ['requested', 'pending_payment', 'waitlisted']
+          && request.resource.data.paymentStatus in ['not_required', 'unpaid'];
+      }
+
+      allow read: if isAdmin() || isOwner(resource.data.userId);
+      allow create: if isAdmin() || canCreateSelfRegistration();
+      allow update: if isAdmin() || canCancelSelfRegistration() || canResubmitSelfRegistration();
+      allow delete: if isAdmin();
+    }
+
+    // ==========================================================================
     // ARTWORKS COLLECTION
     // ==========================================================================
 
@@ -496,6 +544,16 @@ service cloud.firestore {
 
       // Users can delete their own notifications
       allow delete: if isOwner(resource.data.userId);
+    }
+
+    // ==========================================================================
+    // MAIL QUEUE COLLECTION
+    // ==========================================================================
+
+    match /mail/{mailId} {
+      // Cloud Functions writes mail jobs with Admin SDK. Clients should not read
+      // queued email payloads or write arbitrary outbound mail.
+      allow read, write: if false;
     }
 
     // ==========================================================================

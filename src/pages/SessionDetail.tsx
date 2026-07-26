@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useMemo } from 'react'
+import { useState, useMemo, type ReactNode } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import {
   Box,
@@ -22,10 +22,17 @@ import { Timestamp, arrayUnion, arrayRemove } from 'firebase/firestore'
 
 import { Header } from '@/components/layout/Header'
 import { Footer } from '@/components/layout/Footer'
-import { SessionGallery } from '@/components/features/sessions'
+import { SessionGallery, SessionPaymentModal } from '@/components/features/sessions'
 import { useAuth } from '@/contexts/AuthContext'
 import { useDocument, useMutation } from '@/hooks/useFirestore'
-import type { SessionReflection, SessionType } from '../../lib/schema'
+import {
+  createSessionRegistration,
+  getInitialRegistrationState,
+  getSessionRegistrationId,
+  normalizeSessionRegistrationConfig,
+  updateSessionRegistration,
+} from '../../lib/sessionRegistrations'
+import type { SessionReflection, SessionRegistrationStatus, SessionType } from '../../lib/schema'
 
 // Fallback image
 import eventImgFallback from '@/assets/images/events/IMG_9074.jpeg'
@@ -51,6 +58,51 @@ const typeColors: Record<SessionType, { bg: string; text: string }> = {
   online: { bg: 'teal.500', text: 'white' },
 }
 
+function PendingRegistrationState({
+  title,
+  description,
+  children,
+  busy,
+  onCancel,
+}: {
+  title: string
+  description: string
+  children?: ReactNode
+  busy: boolean
+  onCancel: () => void
+}) {
+  return (
+    <VStack gap={3} w="full" align="stretch">
+      <Box
+        p={4}
+        bg="whiteAlpha.50"
+        border="1px solid"
+        borderColor="whiteAlpha.100"
+        borderRadius="xl"
+        textAlign="center"
+      >
+        <Text color="white" fontWeight="semibold">{title}</Text>
+        <Text color="whiteAlpha.500" fontSize="sm" mt={1}>{description}</Text>
+      </Box>
+      {children}
+      <Button
+        w="full"
+        bg="transparent"
+        color="red.400"
+        border="1px solid"
+        borderColor="red.400"
+        size="lg"
+        borderRadius="xl"
+        _hover={{ bg: 'red.500', color: 'white' }}
+        onClick={onCancel}
+        disabled={busy}
+      >
+        {busy ? <Spinner size="sm" /> : 'Cancel Signup'}
+      </Button>
+    </VStack>
+  )
+}
+
 export default function SessionDetail() {
   const { id } = useParams<{ id: string }>()
   const navigate = useNavigate()
@@ -60,12 +112,23 @@ export default function SessionDetail() {
 
   // Fetch session from Firebase
   const { data: session, loading, error, refetch } = useDocument('sessions', id)
+  const {
+    data: currentRegistration,
+    loading: registrationLoading,
+    refetch: refetchRegistration,
+  } = useDocument(
+    'sessionRegistrations',
+    id && userId ? getSessionRegistrationId(id, userId) : null,
+    { skip: !id || !userId }
+  )
   const { update: updateSession, loading: updating } = useMutation('sessions')
 
   // Local state for reflections
   const [newReflection, setNewReflection] = useState('')
   const [submittingReflection, setSubmittingReflection] = useState(false)
+  const [submittingRegistration, setSubmittingRegistration] = useState(false)
   const [registrationError, setRegistrationError] = useState<string | null>(null)
+  const [paymentModalOpen, setPaymentModalOpen] = useState(false)
 
   // Computed values
   const sessionData = useMemo(() => {
@@ -75,16 +138,27 @@ export default function SessionDetail() {
     const sessionEndDate = session.endDate ? toDate(session.endDate as Timestamp) : null
     const attendeeCount = session.attendees?.length || 0
     const waitlistCount = session.waitlist?.length || 0
-    const spotsLeft = session.capacity - attendeeCount
+    const spotsLeft = Math.max(session.capacity - attendeeCount, 0)
     const progressPercent = session.capacity > 0 ? (attendeeCount / session.capacity) * 100 : 0
     const isPast = sessionDate < new Date()
-    const isRegistered = Boolean(userId && session.attendees?.includes(userId))
-    const isOnWaitlist = Boolean(userId && session.waitlist?.includes(userId))
+    const legacyStatus: SessionRegistrationStatus | null =
+      userId && session.attendees?.includes(userId)
+        ? 'confirmed'
+        : userId && session.waitlist?.includes(userId)
+          ? 'waitlisted'
+          : null
+    const effectiveStatus = currentRegistration?.status || legacyStatus
+    const isRegistered = effectiveStatus === 'confirmed'
+    const isOnWaitlist = effectiveStatus === 'waitlisted'
     const isFull = spotsLeft <= 0
+    const config = normalizeSessionRegistrationConfig(session)
 
     return {
       sessionDate,
       sessionEndDate,
+      currentRegistration,
+      effectiveStatus,
+      config,
       attendeeCount,
       waitlistCount,
       spotsLeft,
@@ -94,7 +168,7 @@ export default function SessionDetail() {
       isOnWaitlist,
       isFull,
     }
-  }, [session, userId])
+  }, [session, currentRegistration, userId])
 
   // Handle registration
   const handleRegister = async () => {
@@ -105,27 +179,45 @@ export default function SessionDetail() {
     if (!session || !id) return
 
     setRegistrationError(null)
+    setSubmittingRegistration(true)
 
-    if (sessionData?.isFull) {
-      // Add to waitlist
-      const result = await updateSession(id, {
-        waitlist: arrayUnion(userId) as unknown as string[],
+    if (sessionData?.config.accessMode === 'invite_only' && !sessionData.currentRegistration) {
+      setRegistrationError('This session is invite-only. Contact Club BZR if you need access.')
+      setSubmittingRegistration(false)
+      return
+    }
+
+    const initialState = getInitialRegistrationState(session, sessionData?.attendeeCount || 0)
+    const result = sessionData?.currentRegistration
+      ? await updateSessionRegistration(sessionData.currentRegistration.id, {
+        status: initialState.status,
+        paymentStatus: initialState.paymentStatus,
+        requestedAt: Timestamp.now(),
       })
-      if (!result.success) {
-        setRegistrationError(result.error?.message || 'Unable to join the waitlist.')
-        return
-      }
-    } else {
-      // Add to attendees
-      const result = await updateSession(id, {
+      : await createSessionRegistration(session, user, sessionData?.attendeeCount || 0)
+
+    if (!result.success) {
+      setRegistrationError(result.error?.message || 'Unable to register for this session.')
+      setSubmittingRegistration(false)
+      return
+    }
+
+    if (initialState.status === 'confirmed') {
+      await updateSession(id, {
         attendees: arrayUnion(userId) as unknown as string[],
       })
-      if (!result.success) {
-        setRegistrationError(result.error?.message || 'Unable to register for this session.')
-        return
-      }
+      await refetch()
     }
-    await refetch()
+
+    if (initialState.status === 'waitlisted') {
+      await updateSession(id, {
+        waitlist: arrayUnion(userId) as unknown as string[],
+      })
+      await refetch()
+    }
+
+    await refetchRegistration()
+    setSubmittingRegistration(false)
   }
 
   // Handle unregistration
@@ -137,6 +229,38 @@ export default function SessionDetail() {
     if (!session || !id) return
 
     setRegistrationError(null)
+    setSubmittingRegistration(true)
+
+    if (sessionData?.currentRegistration) {
+      const previousStatus = sessionData.currentRegistration.status
+      const result = await updateSessionRegistration(sessionData.currentRegistration.id, {
+        status: 'cancelled',
+        cancelledAt: Timestamp.now(),
+        cancelledBy: userId,
+      })
+      if (!result.success) {
+        setRegistrationError(result.error?.message || 'Unable to cancel your registration.')
+        setSubmittingRegistration(false)
+        return
+      }
+
+      if (previousStatus === 'confirmed') {
+        await updateSession(id, {
+          attendees: arrayRemove(userId) as unknown as string[],
+        })
+      }
+
+      if (previousStatus === 'waitlisted') {
+        await updateSession(id, {
+          waitlist: arrayRemove(userId) as unknown as string[],
+        })
+      }
+
+      await refetch()
+      await refetchRegistration()
+      setSubmittingRegistration(false)
+      return
+    }
 
     if (sessionData?.isOnWaitlist) {
       const result = await updateSession(id, {
@@ -144,6 +268,7 @@ export default function SessionDetail() {
       })
       if (!result.success) {
         setRegistrationError(result.error?.message || 'Unable to leave the waitlist.')
+        setSubmittingRegistration(false)
         return
       }
     } else {
@@ -152,10 +277,12 @@ export default function SessionDetail() {
       })
       if (!result.success) {
         setRegistrationError(result.error?.message || 'Unable to cancel your registration.')
+        setSubmittingRegistration(false)
         return
       }
     }
     await refetch()
+    setSubmittingRegistration(false)
   }
 
   // Handle reflection submission
@@ -227,6 +354,13 @@ export default function SessionDetail() {
 
   const typeStyle = typeColors[session.type] || { bg: 'gray.500', text: 'white' }
   const sessionAbout = session.about?.trim()
+  const registrationStatus = sessionData?.effectiveStatus
+  const registrationBusy = updating || submittingRegistration || registrationLoading
+  const isInviteOnly = sessionData?.config.accessMode === 'invite_only'
+  const isPaidSession = sessionData?.config.paymentMode === 'paid'
+  const isLencoPayment = isPaidSession && sessionData?.config.paymentProvider === 'lenco'
+  const currency = session.currency || 'ZMW'
+  const paymentAmount = Number(session.price || 0)
 
   return (
     <Box bg="gray.950" minH="100vh">
@@ -523,10 +657,24 @@ export default function SessionDetail() {
                         >
                           Sign in to Register
                         </Button>
+                      ) : isInviteOnly && !sessionData?.currentRegistration ? (
+                        <Box
+                          p={4}
+                          bg="whiteAlpha.50"
+                          border="1px solid"
+                          borderColor="whiteAlpha.100"
+                          borderRadius="xl"
+                          textAlign="center"
+                        >
+                          <Text color="white" fontWeight="semibold">Invite-only session</Text>
+                          <Text color="whiteAlpha.500" fontSize="sm" mt={1}>
+                            Club BZR will add invited guests directly.
+                          </Text>
+                        </Box>
                       ) : sessionData?.isRegistered ? (
                         <VStack gap={2} w="full">
                           <Text color="green.400" fontWeight="medium">
-                            You're registered!
+                            You're confirmed!
                           </Text>
                           <Button
                             w="full"
@@ -538,11 +686,51 @@ export default function SessionDetail() {
                             borderRadius="xl"
                             _hover={{ bg: 'red.500', color: 'white' }}
                             onClick={handleUnregister}
-                            disabled={updating}
+                            disabled={registrationBusy}
                           >
-                            {updating ? <Spinner size="sm" /> : 'Cancel Registration'}
+                            {registrationBusy ? <Spinner size="sm" /> : 'Cancel Registration'}
                           </Button>
                         </VStack>
+                      ) : registrationStatus === 'requested' ? (
+                        <PendingRegistrationState
+                          title="Request received"
+                          description="An admin will review and confirm your spot."
+                          onCancel={handleUnregister}
+                          busy={registrationBusy}
+                        />
+                      ) : registrationStatus === 'pending_payment' ? (
+                        <PendingRegistrationState
+                          title="Payment pending"
+                          description={
+                            isLencoPayment
+                              ? 'Your signup is saved. Pay with mobile money, then an admin will confirm your spot.'
+                              : 'Your signup is saved. Complete payment with Club BZR, then an admin will confirm your spot.'
+                          }
+                          onCancel={handleUnregister}
+                          busy={registrationBusy}
+                        >
+                          {isLencoPayment && sessionData.currentRegistration && paymentAmount > 0 && (
+                            <Button
+                              w="full"
+                              bg="brand.500"
+                              color="white"
+                              size="lg"
+                              borderRadius="xl"
+                              _hover={{ bg: 'brand.600' }}
+                              onClick={() => setPaymentModalOpen(true)}
+                              disabled={registrationBusy}
+                            >
+                              Pay with Mobile Money
+                            </Button>
+                          )}
+                        </PendingRegistrationState>
+                      ) : registrationStatus === 'paid_pending_confirmation' ? (
+                        <PendingRegistrationState
+                          title="Payment noted"
+                          description="An admin still needs to confirm your final spot."
+                          onCancel={handleUnregister}
+                          busy={registrationBusy}
+                        />
                       ) : sessionData?.isOnWaitlist ? (
                         <VStack gap={2} w="full">
                           <Text color="orange.400" fontWeight="medium">
@@ -558,9 +746,9 @@ export default function SessionDetail() {
                             borderRadius="xl"
                             _hover={{ bg: 'red.500', color: 'white' }}
                             onClick={handleUnregister}
-                            disabled={updating}
+                            disabled={registrationBusy}
                           >
-                            {updating ? <Spinner size="sm" /> : 'Leave Waitlist'}
+                            {registrationBusy ? <Spinner size="sm" /> : 'Leave Waitlist'}
                           </Button>
                         </VStack>
                       ) : (
@@ -572,12 +760,14 @@ export default function SessionDetail() {
                           borderRadius="xl"
                           _hover={{ bg: sessionData?.isFull ? 'orange.600' : 'brand.600' }}
                           onClick={handleRegister}
-                          disabled={updating}
+                          disabled={registrationBusy}
                         >
-                          {updating ? (
+                          {registrationBusy ? (
                             <Spinner size="sm" />
                           ) : sessionData?.isFull ? (
                             'Join Waitlist'
+                          ) : isPaidSession ? (
+                            'Request Spot'
                           ) : (
                             'Register Now'
                           )}
@@ -592,11 +782,19 @@ export default function SessionDetail() {
                   )}
 
                   {/* Price indicator */}
-                  {!session.isFree && session.price && (
-                    <Box mt={4} textAlign="center">
-                      <Text color="whiteAlpha.500" fontSize="sm">
-                        Price: {session.currency || '$'}{session.price}
+                  {isPaidSession && session.price && (
+                    <Box mt={4} p={4} bg="whiteAlpha.50" border="1px solid" borderColor="whiteAlpha.100" borderRadius="xl">
+                      <Text color="white" fontSize="sm" fontWeight="semibold">
+                        {currency} {session.price.toFixed(2)}
                       </Text>
+                      <Text color="whiteAlpha.500" fontSize="sm" mt={1}>
+                        Payment is confirmed by Club BZR before your spot is reserved.
+                      </Text>
+                      {session.paymentInstructions && (
+                        <Text color="whiteAlpha.650" fontSize="sm" mt={3} whiteSpace="pre-line">
+                          {session.paymentInstructions}
+                        </Text>
+                      )}
                     </Box>
                   )}
                 </MotionBox>
@@ -740,6 +938,22 @@ export default function SessionDetail() {
           </Box>
         )}
       </Box>
+
+      {isPaidSession && sessionData?.currentRegistration && id && paymentAmount > 0 && (
+        <SessionPaymentModal
+          isOpen={paymentModalOpen}
+          onClose={() => setPaymentModalOpen(false)}
+          onSuccess={async () => {
+            await refetchRegistration()
+            await refetch()
+          }}
+          sessionId={id}
+          registrationId={sessionData.currentRegistration.id}
+          sessionTitle={session.title}
+          amount={paymentAmount}
+          currency={currency}
+        />
+      )}
 
       <Footer />
     </Box>

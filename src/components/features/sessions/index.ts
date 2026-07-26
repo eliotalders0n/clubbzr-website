@@ -9,3 +9,4 @@ export { SessionCard, SessionCardSkeleton, type SessionCardProps } from './Sessi
 export { SessionGrid, type SessionGridProps, type TabType } from './SessionGrid';
 export { SessionCalendar, type SessionCalendarProps } from './SessionCalendar';
 export { SessionGallery, type SessionGalleryProps } from './SessionGallery';
+export { SessionPaymentModal } from './SessionPaymentModal';

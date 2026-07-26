@@ -6,6 +6,7 @@
 import { initializeApp, getApps, type FirebaseApp } from 'firebase/app';
 import { getAuth, connectAuthEmulator, type Auth } from 'firebase/auth';
 import { getFirestore, connectFirestoreEmulator, type Firestore } from 'firebase/firestore';
+import { getFunctions, connectFunctionsEmulator, type Functions } from 'firebase/functions';
 import { getStorage, connectStorageEmulator, type FirebaseStorage } from 'firebase/storage';
 import { getAnalytics, type Analytics } from 'firebase/analytics';
 
@@ -23,6 +24,7 @@ const firebaseConfig = {
 const app: FirebaseApp = getApps().length ? getApps()[0] : initializeApp(firebaseConfig);
 const auth: Auth = getAuth(app);
 const db: Firestore = getFirestore(app);
+const functions: Functions = getFunctions(app, import.meta.env.VITE_FIREBASE_FUNCTIONS_REGION || 'us-central1');
 const storage: FirebaseStorage = getStorage(app);
 let analytics: Analytics | null = null;
 
@@ -42,12 +44,16 @@ export function initializeAnalytics(): Analytics | null {
 if (import.meta.env.DEV && import.meta.env.VITE_USE_FIREBASE_EMULATORS === 'true') {
   const authHost = import.meta.env.VITE_FIREBASE_AUTH_EMULATOR_HOST || 'localhost:9099';
   const firestoreHost = import.meta.env.VITE_FIREBASE_FIRESTORE_EMULATOR_HOST || 'localhost:8080';
+  const functionsHost = import.meta.env.VITE_FIREBASE_FUNCTIONS_EMULATOR_HOST || 'localhost:5001';
   const storageHost = import.meta.env.VITE_FIREBASE_STORAGE_EMULATOR_HOST || 'localhost:9199';
 
   connectAuthEmulator(auth, `http://${authHost}`, { disableWarnings: true });
 
   const [firestoreHostname, firestorePort] = firestoreHost.split(':');
   connectFirestoreEmulator(db, firestoreHostname, parseInt(firestorePort));
+
+  const [functionsHostname, functionsPort] = functionsHost.split(':');
+  connectFunctionsEmulator(functions, functionsHostname, parseInt(functionsPort));
 
   const [storageHostname, storagePort] = storageHost.split(':');
   connectStorageEmulator(storage, storageHostname, parseInt(storagePort));
@@ -62,6 +68,7 @@ export const COLLECTIONS = {
   ARTIST_FOLLOWS: 'artistFollows',
   ARTWORKS: 'artworks',
   SESSIONS: 'sessions',
+  SESSION_REGISTRATIONS: 'sessionRegistrations',
   QUESTS: 'quests',
   QUEST_SUBMISSIONS: 'questSubmissions',
   COMMUNITY_POSTS: 'communityPosts',
@@ -86,4 +93,4 @@ export const STORAGE_PATHS = {
   RADIO: 'radio',
 } as const;
 
-export { app, auth, db, storage, analytics };
+export { app, auth, db, functions, storage, analytics };

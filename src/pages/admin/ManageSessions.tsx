@@ -17,15 +17,30 @@ import {
   Spinner,
 } from '@chakra-ui/react'
 import { motion, AnimatePresence } from 'framer-motion'
-import { CalendarDays, ImagePlus, Link as LinkIcon, MapPin, Pencil, Plus, Search, Trash2, Users, X } from 'lucide-react'
-import { Timestamp } from 'firebase/firestore'
+import { CalendarDays, CheckCircle2, CreditCard, ImagePlus, Link as LinkIcon, Mail, MapPin, Pencil, Plus, Search, Trash2, Users, X } from 'lucide-react'
+import { Timestamp, arrayRemove, arrayUnion } from 'firebase/firestore'
 
 import { AdminLayout } from '@/components/layout/AdminLayout'
 import { useAuth } from '@/contexts/AuthContext'
 import { useCollection } from '@/hooks'
-import { createDocument, deleteDocument, updateDocument } from '../../../lib/firestore'
+import { createDocument, createDocumentWithId, deleteDocument, updateDocument } from '../../../lib/firestore'
+import { getRegistrationCounts, getSessionRegistrationId, normalizeSessionRegistrationConfig, updateSessionRegistration } from '../../../lib/sessionRegistrations'
 import { STORAGE_PATHS, uploadFileSimple, validateFile } from '../../../lib/storage'
-import type { CreateDocument, Session, SessionStatus, SessionType, UpdateDocument } from '../../../lib/schema'
+import type {
+  CreateDocument,
+  Session,
+  SessionAccessMode,
+  SessionApprovalMode,
+  SessionPaymentMode,
+  SessionPaymentProvider,
+  SessionRegistration,
+  SessionRegistrationPaymentStatus,
+  SessionRegistrationStatus,
+  SessionStatus,
+  SessionType,
+  UpdateDocument,
+  User as FirestoreUser,
+} from '../../../lib/schema'
 
 const MotionBox = motion.create(Box)
 
@@ -42,9 +57,24 @@ interface SessionForm {
   endTime: string
   location: string
   capacity: string
+  accessMode: SessionAccessMode
+  paymentMode: SessionPaymentMode
+  paymentProvider: SessionPaymentProvider
+  approvalMode: SessionApprovalMode
+  price: string
+  currency: string
+  paymentInstructions: string
   facilitator: string
   coverImage: string
   tags: string
+}
+
+interface SignupPerson {
+  id: string
+  displayName: string
+  email: string
+  photoURL?: string | null
+  role?: string
 }
 
 const emptyForm: SessionForm = {
@@ -58,9 +88,46 @@ const emptyForm: SessionForm = {
   endTime: '20:00',
   location: '',
   capacity: '30',
+  accessMode: 'open',
+  paymentMode: 'free',
+  paymentProvider: 'none',
+  approvalMode: 'auto',
+  price: '',
+  currency: 'ZMW',
+  paymentInstructions: '',
   facilitator: '',
   coverImage: '',
   tags: '',
+}
+
+const registrationStatuses: SessionRegistrationStatus[] = [
+  'requested',
+  'pending_payment',
+  'paid_pending_confirmation',
+  'confirmed',
+  'waitlisted',
+  'declined',
+  'cancelled',
+]
+
+const registrationStatusLabels: Record<SessionRegistrationStatus, string> = {
+  requested: 'Requested',
+  pending_payment: 'Pending Payment',
+  paid_pending_confirmation: 'Paid, Needs Confirmation',
+  confirmed: 'Confirmed',
+  waitlisted: 'Waitlist',
+  declined: 'Declined',
+  cancelled: 'Cancelled',
+}
+
+const paymentStatusLabels: Record<SessionRegistrationPaymentStatus, string> = {
+  not_required: 'No Payment Required',
+  unpaid: 'Unpaid',
+  pending: 'Payment Pending',
+  paid_online: 'Paid Online',
+  paid_external: 'Paid Externally',
+  waived: 'Waived',
+  failed: 'Failed',
 }
 
 const typeColors: Record<string, { bg: string; color: string }> = {
@@ -115,6 +182,22 @@ const filterButtonProps = {
   whiteSpace: 'nowrap',
 } as const
 
+const modalFooterButtonProps = {
+  h: '44px',
+  minW: '112px',
+  px: 5,
+  borderRadius: 'xl',
+  fontSize: 'sm',
+  fontWeight: 'semibold',
+  lineHeight: '1',
+  gap: 2,
+  display: 'inline-flex',
+  alignItems: 'center',
+  justifyContent: 'center',
+  flexShrink: 0,
+  whiteSpace: 'nowrap',
+} as const
+
 const filterSelectStyle: React.CSSProperties = {
   width: '100%',
   height: '46px',
@@ -153,6 +236,12 @@ const formatTime = (value: unknown): string => {
   return date.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })
 }
 
+const formatDateTime = (value: unknown): string => {
+  const date = toDate(value)
+  if (!date) return 'Not recorded'
+  return `${formatDate(date)} ${formatTime(date)}`
+}
+
 const toInputDate = (value: unknown): string => {
   const date = toDate(value)
   return date ? date.toISOString().slice(0, 10) : ''
@@ -161,6 +250,98 @@ const toInputDate = (value: unknown): string => {
 const toInputTime = (value: unknown): string => {
   const date = toDate(value)
   return date ? date.toTimeString().slice(0, 5) : ''
+}
+
+const buildUserDirectory = (users: FirestoreUser[]): Map<string, FirestoreUser> => {
+  const directory = new Map<string, FirestoreUser>()
+
+  users.forEach((user) => {
+    if (user.id) directory.set(user.id, user)
+    if (user.uid) directory.set(user.uid, user)
+  })
+
+  return directory
+}
+
+const resolveSignupPeople = (
+  ids: string[] | undefined,
+  usersById: Map<string, FirestoreUser>
+): SignupPerson[] => {
+  return (ids || []).map((id) => {
+    const user = usersById.get(id)
+
+    return {
+      id,
+      displayName: user?.displayName || 'Unknown user',
+      email: user?.email || '',
+      photoURL: user?.photoURL,
+      role: user?.role,
+    }
+  })
+}
+
+const formatSignupNames = (ids: string[] | undefined, usersById: Map<string, FirestoreUser>): string => {
+  return resolveSignupPeople(ids, usersById)
+    .map((person) => person.displayName)
+    .join('; ')
+}
+
+const formatSignupEmails = (ids: string[] | undefined, usersById: Map<string, FirestoreUser>): string => {
+  return resolveSignupPeople(ids, usersById)
+    .map((person) => person.email || person.id)
+    .join('; ')
+}
+
+const getSessionRegistrations = (
+  registrationsBySessionId: Map<string, SessionRegistration[]>,
+  sessionId: string
+): SessionRegistration[] => registrationsBySessionId.get(sessionId) || []
+
+const getSessionConfirmedCount = (
+  session: Session,
+  registrationsBySessionId: Map<string, SessionRegistration[]>
+): number => {
+  const registrations = getSessionRegistrations(registrationsBySessionId, session.id)
+  return registrations.length > 0
+    ? getRegistrationCounts(registrations).confirmed
+    : session.attendees?.length || 0
+}
+
+const getSessionWaitlistCount = (
+  session: Session,
+  registrationsBySessionId: Map<string, SessionRegistration[]>
+): number => {
+  const registrations = getSessionRegistrations(registrationsBySessionId, session.id)
+  return registrations.length > 0
+    ? getRegistrationCounts(registrations).waitlisted
+    : session.waitlist?.length || 0
+}
+
+const formatRegistrationPeople = (
+  registrations: SessionRegistration[],
+  status: SessionRegistrationStatus,
+  field: 'displayName' | 'email'
+): string => registrations
+  .filter((registration) => registration.status === status)
+  .map((registration) => registration[field] || registration.userId)
+  .join('; ')
+
+const adminAddRegistrationStatuses: SessionRegistrationStatus[] = [
+  'requested',
+  'pending_payment',
+  'paid_pending_confirmation',
+  'confirmed',
+  'waitlisted',
+]
+
+const getAdminAddPaymentStatus = (
+  session: Session,
+  status: SessionRegistrationStatus
+): SessionRegistrationPaymentStatus => {
+  const config = normalizeSessionRegistrationConfig(session)
+  if (config.paymentMode !== 'paid') return 'not_required'
+  if (status === 'paid_pending_confirmation' || status === 'confirmed') return 'paid_external'
+  return 'unpaid'
 }
 
 const toForm = (session: Session): SessionForm => ({
@@ -174,6 +355,13 @@ const toForm = (session: Session): SessionForm => ({
   endTime: toInputTime(session.endDate) || '',
   location: session.location?.name || session.location?.address || '',
   capacity: String(session.capacity || 0),
+  accessMode: session.accessMode || 'open',
+  paymentMode: session.paymentMode || (session.isFree === false || (session.price && session.price > 0) ? 'paid' : 'free'),
+  paymentProvider: session.paymentProvider || (session.isFree === false || (session.price && session.price > 0) ? 'manual_external' : 'none'),
+  approvalMode: session.approvalMode || (session.isFree === false || (session.price && session.price > 0) ? 'manual' : 'auto'),
+  price: typeof session.price === 'number' && session.price > 0 ? String(session.price) : '',
+  currency: session.currency || 'ZMW',
+  paymentInstructions: session.paymentInstructions || '',
   facilitator: session.facilitator?.name || '',
   coverImage: session.coverImage || '',
   tags: (session.tags || []).join(', '),
@@ -185,13 +373,19 @@ const buildDate = (date: string, time: string): Timestamp => {
   return Timestamp.fromDate(new Date(`${date}T${time || '00:00'}`))
 }
 
-const buildPayload = (form: SessionForm, existing?: Session): CreateDocument<Session> | UpdateDocument<Session> => {
+const buildPayload = (
+  form: SessionForm,
+  existing?: Session,
+  currentUserId?: string
+): CreateDocument<Session> | UpdateDocument<Session> => {
   const start = buildDate(form.date, form.time)
   const end = form.endTime ? buildDate(form.date, form.endTime) : undefined
   const isOnline = form.type === 'online' || form.location.toLowerCase().includes('online')
   const coverImage = form.coverImage.trim()
   const duration = end ? Math.max(0, Math.round((end.toMillis() - start.toMillis()) / 60000)) : existing?.duration
-  const price = typeof existing?.price === 'number' ? existing.price : undefined
+  const price = Number(form.price)
+  const isPaid = form.paymentMode === 'paid'
+  const currency = form.currency.trim().toUpperCase() || 'ZMW'
 
   return {
     title: form.title.trim(),
@@ -208,10 +402,15 @@ const buildPayload = (form: SessionForm, existing?: Session): CreateDocument<Ses
     },
     isOnline,
     capacity: Number(form.capacity) || 0,
+    accessMode: form.accessMode,
+    paymentMode: form.paymentMode,
+    paymentProvider: isPaid ? form.paymentProvider : 'none',
+    approvalMode: form.approvalMode,
+    paymentInstructions: form.paymentInstructions.trim(),
     attendees: existing?.attendees || [],
     waitlist: existing?.waitlist || [],
     facilitator: {
-      userId: existing?.facilitator?.userId || 'admin',
+      userId: existing?.facilitator?.userId || currentUserId || 'admin',
       name: form.facilitator.trim() || 'Club BZR',
     },
     ...(coverImage ? { coverImage } : {}),
@@ -220,14 +419,33 @@ const buildPayload = (form: SessionForm, existing?: Session): CreateDocument<Ses
     status: form.status,
     featured: existing?.featured || false,
     tags: form.tags.split(',').map((tag) => tag.trim()).filter(Boolean),
-    isFree: existing?.isFree ?? true,
-    ...(typeof price === 'number' ? { price, currency: existing?.currency || 'USD' } : {}),
+    isFree: !isPaid,
+    price: isPaid && Number.isFinite(price) ? price : 0,
+    currency,
   }
 }
 
 export default function ManageSessions() {
+  const { firebaseUser } = useAuth()
   const { data, loading, error, refetch } = useCollection('sessions', {
     orderBy: 'date',
+    orderDirection: 'desc',
+  })
+  const {
+    data: userDocs,
+    loading: usersLoading,
+    error: usersError,
+  } = useCollection('users', {
+    orderBy: 'displayName',
+    orderDirection: 'asc',
+  })
+  const {
+    data: registrations,
+    loading: registrationsLoading,
+    error: registrationsError,
+    refetch: refetchRegistrations,
+  } = useCollection('sessionRegistrations', {
+    orderBy: 'createdAt',
     orderDirection: 'desc',
   })
   const [activeTab, setActiveTab] = useState<TabFilter>('upcoming')
@@ -243,6 +461,16 @@ export default function ManageSessions() {
     () => [...data].sort((a, b) => toMillis(b.date) - toMillis(a.date)),
     [data]
   )
+
+  const usersById = useMemo(() => buildUserDirectory(userDocs), [userDocs])
+  const registrationsBySessionId = useMemo(() => {
+    return registrations.reduce<Map<string, SessionRegistration[]>>((map, registration) => {
+      const existing = map.get(registration.sessionId) || []
+      existing.push(registration)
+      map.set(registration.sessionId, existing)
+      return map
+    }, new Map())
+  }, [registrations])
 
   const filteredSessions = useMemo(() => {
     const query = searchQuery.trim().toLowerCase()
@@ -264,7 +492,7 @@ export default function ManageSessions() {
     total: sessions.length,
     published: sessions.filter((session) => session.status === 'published').length,
     draft: sessions.filter((session) => session.status === 'draft').length,
-    attendees: sessions.reduce((acc, session) => acc + (session.attendees?.length || 0), 0),
+    attendees: sessions.reduce((acc, session) => acc + getSessionConfirmedCount(session, registrationsBySessionId), 0),
   }
 
   const openCreate = () => {
@@ -293,7 +521,7 @@ export default function ManageSessions() {
     }
 
     setSubmitting(true)
-    const payload = buildPayload(formData, selectedSession)
+    const payload = buildPayload(formData, selectedSession, firebaseUser?.uid)
     const result = modalMode === 'edit' && selectedSession
       ? await updateDocument('sessions', selectedSession.id, payload as UpdateDocument<Session>)
       : await createDocument('sessions', payload as CreateDocument<Session>)
@@ -318,18 +546,182 @@ export default function ManageSessions() {
     void refetch()
   }
 
+  const handleRegistrationUpdate = async (
+    registration: SessionRegistration,
+    patch: UpdateDocument<SessionRegistration>
+  ) => {
+    const result = await updateSessionRegistration(registration.id, patch)
+    if (!result.success) {
+      alert(result.error?.message || 'Failed to update registration.')
+      return false
+    }
+    void refetchRegistrations()
+    return true
+  }
+
+  const handleMarkPaid = (registration: SessionRegistration) => {
+    void handleRegistrationUpdate(registration, {
+      status: registration.status === 'pending_payment' ? 'paid_pending_confirmation' : registration.status,
+      paymentStatus: 'paid_external',
+      paymentMethod: registration.paymentMethod || 'bank_transfer',
+      paidAt: Timestamp.now(),
+    })
+  }
+
+  const handleAddRegistration = async (
+    session: Session,
+    targetUser: FirestoreUser,
+    status: SessionRegistrationStatus,
+    paymentStatus: SessionRegistrationPaymentStatus
+  ) => {
+    const userId = targetUser.uid || targetUser.id
+
+    if (!userId) {
+      alert('This user does not have an account ID.')
+      return false
+    }
+
+    const existingRegistration = registrations.some((registration) =>
+      registration.sessionId === session.id && registration.userId === userId
+    )
+
+    if (existingRegistration) {
+      alert('This user already has a registration for this session.')
+      return false
+    }
+
+    const now = Timestamp.now()
+    const result = await createDocumentWithId(
+      'sessionRegistrations',
+      getSessionRegistrationId(session.id, userId),
+      {
+        sessionId: session.id,
+        userId,
+        displayName: targetUser.displayName || targetUser.email || 'Club BZR member',
+        email: targetUser.email || '',
+        photoURL: targetUser.photoURL || null,
+        status,
+        paymentStatus,
+        paymentMethod: paymentStatus === 'paid_external' ? 'bank_transfer' : undefined,
+        requestedAt: now,
+        ...(status === 'confirmed' ? { confirmedAt: now, confirmedBy: firebaseUser?.uid || 'admin' } : {}),
+        ...(paymentStatus === 'paid_external' ? { paidAt: now } : {}),
+        ...(typeof session.price === 'number' && session.price > 0 ? { paymentAmount: session.price } : {}),
+        paymentCurrency: session.currency || 'ZMW',
+      }
+    )
+
+    if (!result.success) {
+      alert(result.error?.message || 'Failed to add this registration.')
+      return false
+    }
+
+    if (status === 'confirmed') {
+      await updateDocument('sessions', session.id, {
+        attendees: arrayUnion(userId) as unknown as string[],
+        waitlist: arrayRemove(userId) as unknown as string[],
+      })
+    }
+
+    if (status === 'waitlisted') {
+      await updateDocument('sessions', session.id, {
+        attendees: arrayRemove(userId) as unknown as string[],
+        waitlist: arrayUnion(userId) as unknown as string[],
+      })
+    }
+
+    await refetchRegistrations()
+    await refetch()
+    return true
+  }
+
+  const handleConfirmRegistration = (registration: SessionRegistration, markPaid = false) => {
+    void (async () => {
+      const success = await handleRegistrationUpdate(registration, {
+      status: 'confirmed',
+      ...(markPaid ? { paymentStatus: 'paid_external' as const, paidAt: Timestamp.now() } : {}),
+      confirmedAt: Timestamp.now(),
+      confirmedBy: firebaseUser?.uid || 'admin',
+    })
+      if (!success) return
+
+      await updateDocument('sessions', registration.sessionId, {
+        attendees: arrayUnion(registration.userId) as unknown as string[],
+        waitlist: arrayRemove(registration.userId) as unknown as string[],
+      })
+      void refetch()
+    })()
+  }
+
+  const handleWaitlistRegistration = (registration: SessionRegistration) => {
+    void (async () => {
+      const success = await handleRegistrationUpdate(registration, {
+        status: 'waitlisted',
+      })
+      if (!success) return
+
+      await updateDocument('sessions', registration.sessionId, {
+        attendees: arrayRemove(registration.userId) as unknown as string[],
+        waitlist: arrayUnion(registration.userId) as unknown as string[],
+      })
+      void refetch()
+    })()
+  }
+
+  const handleDeclineRegistration = (registration: SessionRegistration) => {
+    void (async () => {
+      const success = await handleRegistrationUpdate(registration, {
+        status: 'declined',
+        declinedAt: Timestamp.now(),
+        declinedBy: firebaseUser?.uid || 'admin',
+      })
+      if (!success) return
+
+      await updateDocument('sessions', registration.sessionId, {
+        attendees: arrayRemove(registration.userId) as unknown as string[],
+        waitlist: arrayRemove(registration.userId) as unknown as string[],
+      })
+      void refetch()
+    })()
+  }
+
   const handleExport = () => {
     const csv = [
-      'Title,Type,Status,Date,Facilitator,Capacity,Attendees',
-      ...filteredSessions.map((session) => [
-        session.title,
-        session.type,
-        session.status,
-        formatDate(session.date),
-        session.facilitator?.name || '',
-        session.capacity || 0,
-        session.attendees?.length || 0,
-      ].map((value) => `"${String(value).replace(/"/g, '""')}"`).join(',')),
+      'Title,Type,Status,Access,Payment Mode,Date,Facilitator,Capacity,Confirmed Count,Confirmed Names,Confirmed Emails,Pending Payment Count,Pending Payment Names,Waitlist Count,Waitlist Names,Waitlist Emails',
+      ...filteredSessions.map((session) => {
+        const sessionRegistrations = getSessionRegistrations(registrationsBySessionId, session.id)
+        const hasRegistrationRecords = sessionRegistrations.length > 0
+        const confirmedCount = getSessionConfirmedCount(session, registrationsBySessionId)
+        const waitlistCount = getSessionWaitlistCount(session, registrationsBySessionId)
+        const pendingPayment = sessionRegistrations.filter((registration) => registration.status === 'pending_payment')
+
+        return [
+          session.title,
+          session.type,
+          session.status,
+          session.accessMode || 'open',
+          session.paymentMode || (session.isFree ? 'free' : 'paid'),
+          formatDate(session.date),
+          session.facilitator?.name || '',
+          session.capacity || 0,
+          confirmedCount,
+          hasRegistrationRecords
+            ? formatRegistrationPeople(sessionRegistrations, 'confirmed', 'displayName')
+            : formatSignupNames(session.attendees, usersById),
+          hasRegistrationRecords
+            ? formatRegistrationPeople(sessionRegistrations, 'confirmed', 'email')
+            : formatSignupEmails(session.attendees, usersById),
+          pendingPayment.length,
+          pendingPayment.map((registration) => registration.displayName || registration.userId).join('; '),
+          waitlistCount,
+          hasRegistrationRecords
+            ? formatRegistrationPeople(sessionRegistrations, 'waitlisted', 'displayName')
+            : formatSignupNames(session.waitlist, usersById),
+          hasRegistrationRecords
+            ? formatRegistrationPeople(sessionRegistrations, 'waitlisted', 'email')
+            : formatSignupEmails(session.waitlist, usersById),
+        ].map((value) => `"${String(value).replace(/"/g, '""')}"`).join(',')
+      }),
     ].join('\n')
     const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' })
     const url = URL.createObjectURL(blob)
@@ -441,6 +833,8 @@ export default function ManageSessions() {
                 key={session.id}
                 session={session}
                 index={index}
+                confirmedCount={getSessionConfirmedCount(session, registrationsBySessionId)}
+                waitlistCount={getSessionWaitlistCount(session, registrationsBySessionId)}
                 onView={setDetailSession}
                 onEdit={openEdit}
                 onDelete={handleDelete}
@@ -487,11 +881,62 @@ export default function ManageSessions() {
                 <Info label="Date" value={`${formatDate(detailSession.date)} ${formatTime(detailSession.date)}`} />
                 <Info label="Location" value={detailSession.location?.name || 'Not set'} />
                 <Info label="Facilitator" value={detailSession.facilitator?.name || 'Not set'} />
-                <Info label="Attendance" value={`${detailSession.attendees?.length || 0} / ${detailSession.capacity || 0}`} />
+                <Info label="Attendance" value={`${getSessionConfirmedCount(detailSession, registrationsBySessionId)} / ${detailSession.capacity || 0}`} />
+                <Info label="Waitlist" value={String(getSessionWaitlistCount(detailSession, registrationsBySessionId))} />
+                <Info label="Access" value={(detailSession.accessMode || 'open').replace('_', ' ')} />
+                <Info label="Payment" value={normalizeSessionRegistrationConfig(detailSession).paymentMode === 'paid' ? `${detailSession.currency || 'ZMW'} ${Number(detailSession.price || 0).toFixed(2)}` : 'Free'} />
               </SimpleGrid>
-              <HStack justify="flex-end" gap={3}>
-                <Button onClick={() => setDetailSession(null)} bg="whiteAlpha.100" color="white" borderRadius="full" _hover={{ bg: 'whiteAlpha.200' }}>Close</Button>
-                <Button onClick={() => { setDetailSession(null); openEdit(detailSession) }} bg="brand.500" color="white" borderRadius="full" _hover={{ bg: 'brand.600' }}>
+              <RegistrationManager
+                session={detailSession}
+                users={userDocs}
+                registrations={getSessionRegistrations(registrationsBySessionId, detailSession.id)}
+                loading={registrationsLoading}
+                usersLoading={usersLoading}
+                error={registrationsError?.message}
+                onAddRegistration={handleAddRegistration}
+                onMarkPaid={handleMarkPaid}
+                onConfirm={handleConfirmRegistration}
+                onWaitlist={handleWaitlistRegistration}
+                onDecline={handleDeclineRegistration}
+              />
+              {getSessionRegistrations(registrationsBySessionId, detailSession.id).length === 0 && (
+                <>
+                  <SignupSection
+                    title="Legacy Signed Up"
+                    emptyLabel="No legacy attendees yet."
+                    people={resolveSignupPeople(detailSession.attendees, usersById)}
+                    loading={usersLoading}
+                    error={usersError?.message}
+                  />
+                  <SignupSection
+                    title="Legacy Waitlist"
+                    emptyLabel="No legacy waitlist entries yet."
+                    people={resolveSignupPeople(detailSession.waitlist, usersById)}
+                    loading={usersLoading}
+                    error={usersError?.message}
+                  />
+                </>
+              )}
+              <HStack justify="flex-end" gap={3} pt={1} flexWrap="wrap">
+                <Button
+                  {...modalFooterButtonProps}
+                  onClick={() => setDetailSession(null)}
+                  bg="whiteAlpha.100"
+                  color="white"
+                  border="1px solid"
+                  borderColor="whiteAlpha.200"
+                  _hover={{ bg: 'whiteAlpha.200' }}
+                >
+                  <X size={16} />
+                  Close
+                </Button>
+                <Button
+                  {...modalFooterButtonProps}
+                  onClick={() => { setDetailSession(null); openEdit(detailSession) }}
+                  bg="brand.500"
+                  color="white"
+                  _hover={{ bg: 'brand.600' }}
+                >
                   <Pencil size={16} />
                   Edit
                 </Button>
@@ -516,16 +961,22 @@ function Stat({ label, value, color = 'white' }: { label: string; value: number 
 function SessionCard({
   session,
   index,
+  confirmedCount,
+  waitlistCount,
   onView,
   onEdit,
   onDelete,
 }: {
   session: Session
   index: number
+  confirmedCount: number
+  waitlistCount: number
   onView: (session: Session) => void
   onEdit: (session: Session) => void
   onDelete: (session: Session) => void
 }) {
+  const config = normalizeSessionRegistrationConfig(session)
+
   return (
     <MotionBox initial={{ opacity: 0, y: 18 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, scale: 0.96 }} transition={{ delay: index * 0.04 }} layout>
       <Box bg="gray.900" border="1px solid" borderColor="whiteAlpha.100" borderRadius="2xl" overflow="hidden" role="group" _hover={{ borderColor: 'whiteAlpha.200' }}>
@@ -546,7 +997,9 @@ function SessionCard({
           <VStack align="stretch" gap={2} mt={4} color="whiteAlpha.600" fontSize="sm">
             <HStack gap={2}><CalendarDays size={15} /><Text>{formatDate(session.date)} {formatTime(session.date)}</Text></HStack>
             <HStack gap={2}><MapPin size={15} /><Text>{session.location?.name || 'Location TBD'}</Text></HStack>
-            <HStack gap={2}><Users size={15} /><Text>{session.attendees?.length || 0}/{session.capacity || 0} attendees</Text></HStack>
+            <HStack gap={2}><Users size={15} /><Text>{confirmedCount}/{session.capacity || 0} confirmed</Text></HStack>
+            <HStack gap={2}><CreditCard size={15} /><Text>{config.paymentMode === 'paid' ? `${session.currency || 'ZMW'} ${Number(session.price || 0).toFixed(2)}` : 'Free'}</Text></HStack>
+            {waitlistCount > 0 && <HStack gap={2}><Users size={15} /><Text>{waitlistCount} waitlisted</Text></HStack>}
           </VStack>
           <HStack gap={2} mt={5}>
             <Button flex={1} size="sm" onClick={() => onView(session)} bg="whiteAlpha.50" color="whiteAlpha.800" borderRadius="full" _hover={{ bg: 'whiteAlpha.100', color: 'white' }}>View</Button>
@@ -576,6 +1029,358 @@ function Info({ label, value }: { label: string; value: string }) {
     <Box p={4} bg="whiteAlpha.50" border="1px solid" borderColor="whiteAlpha.100" borderRadius="xl">
       <Text color="whiteAlpha.500" fontSize="xs" textTransform="uppercase" letterSpacing="0.12em">{label}</Text>
       <Text color="white" mt={1}>{value}</Text>
+    </Box>
+  )
+}
+
+function RegistrationManager({
+  session,
+  users,
+  registrations,
+  loading,
+  usersLoading,
+  error,
+  onAddRegistration,
+  onMarkPaid,
+  onConfirm,
+  onWaitlist,
+  onDecline,
+}: {
+  session: Session
+  users: FirestoreUser[]
+  registrations: SessionRegistration[]
+  loading: boolean
+  usersLoading: boolean
+  error?: string
+  onAddRegistration: (
+    session: Session,
+    user: FirestoreUser,
+    status: SessionRegistrationStatus,
+    paymentStatus: SessionRegistrationPaymentStatus
+  ) => Promise<boolean>
+  onMarkPaid: (registration: SessionRegistration) => void
+  onConfirm: (registration: SessionRegistration, markPaid?: boolean) => void
+  onWaitlist: (registration: SessionRegistration) => void
+  onDecline: (registration: SessionRegistration) => void
+}) {
+  const [selectedUserId, setSelectedUserId] = useState('')
+  const [newRegistrationStatus, setNewRegistrationStatus] = useState<SessionRegistrationStatus>('requested')
+  const [addingRegistration, setAddingRegistration] = useState(false)
+  const existingUserIds = useMemo(
+    () => new Set(registrations.map((registration) => registration.userId)),
+    [registrations]
+  )
+  const availableUsers = useMemo(
+    () => users.filter((user) => {
+      const userId = user.uid || user.id
+      return userId && !existingUserIds.has(userId)
+    }),
+    [existingUserIds, users]
+  )
+  const newPaymentStatus = getAdminAddPaymentStatus(session, newRegistrationStatus)
+
+  const handleAddRegistrationSubmit = async (event: FormEvent) => {
+    event.preventDefault()
+
+    const targetUser = availableUsers.find((user) => (user.uid || user.id) === selectedUserId)
+    if (!targetUser) return
+
+    setAddingRegistration(true)
+    const success = await onAddRegistration(session, targetUser, newRegistrationStatus, newPaymentStatus)
+    setAddingRegistration(false)
+
+    if (success) {
+      setSelectedUserId('')
+      setNewRegistrationStatus('requested')
+    }
+  }
+
+  const addRegistrationForm = (
+    <Box p={4} bg="whiteAlpha.50" border="1px solid" borderColor="whiteAlpha.100" borderRadius="xl">
+      <Flex justify="space-between" align={{ base: 'flex-start', sm: 'center' }} gap={3} direction={{ base: 'column', sm: 'row' }} mb={3}>
+        <Box>
+          <Text color="white" fontWeight="semibold">Add guest</Text>
+          <Text color="whiteAlpha.500" fontSize="sm">Create a registration for an existing Club BZR account.</Text>
+        </Box>
+        <Badge bg="brand.500/20" color="brand.200" borderRadius="full" px={3} py={1}>
+          {paymentStatusLabels[newPaymentStatus]}
+        </Badge>
+      </Flex>
+      <form onSubmit={handleAddRegistrationSubmit}>
+        <SimpleGrid columns={{ base: 1, lg: 3 }} gap={3}>
+          <select
+            value={selectedUserId}
+            onChange={(event) => setSelectedUserId(event.target.value)}
+            style={filterSelectStyle}
+            disabled={usersLoading || addingRegistration}
+          >
+            <option value="">{usersLoading ? 'Loading users...' : 'Select user'}</option>
+            {availableUsers.map((user) => {
+              const userId = user.uid || user.id
+              return (
+                <option key={userId} value={userId}>
+                  {user.displayName || user.email || userId} {user.email ? `- ${user.email}` : ''}
+                </option>
+              )
+            })}
+          </select>
+          <select
+            value={newRegistrationStatus}
+            onChange={(event) => setNewRegistrationStatus(event.target.value as SessionRegistrationStatus)}
+            style={filterSelectStyle}
+            disabled={addingRegistration}
+          >
+            {adminAddRegistrationStatuses.map((status) => (
+              <option key={status} value={status}>
+                {registrationStatusLabels[status]}
+              </option>
+            ))}
+          </select>
+          <Button
+            type="submit"
+            h="46px"
+            bg="brand.500"
+            color="white"
+            borderRadius="xl"
+            _hover={{ bg: 'brand.600' }}
+            disabled={!selectedUserId || addingRegistration || usersLoading}
+          >
+            {addingRegistration ? <Spinner size="sm" /> : 'Add Registration'}
+          </Button>
+        </SimpleGrid>
+      </form>
+      {!usersLoading && availableUsers.length === 0 && (
+        <Text color="whiteAlpha.500" fontSize="sm" mt={3}>
+          Every existing user already has a registration record for this session.
+        </Text>
+      )}
+    </Box>
+  )
+
+  return (
+    <VStack align="stretch" gap={4}>
+      {addRegistrationForm}
+
+      {loading ? (
+        <Flex align="center" gap={2} color="whiteAlpha.600" fontSize="sm">
+          <Spinner size="sm" color="brand.500" />
+          <Text>Loading registrations...</Text>
+        </Flex>
+      ) : error ? (
+        <Box p={3} bg="red.500/10" border="1px solid" borderColor="red.500/30" borderRadius="xl">
+          <Text color="red.200" fontSize="sm">{error}</Text>
+        </Box>
+      ) : registrations.length === 0 ? (
+        <Box p={4} bg="whiteAlpha.50" border="1px solid" borderColor="whiteAlpha.100" borderRadius="xl">
+          <Text color="whiteAlpha.500" fontSize="sm">No registration records yet.</Text>
+        </Box>
+      ) : (
+        registrationStatuses.map((status) => {
+          const records = registrations.filter((registration) => registration.status === status)
+          if (records.length === 0) return null
+
+          return (
+            <Box key={status}>
+              <Flex justify="space-between" align="center" mb={3}>
+                <Text color="white" fontWeight="semibold">{registrationStatusLabels[status]}</Text>
+                <Badge bg="whiteAlpha.100" color="whiteAlpha.800" borderRadius="full" px={3} py={1}>
+                  {records.length}
+                </Badge>
+              </Flex>
+              <VStack align="stretch" gap={2}>
+                {records.map((registration) => (
+                  <RegistrationRow
+                    key={registration.id}
+                    registration={registration}
+                    onMarkPaid={onMarkPaid}
+                    onConfirm={onConfirm}
+                    onWaitlist={onWaitlist}
+                    onDecline={onDecline}
+                  />
+                ))}
+              </VStack>
+            </Box>
+          )
+        })
+      )}
+    </VStack>
+  )
+}
+
+function RegistrationRow({
+  registration,
+  onMarkPaid,
+  onConfirm,
+  onWaitlist,
+  onDecline,
+}: {
+  registration: SessionRegistration
+  onMarkPaid: (registration: SessionRegistration) => void
+  onConfirm: (registration: SessionRegistration, markPaid?: boolean) => void
+  onWaitlist: (registration: SessionRegistration) => void
+  onDecline: (registration: SessionRegistration) => void
+}) {
+  const isTerminal = registration.status === 'declined' || registration.status === 'cancelled'
+  const isConfirmed = registration.status === 'confirmed'
+  const needsPayment =
+    registration.paymentStatus === 'unpaid' ||
+    registration.paymentStatus === 'pending' ||
+    registration.paymentStatus === 'failed'
+  const canMarkPaid = !isTerminal && !isConfirmed && needsPayment
+  const canConfirm = !isTerminal && !isConfirmed
+  const canMoveToWaitlist = !isTerminal && registration.status !== 'waitlisted' && !isConfirmed
+  const canDecline = !isTerminal && !isConfirmed
+
+  return (
+    <Box p={4} bg="whiteAlpha.50" border="1px solid" borderColor="whiteAlpha.100" borderRadius="xl">
+      <Flex gap={3} justify="space-between" align={{ base: 'stretch', sm: 'flex-start' }} direction={{ base: 'column', sm: 'row' }}>
+        <HStack gap={3} minW={0} align="flex-start">
+          {registration.photoURL ? (
+            <Image src={registration.photoURL} alt={registration.displayName} boxSize="40px" borderRadius="full" objectFit="cover" />
+          ) : (
+            <Flex boxSize="40px" borderRadius="full" bg="brand.500/20" color="brand.200" align="center" justify="center" flexShrink={0}>
+              <Users size={18} />
+            </Flex>
+          )}
+          <Box minW={0}>
+            <Text color="white" fontWeight="semibold" lineClamp={1}>{registration.displayName}</Text>
+            <HStack gap={2} color="whiteAlpha.600" fontSize="sm" minW={0}>
+              <Mail size={14} />
+              <Text lineClamp={1}>{registration.email || registration.userId}</Text>
+            </HStack>
+            <Text color="whiteAlpha.400" fontSize="xs" mt={1}>
+              Requested {formatDateTime(registration.requestedAt)}
+            </Text>
+          </Box>
+        </HStack>
+
+        <VStack align={{ base: 'stretch', sm: 'flex-end' }} gap={2}>
+          <HStack gap={2} flexWrap="wrap" justify={{ base: 'flex-start', sm: 'flex-end' }}>
+            <Badge bg="whiteAlpha.100" color="whiteAlpha.800" borderRadius="full" px={3} py={1}>
+              {paymentStatusLabels[registration.paymentStatus]}
+            </Badge>
+            {registration.paymentAmount && (
+              <Badge bg="brand.500/20" color="brand.200" borderRadius="full" px={3} py={1}>
+                {registration.paymentCurrency || 'ZMW'} {registration.paymentAmount.toFixed(2)}
+              </Badge>
+            )}
+          </HStack>
+          <HStack gap={2} flexWrap="wrap" justify={{ base: 'flex-start', sm: 'flex-end' }}>
+            {canMarkPaid && (
+              <Button size="xs" bg="blue.500/15" color="blue.200" borderRadius="full" _hover={{ bg: 'blue.500/25' }} onClick={() => onMarkPaid(registration)}>
+                <CreditCard size={14} />
+                Mark Paid
+              </Button>
+            )}
+            {canMarkPaid && (
+              <Button size="xs" bg="green.500/15" color="green.200" borderRadius="full" _hover={{ bg: 'green.500/25' }} onClick={() => onConfirm(registration, true)}>
+                <CheckCircle2 size={14} />
+                Paid + Confirm
+              </Button>
+            )}
+            {canConfirm && !needsPayment && (
+              <Button size="xs" bg="green.500/15" color="green.200" borderRadius="full" _hover={{ bg: 'green.500/25' }} onClick={() => onConfirm(registration)}>
+                <CheckCircle2 size={14} />
+                Confirm
+              </Button>
+            )}
+            {canMoveToWaitlist && (
+              <Button size="xs" bg="orange.500/15" color="orange.200" borderRadius="full" _hover={{ bg: 'orange.500/25' }} onClick={() => onWaitlist(registration)}>
+                Waitlist
+              </Button>
+            )}
+            {canDecline && (
+              <Button size="xs" bg="red.500/15" color="red.200" borderRadius="full" _hover={{ bg: 'red.500/25' }} onClick={() => onDecline(registration)}>
+                Decline
+              </Button>
+            )}
+          </HStack>
+        </VStack>
+      </Flex>
+    </Box>
+  )
+}
+
+function SignupSection({
+  title,
+  people,
+  emptyLabel,
+  loading,
+  error,
+}: {
+  title: string
+  people: SignupPerson[]
+  emptyLabel: string
+  loading: boolean
+  error?: string
+}) {
+  return (
+    <Box>
+      <Flex justify="space-between" align="center" mb={3}>
+        <Text color="white" fontWeight="semibold">{title}</Text>
+        <Badge bg="whiteAlpha.100" color="whiteAlpha.800" borderRadius="full" px={3} py={1}>
+          {people.length}
+        </Badge>
+      </Flex>
+
+      {loading && (
+        <Flex align="center" gap={2} color="whiteAlpha.600" fontSize="sm">
+          <Spinner size="sm" color="brand.500" />
+          <Text>Loading user details...</Text>
+        </Flex>
+      )}
+
+      {!loading && error && (
+        <Box p={3} bg="red.500/10" border="1px solid" borderColor="red.500/30" borderRadius="xl">
+          <Text color="red.200" fontSize="sm">{error}</Text>
+        </Box>
+      )}
+
+      {!loading && !error && people.length === 0 && (
+        <Box p={4} bg="whiteAlpha.50" border="1px solid" borderColor="whiteAlpha.100" borderRadius="xl">
+          <Text color="whiteAlpha.500" fontSize="sm">{emptyLabel}</Text>
+        </Box>
+      )}
+
+      {!loading && !error && people.length > 0 && (
+        <VStack align="stretch" gap={2}>
+          {people.map((person) => (
+            <Flex
+              key={person.id}
+              align={{ base: 'flex-start', sm: 'center' }}
+              justify="space-between"
+              gap={3}
+              direction={{ base: 'column', sm: 'row' }}
+              p={3}
+              bg="whiteAlpha.50"
+              border="1px solid"
+              borderColor="whiteAlpha.100"
+              borderRadius="xl"
+            >
+              <HStack gap={3} minW={0}>
+                {person.photoURL ? (
+                  <Image src={person.photoURL} alt={person.displayName} boxSize="36px" borderRadius="full" objectFit="cover" />
+                ) : (
+                  <Flex boxSize="36px" borderRadius="full" bg="brand.500/20" color="brand.200" align="center" justify="center" flexShrink={0}>
+                    <Users size={17} />
+                  </Flex>
+                )}
+                <Box minW={0}>
+                  <Text color="white" fontWeight="semibold" lineClamp={1}>{person.displayName}</Text>
+                  <Text color="whiteAlpha.500" fontSize="xs" lineClamp={1}>{person.id}</Text>
+                </Box>
+              </HStack>
+
+              {person.email && (
+                <HStack gap={2} color="whiteAlpha.650" fontSize="sm" minW={0}>
+                  <Mail size={15} />
+                  <Text lineClamp={1}>{person.email}</Text>
+                </HStack>
+              )}
+            </Flex>
+          ))}
+        </VStack>
+      )}
     </Box>
   )
 }
@@ -658,6 +1463,54 @@ function SessionFormFields({ form, setForm }: { form: SessionForm; setForm: Reac
         <Field label="Location"><Input value={form.location} onChange={(e) => setForm((prev) => ({ ...prev, location: e.target.value }))} bg="gray.800" color="white" borderColor="whiteAlpha.200" /></Field>
         <Field label="Capacity"><Input type="number" value={form.capacity} onChange={(e) => setForm((prev) => ({ ...prev, capacity: e.target.value }))} bg="gray.800" color="white" borderColor="whiteAlpha.200" /></Field>
       </SimpleGrid>
+      <SimpleGrid columns={{ base: 1, md: 2 }} gap={4}>
+        <Field label="Access">
+          <select value={form.accessMode} onChange={(e) => setForm((prev) => ({ ...prev, accessMode: e.target.value as SessionAccessMode }))} style={selectStyle}>
+            <option value="open">Open</option>
+            <option value="invite_only">Invite only</option>
+          </select>
+        </Field>
+        <Field label="Approval">
+          <select value={form.approvalMode} onChange={(e) => setForm((prev) => ({ ...prev, approvalMode: e.target.value as SessionApprovalMode }))} style={selectStyle}>
+            <option value="auto">Auto confirm</option>
+            <option value="manual">Manual approval</option>
+          </select>
+        </Field>
+      </SimpleGrid>
+      <SimpleGrid columns={{ base: 1, md: 3 }} gap={4}>
+        <Field label="Payment">
+          <select
+            value={form.paymentMode}
+            onChange={(e) => {
+              const paymentMode = e.target.value as SessionPaymentMode
+              setForm((prev) => ({
+                ...prev,
+                paymentMode,
+                paymentProvider: paymentMode === 'paid' && prev.paymentProvider === 'none' ? 'manual_external' : paymentMode === 'free' ? 'none' : prev.paymentProvider,
+                approvalMode: paymentMode === 'paid' && prev.approvalMode === 'auto' ? 'manual' : prev.approvalMode,
+              }))
+            }}
+            style={selectStyle}
+          >
+            <option value="free">Free</option>
+            <option value="paid">Paid</option>
+          </select>
+        </Field>
+        <Field label="Provider">
+          <select value={form.paymentProvider} onChange={(e) => setForm((prev) => ({ ...prev, paymentProvider: e.target.value as SessionPaymentProvider }))} style={selectStyle} disabled={form.paymentMode === 'free'}>
+            <option value="none">None</option>
+            <option value="manual_external">Manual external</option>
+            <option value="lenco">Lenco</option>
+          </select>
+        </Field>
+        <Field label="Currency"><Input value={form.currency} onChange={(e) => setForm((prev) => ({ ...prev, currency: e.target.value.toUpperCase() }))} bg="gray.800" color="white" borderColor="whiteAlpha.200" /></Field>
+      </SimpleGrid>
+      {form.paymentMode === 'paid' && (
+        <>
+          <Field label="Price"><Input type="number" min={0} step="0.01" value={form.price} onChange={(e) => setForm((prev) => ({ ...prev, price: e.target.value }))} bg="gray.800" color="white" borderColor="whiteAlpha.200" /></Field>
+          <Field label="Payment Instructions"><Textarea value={form.paymentInstructions} onChange={(e) => setForm((prev) => ({ ...prev, paymentInstructions: e.target.value }))} bg="gray.800" color="white" borderColor="whiteAlpha.200" rows={3} placeholder="Bank transfer, cash, mobile money, or confirmation notes shown to users." /></Field>
+        </>
+      )}
       <Field label="Facilitator"><Input value={form.facilitator} onChange={(e) => setForm((prev) => ({ ...prev, facilitator: e.target.value }))} bg="gray.800" color="white" borderColor="whiteAlpha.200" /></Field>
       <Field label="Cover Image">
         <VStack align="stretch" gap={3}>

@@ -86,6 +86,46 @@ export type QuestDifficulty = 'beginner' | 'intermediate' | 'advanced' | 'any';
 /** Session status */
 export type SessionStatus = 'draft' | 'published' | 'cancelled' | 'completed';
 
+/** Session access control */
+export type SessionAccessMode = 'open' | 'invite_only';
+
+/** Session payment requirement */
+export type SessionPaymentMode = 'free' | 'paid';
+
+/** Payment provider for paid sessions */
+export type SessionPaymentProvider = 'none' | 'manual_external' | 'lenco';
+
+/** Whether signups are confirmed automatically or by admin review */
+export type SessionApprovalMode = 'auto' | 'manual';
+
+/** Registration lifecycle status */
+export type SessionRegistrationStatus =
+  | 'requested'
+  | 'pending_payment'
+  | 'paid_pending_confirmation'
+  | 'confirmed'
+  | 'waitlisted'
+  | 'declined'
+  | 'cancelled';
+
+/** Registration payment status */
+export type SessionRegistrationPaymentStatus =
+  | 'not_required'
+  | 'unpaid'
+  | 'pending'
+  | 'paid_online'
+  | 'paid_external'
+  | 'waived'
+  | 'failed';
+
+/** Manual or online payment method */
+export type SessionRegistrationPaymentMethod =
+  | 'cash'
+  | 'bank_transfer'
+  | 'mobile_money'
+  | 'card'
+  | 'other';
+
 /** Art location types */
 export type ArtLocationType =
   | 'gallery'
@@ -394,9 +434,46 @@ export interface Session extends BaseDocument {
 
   // Registration
   registrationDeadline?: FirestoreTimestamp;
+  accessMode?: SessionAccessMode;
+  paymentMode?: SessionPaymentMode;
+  paymentProvider?: SessionPaymentProvider;
+  approvalMode?: SessionApprovalMode;
+  paymentInstructions?: string;
   isFree: boolean;
   price?: number;
   currency?: string;
+}
+
+/**
+ * Session Registration - Signup and payment/confirmation state
+ * Stored in: /sessionRegistrations/{registrationId}
+ */
+export interface SessionRegistration extends BaseDocument {
+  sessionId: string;
+  userId: string;
+  displayName: string;
+  email: string;
+  photoURL?: string | null;
+
+  status: SessionRegistrationStatus;
+  paymentStatus: SessionRegistrationPaymentStatus;
+  paymentMethod?: SessionRegistrationPaymentMethod;
+  paymentReference?: string;
+  paymentNotes?: string;
+  paymentTransactionId?: string;
+  paymentAmount?: number;
+  paymentCurrency?: string;
+
+  requestedAt: FirestoreTimestamp;
+  paidAt?: FirestoreTimestamp;
+  confirmedAt?: FirestoreTimestamp;
+  confirmedBy?: string;
+  confirmationEmailSentAt?: FirestoreTimestamp;
+  declinedAt?: FirestoreTimestamp;
+  declinedBy?: string;
+  cancelledAt?: FirestoreTimestamp;
+  cancelledBy?: string;
+  adminNotes?: string;
 }
 
 /** Session location details */
@@ -926,6 +1003,7 @@ export interface CollectionTypes {
   artistFollows: ArtistFollow;
   artworks: Artwork;
   sessions: Session;
+  sessionRegistrations: SessionRegistration;
   quests: Quest;
   questSubmissions: QuestSubmission;
   communityPosts: CommunityPost;
