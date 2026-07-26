@@ -603,6 +603,7 @@ async function markRegistrationPaid(input: {
 export const chargeSessionMobileMoney = onCall(
   {
     cors: true,
+    invoker: "public",
     secrets: [lencoSecretKey],
   },
   async (request) => {
@@ -772,6 +773,7 @@ export const chargeSessionMobileMoney = onCall(
 export const checkSessionMomoStatus = onCall(
   {
     cors: true,
+    invoker: "public",
     secrets: [lencoSecretKey],
   },
   async (request) => {
