@@ -69,6 +69,15 @@ service firebase.storage {
       allow write: if isAuthenticated() && request.auth.uid == userId && isValidSize() && isImage();
     }
 
+    // Session/Event gallery images
+    match /sessions/gallery/{userId}/{fileName} {
+      allow read: if true;
+      allow write: if isCuratorOrAdmin()
+        && request.auth.uid == userId
+        && isValidSize()
+        && isImage();
+    }
+
     match /sessions/{sessionId}/{fileName} {
       allow read: if true;
       allow write: if isCuratorOrAdmin() && isValidSize() && isImage();

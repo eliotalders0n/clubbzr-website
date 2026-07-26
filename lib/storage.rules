@@ -17,6 +17,13 @@ service firebase.storage {
       return request.auth != null;
     }
 
+    // Check if signed-in user can manage admin media
+    function isCuratorOrAdmin() {
+      return isAuthenticated()
+        && firestore.exists(/databases/(default)/documents/users/$(request.auth.uid))
+        && firestore.get(/databases/(default)/documents/users/$(request.auth.uid)).data.role in ['admin', 'curator'];
+    }
+
     // Get current user's ID
     function userId() {
       return request.auth.uid;
@@ -241,22 +248,28 @@ service firebase.storage {
     }
 
     // ==========================================================================
-    // SESSION GALLERY
-    // Path: /sessions/{sessionId}/{filename}
+    // SESSION MEDIA
+    // Paths:
+    // - /sessions/covers/{userId}/{filename}
+    // - /sessions/gallery/{userId}/{filename}
     // ==========================================================================
 
-    match /sessions/{sessionId}/{allPaths=**} {
-      // Anyone authenticated can view session galleries
-      allow read: if isAuthenticated();
+    match /sessions/covers/{userId}/{allPaths=**} {
+      allow read: if true;
 
-      // Authenticated users can upload to session galleries
-      // In production, restrict to facilitators and attendees
       allow write: if isAuthenticated()
-        && (isAllowedImageType() || isAllowedVideoType())
-        && (isImage() ? isValidImageSize() : isValidVideoSize());
+        && request.auth.uid == userId
+        && isAllowedImageType()
+        && isValidImageSize();
+    }
 
-      // Allow authenticated users to delete
-      allow delete: if isAuthenticated();
+    match /sessions/gallery/{userId}/{allPaths=**} {
+      allow read: if true;
+
+      allow write: if isCuratorOrAdmin()
+        && request.auth.uid == userId
+        && isAllowedImageType()
+        && isValidImageSize();
     }
 
     // ==========================================================================
