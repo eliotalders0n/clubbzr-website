@@ -3,7 +3,7 @@ import {randomBytes} from "node:crypto";
 import {defineSecret} from "firebase-functions/params";
 import {setGlobalOptions} from "firebase-functions/v2";
 import {onDocumentCreated, onDocumentUpdated} from "firebase-functions/v2/firestore";
-import {HttpsError, onCall} from "firebase-functions/v2/https";
+import {HttpsError, onCall, onRequest} from "firebase-functions/v2/https";
 import * as logger from "firebase-functions/logger";
 
 admin.initializeApp();
@@ -11,6 +11,7 @@ setGlobalOptions({maxInstances: 10});
 
 const db = admin.firestore();
 const lencoSecretKey = defineSecret("LENCO_SECRET_KEY");
+const whatsappWebhookVerifyToken = defineSecret("WHATSAPP_WEBHOOK_VERIFY_TOKEN");
 
 const LENCO_API_BASE = "https://api.lenco.co/access/v2";
 const LENCO_REQUEST_TIMEOUT_MS = 15000;
@@ -22,6 +23,7 @@ const SESSION_REGISTRATIONS_COLLECTION = "sessionRegistrations";
 const SESSION_PAYMENT_TRANSACTIONS_COLLECTION = "sessionPaymentTransactions";
 const SESSION_PAYMENT_RETURNS_COLLECTION = "sessionPaymentReturns";
 const SESSION_PAYMENT_WITHDRAWALS_COLLECTION = "sessionPaymentWithdrawals";
+const WHATSAPP_WEBHOOK_EVENTS_COLLECTION = "whatsappWebhookEvents";
 const MAIL_COLLECTION = "mail";
 
 type MobileMoneyOperator = "mtn" | "airtel" | "zamtel";
@@ -663,6 +665,57 @@ async function requirePaymentAccess(
     "You do not have access to this payment."
   );
 }
+
+export const whatsappWebhook = onRequest(
+  {
+    invoker: "public",
+    secrets: [whatsappWebhookVerifyToken],
+  },
+  async (request, response) => {
+    if (request.method === "GET") {
+      const mode = normalizeOptionalString(request.query["hub.mode"]);
+      const token = normalizeOptionalString(request.query["hub.verify_token"]);
+      const challenge = normalizeOptionalString(request.query["hub.challenge"]);
+
+      if (
+        mode === "subscribe" &&
+        token === whatsappWebhookVerifyToken.value() &&
+        challenge
+      ) {
+        logger.info("WhatsApp webhook verified");
+        response.status(200).send(challenge);
+        return;
+      }
+
+      logger.warn("WhatsApp webhook verification failed", {
+        mode,
+        hasToken: Boolean(token),
+        hasChallenge: Boolean(challenge),
+      });
+      response.status(403).send("Forbidden");
+      return;
+    }
+
+    if (request.method === "POST") {
+      await db.collection(WHATSAPP_WEBHOOK_EVENTS_COLLECTION).add({
+        body: serializeForCallable(request.body || {}),
+        headers: {
+          "x-hub-signature-256": normalizeOptionalString(
+            request.get("x-hub-signature-256")
+          ),
+          "user-agent": normalizeOptionalString(request.get("user-agent")),
+        },
+        receivedAt: admin.firestore.FieldValue.serverTimestamp(),
+      });
+
+      response.status(200).send("EVENT_RECEIVED");
+      return;
+    }
+
+    response.set("Allow", "GET, POST");
+    response.status(405).send("Method Not Allowed");
+  }
+);
 
 export const notifyAdminsOnSessionRegistration = onDocumentCreated(
   `${SESSION_REGISTRATIONS_COLLECTION}/{registrationId}`,
