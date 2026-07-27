@@ -13,6 +13,8 @@ const db = admin.firestore();
 const lencoSecretKey = defineSecret("LENCO_SECRET_KEY");
 
 const LENCO_API_BASE = "https://api.lenco.co/access/v2";
+const LENCO_REQUEST_TIMEOUT_MS = 15000;
+const LENCO_DASHBOARD_REQUEST_TIMEOUT_MS = 6000;
 const DEFAULT_CURRENCY = "ZMW";
 const DEFAULT_ADMIN_NOTIFICATION_EMAIL = "clubbzrzm@gmail.com";
 const APP_BASE_URL = process.env.APP_BASE_URL || "https://clubbzr.com";
@@ -618,7 +620,8 @@ async function queueUserConfirmationEmail(input: {
 async function lencoRequest(
   path: string,
   init: RequestInit,
-  secret: string
+  secret: string,
+  timeoutMs = LENCO_REQUEST_TIMEOUT_MS
 ): Promise<Record<string, unknown>> {
   if (!secret) {
     throw new HttpsError(
@@ -627,14 +630,36 @@ async function lencoRequest(
     );
   }
 
-  const response = await fetch(`${LENCO_API_BASE}${path}`, {
-    ...init,
-    headers: {
-      "Content-Type": "application/json",
-      "Authorization": `Bearer ${secret}`,
-      ...(init.headers || {}),
-    },
-  });
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+  let response: Response;
+
+  try {
+    response = await fetch(`${LENCO_API_BASE}${path}`, {
+      ...init,
+      signal: controller.signal,
+      headers: {
+        "Content-Type": "application/json",
+        "Authorization": `Bearer ${secret}`,
+        ...(init.headers || {}),
+      },
+    });
+  } catch (error) {
+    if (error instanceof Error && error.name === "AbortError") {
+      logger.warn("Lenco API request timed out", {
+        path,
+        timeoutMs,
+      });
+      throw new HttpsError(
+        "deadline-exceeded",
+        "Lenco request timed out."
+      );
+    }
+
+    throw error;
+  } finally {
+    clearTimeout(timeoutId);
+  }
 
   const parsedResponse = await response.json().catch(() => ({}));
   const responseData = parsedResponse as Record<string, unknown>;
@@ -679,11 +704,12 @@ async function requireAdminAuth(uid: string | undefined): Promise<string> {
 
 async function safeLencoRead(
   path: string,
-  secret: string
+  secret: string,
+  timeoutMs = LENCO_DASHBOARD_REQUEST_TIMEOUT_MS
 ): Promise<{data: Record<string, unknown> | null; error: string | null}> {
   try {
     return {
-      data: await lencoRequest(path, {method: "GET"}, secret),
+      data: await lencoRequest(path, {method: "GET"}, secret, timeoutMs),
       error: null,
     };
   } catch (error) {
@@ -859,6 +885,7 @@ export const adminGetPaymentsDashboard = onCall(
     cors: true,
     invoker: "public",
     secrets: [lencoSecretKey],
+    timeoutSeconds: 30,
   },
   async (request) => {
     await requireAdminAuth(request.auth?.uid);

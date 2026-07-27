@@ -80,6 +80,8 @@ const tabs: { value: PaymentsTab; label: string }[] = [
   { value: 'returns', label: 'Returns' },
 ]
 
+const DASHBOARD_LOAD_TIMEOUT_MS = 18000
+
 const emptyCollectionForm: CollectionForm = {
   sessionId: '',
   registrationId: '',
@@ -110,6 +112,24 @@ const asNumber = (value: unknown): number => {
 
 const formatMoney = (amount: unknown, currency = 'ZMW'): string =>
   `${currency} ${asNumber(amount).toFixed(2)}`
+
+const withTimeout = <T,>(promise: Promise<T>, timeoutMs: number, message: string): Promise<T> =>
+  new Promise((resolve, reject) => {
+    const timeoutId = window.setTimeout(() => {
+      reject(new Error(message))
+    }, timeoutMs)
+
+    promise.then(
+      (value) => {
+        window.clearTimeout(timeoutId)
+        resolve(value)
+      },
+      (reason) => {
+        window.clearTimeout(timeoutId)
+        reject(reason)
+      }
+    )
+  })
 
 const formatDate = (value: unknown): string => {
   if (!value) return 'Not recorded'
@@ -304,10 +324,14 @@ export default function Payments() {
     setLoading(true)
     setError(null)
     try {
-      const data = await getAdminPaymentsDashboard({
-        sessionId: sessionFilter === 'all' ? undefined : sessionFilter,
-        limit: 150,
-      })
+      const data = await withTimeout(
+        getAdminPaymentsDashboard({
+          sessionId: sessionFilter === 'all' ? undefined : sessionFilter,
+          limit: 150,
+        }),
+        DASHBOARD_LOAD_TIMEOUT_MS,
+        'Payments dashboard is taking too long to respond. Try refresh again after the functions deploy finishes.'
+      )
       setDashboard(data)
     } catch (loadError) {
       setError(loadError instanceof Error ? loadError.message : 'Unable to load payments.')
@@ -526,7 +550,15 @@ export default function Payments() {
           </Flex>
         ) : (
           <VStack align="stretch" gap={5}>
-            {activeTab === 'overview' && (
+            {!dashboard && (
+              <Panel title="Dashboard unavailable">
+                <Text color="whiteAlpha.600">
+                  The payments dashboard did not finish loading. Refresh after the latest functions deploy completes.
+                </Text>
+              </Panel>
+            )}
+
+            {dashboard && activeTab === 'overview' && (
               <>
                 <Panel title="Session Totals">
                   <VStack align="stretch" gap={0}>
@@ -565,7 +597,7 @@ export default function Payments() {
               </>
             )}
 
-            {activeTab === 'collections' && (
+            {dashboard && activeTab === 'collections' && (
               <>
                 <Panel title="Collect Session Payment">
                   <form onSubmit={handleCollect}>
@@ -613,7 +645,7 @@ export default function Payments() {
               </>
             )}
 
-            {activeTab === 'reconciliation' && (
+            {dashboard && activeTab === 'reconciliation' && (
               <Panel title={`Reconciliation Issues (${dashboard?.reconciliation.issueCount || 0})`}>
                 <VStack align="stretch" gap={4}>
                   {dashboard?.reconciliation.statusMismatches.map((issue, index) => (
@@ -639,7 +671,7 @@ export default function Payments() {
               </Panel>
             )}
 
-            {activeTab === 'withdrawals' && (
+            {dashboard && activeTab === 'withdrawals' && (
               <>
                 <Panel title="Accounts">
                   <SimpleGrid columns={{ base: 1, lg: 2 }} gap={3}>
@@ -685,7 +717,7 @@ export default function Payments() {
               </>
             )}
 
-            {activeTab === 'returns' && (
+            {dashboard && activeTab === 'returns' && (
               <>
                 <Panel title="Record Return">
                   <form onSubmit={handleRecordReturn}>
