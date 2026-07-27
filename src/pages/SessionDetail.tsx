@@ -19,6 +19,7 @@ import {
 } from '@chakra-ui/react'
 import { motion } from 'framer-motion'
 import { Timestamp, arrayUnion, arrayRemove } from 'firebase/firestore'
+import { MessageCircle } from 'lucide-react'
 
 import { Header } from '@/components/layout/Header'
 import { Footer } from '@/components/layout/Footer'
@@ -29,6 +30,8 @@ import {
   createSessionRegistration,
   getInitialRegistrationState,
   getSessionRegistrationId,
+  getUserWhatsAppPhone,
+  hasUserWhatsAppPhone,
   normalizeSessionRegistrationConfig,
   updateSessionRegistration,
 } from '../../lib/sessionRegistrations'
@@ -103,12 +106,56 @@ function PendingRegistrationState({
   )
 }
 
+function WhatsAppRequiredState({ onUpdateProfile }: { onUpdateProfile: () => void }) {
+  return (
+    <Box
+      p={4}
+      bg="brand.500/10"
+      border="1px solid"
+      borderColor="brand.400/30"
+      borderRadius="xl"
+      textAlign="center"
+    >
+      <Flex
+        mx="auto"
+        mb={3}
+        boxSize="42px"
+        borderRadius="full"
+        bg="brand.500/15"
+        color="brand.200"
+        align="center"
+        justify="center"
+      >
+        <MessageCircle size={20} />
+      </Flex>
+      <Text color="white" fontWeight="semibold">WhatsApp number required</Text>
+      <Text color="whiteAlpha.600" fontSize="sm" mt={1}>
+        Add your WhatsApp number to your profile before registering for sessions.
+      </Text>
+      <Button
+        w="full"
+        mt={4}
+        bg="brand.500"
+        color="white"
+        size="md"
+        borderRadius="xl"
+        _hover={{ bg: 'brand.600' }}
+        onClick={onUpdateProfile}
+      >
+        Update Profile
+      </Button>
+    </Box>
+  )
+}
+
 export default function SessionDetail() {
   const { id } = useParams<{ id: string }>()
   const navigate = useNavigate()
   const { user, initialized: authInitialized } = useAuth()
   const userId = user?.uid
   const isAuthenticated = Boolean(userId)
+  const savedWhatsAppPhone = getUserWhatsAppPhone(user)
+  const hasSavedWhatsAppPhone = hasUserWhatsAppPhone(user)
 
   // Fetch session from Firebase
   const { data: session, loading, error, refetch } = useDocument('sessions', id)
@@ -177,6 +224,10 @@ export default function SessionDetail() {
       return
     }
     if (!session || !id) return
+    if (!hasSavedWhatsAppPhone) {
+      setRegistrationError('Add your WhatsApp number to your profile before registering for sessions.')
+      return
+    }
 
     setRegistrationError(null)
     setSubmittingRegistration(true)
@@ -188,8 +239,16 @@ export default function SessionDetail() {
     }
 
     const initialState = getInitialRegistrationState(session, sessionData?.attendeeCount || 0)
+    const contactPatch = {
+      displayName: user.displayName || 'Club BZR member',
+      email: user.email || '',
+      phone: user.phone?.trim() || savedWhatsAppPhone,
+      whatsappPhone: savedWhatsAppPhone,
+      photoURL: user.photoURL || null,
+    }
     const result = sessionData?.currentRegistration
       ? await updateSessionRegistration(sessionData.currentRegistration.id, {
+        ...contactPatch,
         status: initialState.status,
         paymentStatus: initialState.paymentStatus,
         requestedAt: Timestamp.now(),
@@ -678,6 +737,8 @@ export default function SessionDetail() {
                             Club BZR will add invited guests directly.
                           </Text>
                         </Box>
+                      ) : !registrationStatus && !hasSavedWhatsAppPhone ? (
+                        <WhatsAppRequiredState onUpdateProfile={() => navigate('/profile')} />
                       ) : sessionData?.isRegistered ? (
                         <VStack gap={2} w="full">
                           <Text color="green.400" fontWeight="medium">
@@ -786,6 +847,32 @@ export default function SessionDetail() {
                         <Text color="red.300" fontSize="sm" textAlign="center" mt={3}>
                           {registrationError}
                         </Text>
+                      )}
+                      {registrationStatus && !hasSavedWhatsAppPhone && (
+                        <Box
+                          mt={3}
+                          p={3}
+                          bg="brand.500/10"
+                          border="1px solid"
+                          borderColor="brand.400/30"
+                          borderRadius="xl"
+                        >
+                          <Text color="brand.100" fontSize="sm" fontWeight="semibold">
+                            Add your WhatsApp number for confirmation updates.
+                          </Text>
+                          <Button
+                            mt={3}
+                            w="full"
+                            size="sm"
+                            bg="brand.500"
+                            color="white"
+                            borderRadius="lg"
+                            _hover={{ bg: 'brand.600' }}
+                            onClick={() => navigate('/profile')}
+                          >
+                            Update Profile
+                          </Button>
+                        </Box>
                       )}
                     </>
                   )}
@@ -961,6 +1048,7 @@ export default function SessionDetail() {
           sessionTitle={session.title}
           amount={paymentAmount}
           currency={currency}
+          defaultPhoneNumber={savedWhatsAppPhone}
           existingTransactionId={
             hasPendingOnlinePayment ? sessionData.currentRegistration.paymentTransactionId : undefined
           }

@@ -592,16 +592,6 @@ async function getRegistrationWhatsAppRecipient(input: {
   registrationId: string;
   registrationData: FirebaseFirestore.DocumentData;
 }): Promise<string | null> {
-  const registrationPhone = [
-    input.registrationData.whatsappPhone,
-    input.registrationData.phone,
-    input.registrationData.mobilePhone,
-    input.registrationData.contactPhone,
-  ]
-    .map((value) => normalizeWhatsAppPhoneNumber(value))
-    .find(Boolean);
-  if (registrationPhone) return registrationPhone;
-
   const userId = normalizeOptionalString(input.registrationData.userId);
   if (userId) {
     const userSnapshot = await db.collection("users").doc(userId).get();
@@ -616,6 +606,16 @@ async function getRegistrationWhatsAppRecipient(input: {
       .find(Boolean);
     if (userPhone) return userPhone;
   }
+
+  const registrationPhone = [
+    input.registrationData.whatsappPhone,
+    input.registrationData.phone,
+    input.registrationData.mobilePhone,
+    input.registrationData.contactPhone,
+  ]
+    .map((value) => normalizeWhatsAppPhoneNumber(value))
+    .find(Boolean);
+  if (registrationPhone) return registrationPhone;
 
   const paymentSnapshot = await db
     .collection(SESSION_PAYMENT_TRANSACTIONS_COLLECTION)

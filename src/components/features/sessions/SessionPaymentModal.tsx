@@ -30,6 +30,7 @@ interface SessionPaymentModalProps {
   sessionTitle: string
   amount: number
   currency: string
+  defaultPhoneNumber?: string
   existingTransactionId?: string
   existingReference?: string
 }
@@ -90,10 +91,11 @@ export function SessionPaymentModal({
   sessionTitle,
   amount,
   currency,
+  defaultPhoneNumber,
   existingTransactionId,
   existingReference,
 }: SessionPaymentModalProps) {
-  const [phoneNumber, setPhoneNumber] = useState('')
+  const [phoneNumber, setPhoneNumber] = useState(() => normalizePhoneNumber(defaultPhoneNumber || ''))
   const [operator, setOperator] = useState<MobileMoneyOperator>('airtel')
   const [status, setStatus] = useState<PaymentUiStatus>('idle')
   const [error, setError] = useState('')
@@ -102,7 +104,7 @@ export function SessionPaymentModal({
   const [clientReference, setClientReference] = useState('')
 
   const handleClose = useCallback(() => {
-    setPhoneNumber('')
+    setPhoneNumber(normalizePhoneNumber(defaultPhoneNumber || ''))
     setOperator('airtel')
     setStatus('idle')
     setError('')
@@ -110,7 +112,7 @@ export function SessionPaymentModal({
     setTransaction(null)
     setClientReference('')
     onClose()
-  }, [onClose])
+  }, [defaultPhoneNumber, onClose])
 
   const resumableTransaction = useMemo<SessionMobileMoneyResponse | null>(() => {
     if (!isOpen || transaction || (!existingTransactionId && !existingReference)) return null

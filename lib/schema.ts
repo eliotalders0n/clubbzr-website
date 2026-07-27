@@ -163,6 +163,7 @@ export interface User extends BaseDocument {
   photoURL: string | null;
   phone?: string;
   whatsappPhone?: string;
+  gender?: string;
   role: UserRole;
   bio?: string;
   location?: string;

@@ -54,6 +54,9 @@ export interface SignInData {
 export interface UpdateProfileData {
   displayName?: string;
   photoURL?: string;
+  phone?: string;
+  whatsappPhone?: string;
+  gender?: string;
   bio?: string;
   location?: string;
   website?: string;

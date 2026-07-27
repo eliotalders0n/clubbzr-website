@@ -98,6 +98,19 @@ export const getAvailableSessionSlots = (
   registrations: Pick<SessionRegistration, 'status'>[]
 ): number => Math.max((session.capacity || 0) - getRegistrationCounts(registrations).confirmed, 0);
 
+export const getUserWhatsAppPhone = (
+  user?: Pick<User, 'phone' | 'whatsappPhone'> | null
+): string => {
+  const whatsappPhone = user?.whatsappPhone?.trim();
+  if (whatsappPhone) return whatsappPhone;
+
+  return user?.phone?.trim() || '';
+};
+
+export const hasUserWhatsAppPhone = (
+  user?: Pick<User, 'phone' | 'whatsappPhone'> | null
+): boolean => Boolean(getUserWhatsAppPhone(user));
+
 export const getInitialRegistrationState = (
   session: Session,
   confirmedCount: number
@@ -141,14 +154,15 @@ export const buildSessionRegistrationPayload = (
   confirmedCount: number
 ): CreateDocument<SessionRegistration> => {
   const initialState = getInitialRegistrationState(session, confirmedCount);
+  const whatsappPhone = getUserWhatsAppPhone(user);
 
   return {
     sessionId: session.id,
     userId: user.uid || user.id,
     displayName: user.displayName || 'Club BZR member',
     email: user.email || '',
-    ...(user.phone ? { phone: user.phone } : {}),
-    ...(user.whatsappPhone ? { whatsappPhone: user.whatsappPhone } : {}),
+    ...(whatsappPhone ? { phone: user.phone?.trim() || whatsappPhone } : {}),
+    ...(whatsappPhone ? { whatsappPhone } : {}),
     photoURL: user.photoURL || null,
     status: initialState.status,
     paymentStatus: initialState.paymentStatus,
@@ -163,6 +177,16 @@ export const createSessionRegistration = async (
   user: User,
   confirmedCount: number
 ) => {
+  if (!hasUserWhatsAppPhone(user)) {
+    return {
+      success: false,
+      error: {
+        code: 'profile/whatsapp-required',
+        message: 'Add your WhatsApp number to your profile before registering for sessions.',
+      },
+    };
+  }
+
   const userId = user.uid || user.id;
   return createDocumentWithId(
     'sessionRegistrations',

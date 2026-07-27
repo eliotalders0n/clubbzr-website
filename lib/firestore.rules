@@ -85,6 +85,46 @@ service cloud.firestore {
       return value is string && value.size() >= min && value.size() <= max;
     }
 
+    function hasUserDoc() {
+      return isAuthenticated()
+        && exists(/databases/$(database)/documents/users/$(userId()));
+    }
+
+    function hasSavedWhatsAppField() {
+      return 'whatsappPhone' in getUserData()
+        && getUserData().whatsappPhone is string
+        && getUserData().whatsappPhone.size() > 0;
+    }
+
+    function hasSavedLegacyPhoneField() {
+      return 'phone' in getUserData()
+        && getUserData().phone is string
+        && getUserData().phone.size() > 0;
+    }
+
+    function hasSavedWhatsAppPhone() {
+      return hasUserDoc()
+        && (hasSavedWhatsAppField() || hasSavedLegacyPhoneField());
+    }
+
+    function requestUsesSavedWhatsAppPhone() {
+      return hasSavedWhatsAppPhone()
+        && 'whatsappPhone' in request.resource.data
+        && request.resource.data.whatsappPhone is string
+        && request.resource.data.whatsappPhone.size() > 0
+        && (
+          (
+            hasSavedWhatsAppField()
+            && request.resource.data.whatsappPhone == getUserData().whatsappPhone
+          )
+          || (
+            !hasSavedWhatsAppField()
+            && hasSavedLegacyPhoneField()
+            && request.resource.data.whatsappPhone == getUserData().phone
+          )
+        );
+    }
+
     // Validate the current user is the only item added to a list field
     function currentUserAddedToList(field) {
       return resource.data[field] is list
@@ -208,6 +248,7 @@ service cloud.firestore {
             && (
               (
                 currentUserAddedToList('attendees')
+                && hasSavedWhatsAppPhone()
                 && request.resource.data.attendees.size() <= resource.data.capacity
               )
               || currentUserRemovedFromList('attendees')
@@ -216,7 +257,10 @@ service cloud.firestore {
           || (
             request.resource.data.diff(resource.data).affectedKeys().hasOnly(['waitlist', 'updatedAt'])
             && (
-              currentUserAddedToList('waitlist')
+              (
+                currentUserAddedToList('waitlist')
+                && hasSavedWhatsAppPhone()
+              )
               || currentUserRemovedFromList('waitlist')
             )
           )
@@ -245,6 +289,7 @@ service cloud.firestore {
       function canCreateSelfRegistration() {
         return isAuthenticated()
           && request.resource.data.userId == userId()
+          && requestUsesSavedWhatsAppPhone()
           && hasRequiredFields(['sessionId', 'userId', 'displayName', 'email', 'status', 'paymentStatus', 'requestedAt', 'createdAt'])
           && registrationSession().status == 'published'
           && (!('accessMode' in registrationSession()) || registrationSession().accessMode == 'open')
@@ -269,10 +314,29 @@ service cloud.firestore {
 
       function canResubmitSelfRegistration() {
         return isOwner(resource.data.userId)
+          && requestUsesSavedWhatsAppPhone()
           && resource.data.status in ['cancelled', 'declined']
-          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'paymentStatus', 'requestedAt', 'updatedAt'])
-          && request.resource.data.status in ['requested', 'pending_payment', 'waitlisted']
-          && request.resource.data.paymentStatus in ['not_required', 'unpaid'];
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+            'displayName',
+            'email',
+            'phone',
+            'whatsappPhone',
+            'photoURL',
+            'status',
+            'paymentStatus',
+            'requestedAt',
+            'updatedAt'
+          ])
+          && request.resource.data.status in ['requested', 'pending_payment', 'waitlisted', 'confirmed']
+          && request.resource.data.paymentStatus in ['not_required', 'unpaid']
+          && (
+            request.resource.data.status != 'confirmed'
+            || (
+              registrationSession().isFree == true
+              && (!('approvalMode' in registrationSession()) || registrationSession().approvalMode == 'auto')
+              && (!('accessMode' in registrationSession()) || registrationSession().accessMode == 'open')
+            )
+          );
       }
 
       allow read: if isAdmin() || isOwner(resource.data.userId);

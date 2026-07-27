@@ -714,6 +714,31 @@ export default function CommunityWall() {
         }
       })
     } catch (error) {
+      const firestoreError = error as { code?: string }
+      if (firestoreError.code === 'failed-precondition') {
+        try {
+          const snapshot = await getDocs(query(collection(db, 'comments'), where('parentId', '==', postId)))
+          const nextComments = sortComments(snapshot.docs.map((docSnap) => ({
+            id: docSnap.id,
+            ...docSnap.data(),
+          })) as Comment[])
+
+          setCommentPages((prev) => ({
+            ...prev,
+            [postId]: {
+              comments: nextComments,
+              cursor: null,
+              hasMore: false,
+              loaded: true,
+              loading: false,
+            },
+          }))
+          return
+        } catch (fallbackError) {
+          console.error('Failed to load comments without ordered index:', fallbackError)
+        }
+      }
+
       console.error('Failed to load comments:', error)
       setCommentPages((prev) => ({
         ...prev,

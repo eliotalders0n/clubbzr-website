@@ -39,8 +39,8 @@ service cloud.firestore {
     // USERS COLLECTION
     // ========================================
     match /users/{userId} {
-      // Anyone can read user profiles
-      allow read: if true;
+      // Authenticated members can read user profiles
+      allow read: if isAuthenticated();
 
       // Users can create their own profile; admins can create pending invite profiles
       allow create: if isOwner(userId) || isAdmin();

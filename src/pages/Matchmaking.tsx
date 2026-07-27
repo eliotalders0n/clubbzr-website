@@ -13,9 +13,9 @@ import { Button } from '@/components/ui/Button'
 import { Avatar } from '@/components/ui/Avatar'
 import { MEDIUMS } from '@/lib/constants'
 import { useAuth } from '@/contexts/AuthContext'
-import { useCollection, useMutation } from '@/hooks/useFirestore'
-import { updateDocument, createDocument } from '../../lib/firestore'
-import type { Match, MatchStatus, User, ArtMedium } from '../../lib/schema'
+import { useCollection } from '@/hooks/useFirestore'
+import { updateDocument } from '../../lib/firestore'
+import type { MatchStatus, User } from '../../lib/schema'
 
 interface DisplayMatch {
   id: string
@@ -237,7 +237,7 @@ export default function Matchmaking() {
                   No matches found yet. Complete your profile to get personalized suggestions.
                 </p>
                 <MagneticButton>
-                  <Button onClick={() => window.location.href = '/passport'}>
+                  <Button onClick={() => window.location.href = '/profile'}>
                     Update Profile
                   </Button>
                 </MagneticButton>
@@ -330,7 +330,7 @@ export default function Matchmaking() {
                   collaboration preferences to get better match suggestions.
                 </p>
                 <MagneticButton>
-                  <Button onClick={() => window.location.href = '/passport'}>
+                  <Button onClick={() => window.location.href = '/profile'}>
                     Update Profile
                   </Button>
                 </MagneticButton>

@@ -17,14 +17,14 @@ import {
   Spinner,
 } from '@chakra-ui/react'
 import { motion, AnimatePresence } from 'framer-motion'
-import { CalendarDays, CheckCircle2, CreditCard, ImagePlus, Link as LinkIcon, Mail, MapPin, Pencil, Plus, Search, Trash2, UserRoundMinus, Users, X } from 'lucide-react'
+import { CalendarDays, CheckCircle2, CreditCard, ImagePlus, Link as LinkIcon, Mail, MapPin, MessageCircle, Pencil, Plus, Search, Trash2, UserRoundMinus, Users, X } from 'lucide-react'
 import { Timestamp, arrayRemove, arrayUnion } from 'firebase/firestore'
 
 import { AdminLayout } from '@/components/layout/AdminLayout'
 import { useAuth } from '@/contexts/AuthContext'
 import { useCollection } from '@/hooks'
 import { createDocument, createDocumentWithId, deleteDocument, updateDocument } from '../../../lib/firestore'
-import { getRegistrationCounts, getSessionRegistrationId, normalizeSessionRegistrationConfig, updateSessionRegistration } from '../../../lib/sessionRegistrations'
+import { getRegistrationCounts, getSessionRegistrationId, getUserWhatsAppPhone, normalizeSessionRegistrationConfig, updateSessionRegistration } from '../../../lib/sessionRegistrations'
 import { STORAGE_PATHS, uploadFileSimple, validateFile } from '../../../lib/storage'
 import type {
   CreateDocument,
@@ -227,6 +227,26 @@ const filterSelectStyle: React.CSSProperties = {
   borderRadius: '12px',
   color: 'white',
   outline: 'none',
+}
+
+const getWhatsAppConfirmationState = (registration: SessionRegistration) => {
+  if (registration.confirmationWhatsAppSentAt) {
+    return { label: 'WhatsApp sent', bg: 'green.500/15', color: 'green.200' }
+  }
+
+  if (registration.confirmationWhatsAppFailedAt) {
+    return { label: 'WhatsApp failed', bg: 'red.500/15', color: 'red.200' }
+  }
+
+  if (registration.confirmationWhatsAppSkippedAt) {
+    return { label: 'WhatsApp skipped', bg: 'orange.500/15', color: 'orange.200' }
+  }
+
+  if (registration.status === 'confirmed') {
+    return { label: 'WhatsApp pending', bg: 'blue.500/15', color: 'blue.200' }
+  }
+
+  return null
 }
 
 const toDate = (value: unknown): Date | null => {
@@ -612,6 +632,12 @@ export default function ManageSessions() {
       return false
     }
 
+    const savedWhatsAppPhone = whatsappPhone?.trim() || getUserWhatsAppPhone(targetUser)
+    if (!savedWhatsAppPhone) {
+      alert('Add a WhatsApp number before creating this registration.')
+      return false
+    }
+
     const now = Timestamp.now()
     const result = await createDocumentWithId(
       'sessionRegistrations',
@@ -621,8 +647,8 @@ export default function ManageSessions() {
         userId,
         displayName: targetUser.displayName || targetUser.email || 'Club BZR member',
         email: targetUser.email || '',
-        ...(whatsappPhone?.trim() ? { whatsappPhone: whatsappPhone.trim() } : {}),
-        ...(targetUser.phone ? { phone: targetUser.phone } : {}),
+        whatsappPhone: savedWhatsAppPhone,
+        phone: targetUser.phone?.trim() || savedWhatsAppPhone,
         photoURL: targetUser.photoURL || null,
         status,
         paymentStatus,
@@ -1127,6 +1153,11 @@ function RegistrationManager({
     const targetUser = availableUsers.find((user) => (user.uid || user.id) === selectedUserId)
     if (!targetUser) return
 
+    if (!newRegistrationPhone.trim()) {
+      alert('Enter a WhatsApp number before adding this registration.')
+      return
+    }
+
     setAddingRegistration(true)
     const success = await onAddRegistration(
       session,
@@ -1207,7 +1238,7 @@ function RegistrationManager({
             color="white"
             borderRadius="xl"
             _hover={{ bg: 'brand.600' }}
-            disabled={!selectedUserId || addingRegistration || usersLoading}
+            disabled={!selectedUserId || !newRegistrationPhone.trim() || addingRegistration || usersLoading}
           >
             {addingRegistration ? <Spinner size="sm" /> : 'Add Registration'}
           </Button>
@@ -1294,6 +1325,7 @@ function RegistrationRow({
   const canConfirm = !isTerminal && !isConfirmed
   const canMoveToWaitlist = !isTerminal && registration.status !== 'waitlisted' && !isConfirmed
   const canDecline = !isTerminal && !isConfirmed
+  const whatsappState = getWhatsAppConfirmationState(registration)
 
   return (
     <Box p={{ base: 4, md: 5 }} bg="whiteAlpha.50" border="1px solid" borderColor="whiteAlpha.100" borderRadius="xl">
@@ -1320,6 +1352,12 @@ function RegistrationRow({
             <Text color="whiteAlpha.400" fontSize="xs" mt={1}>
               Requested {formatDateTime(registration.requestedAt)}
             </Text>
+            {registration.whatsappPhone && (
+              <HStack gap={2} color="whiteAlpha.500" fontSize="xs" mt={1}>
+                <MessageCircle size={13} />
+                <Text lineClamp={1}>{registration.whatsappPhone}</Text>
+              </HStack>
+            )}
           </Box>
         </HStack>
 
@@ -1337,6 +1375,11 @@ function RegistrationRow({
             {registration.paymentAmount && (
               <Badge bg="brand.500/20" color="brand.200" borderRadius="full" px={3} py={1}>
                 {registration.paymentCurrency || 'ZMW'} {registration.paymentAmount.toFixed(2)}
+              </Badge>
+            )}
+            {whatsappState && (
+              <Badge bg={whatsappState.bg} color={whatsappState.color} borderRadius="full" px={3} py={1}>
+                {whatsappState.label}
               </Badge>
             )}
           </Flex>

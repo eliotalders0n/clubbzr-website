@@ -5,12 +5,12 @@ import {
   CalendarDays,
   ChevronDown,
   Compass,
-  Images,
   LogIn,
   LogOut,
   Map,
   MessageCircle,
   Radio as RadioIcon,
+  Settings,
   UserRound,
   UsersRound,
   type LucideIcon,
@@ -44,7 +44,6 @@ const NAV_LINKS: NavLink[] = [
   { label: 'Sessions', shortLabel: 'Sessions', href: '/sessions', match: ['/sessions'], icon: CalendarDays },
   { label: 'Side Quests', shortLabel: 'Quests', href: '/quests', match: ['/quests'], icon: Compass },
   { label: 'Artists', shortLabel: 'Artists', href: '/artists', match: ['/artists'], icon: UsersRound },
-  { label: 'Exhibitions', shortLabel: 'Shows', href: '/exhibitions', match: ['/exhibitions'], icon: Images },
   { label: 'Radio', shortLabel: 'Radio', href: '/radio', match: ['/radio'], icon: RadioIcon },
 ]
 
@@ -67,7 +66,7 @@ export function Header({ activeLink }: HeaderProps) {
   const userName = user?.displayName || firebaseUser?.displayName || 'User'
   const userEmail = user?.email || firebaseUser?.email || ''
   const accountLink = isLoggedIn
-    ? { label: 'Passport', shortLabel: 'Me', href: '/passport', match: ['/passport'], icon: UserRound }
+    ? { label: 'Passport', shortLabel: 'Me', href: '/passport', match: ['/passport', '/profile'], icon: UserRound }
     : { label: 'Sign In', shortLabel: 'Sign In', href: '/auth/login', match: ['/auth'], icon: LogIn }
   const mobileTabLinks = [...NAV_LINKS.slice(0, 4), accountLink]
 
@@ -239,6 +238,25 @@ export function Header({ activeLink }: HeaderProps) {
                         >
                           <UserRound size={18} />
                           <Text as="span">My Passport</Text>
+                        </Menu.Item>
+                        <Menu.Item
+                          value="profile"
+                          onClick={() => navigate('/profile')}
+                          display="flex"
+                          alignItems="center"
+                          gap={3}
+                          minH="44px"
+                          px={3}
+                          py={2}
+                          borderRadius="12px"
+                          bg="transparent"
+                          color="whiteAlpha.800"
+                          fontSize="sm"
+                          fontWeight="medium"
+                          _hover={{ bg: 'whiteAlpha.100', color: 'white' }}
+                        >
+                          <Settings size={18} />
+                          <Text as="span">Manage Profile</Text>
                         </Menu.Item>
                         <Menu.Item
                           value="sign-out"

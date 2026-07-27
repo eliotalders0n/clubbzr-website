@@ -7,6 +7,7 @@ import {
   Container as ChakraContainer,
   Flex,
   Heading,
+  Image,
   Text,
   Button as ChakraButton,
   VStack,
@@ -14,7 +15,7 @@ import {
   SimpleGrid,
   Spinner,
 } from '@chakra-ui/react';
-import { Award, Bookmark, CheckCircle2, Eye, Heart, ImageIcon, Pencil, UserRound } from 'lucide-react';
+import { Award, Bookmark, CalendarDays, CheckCircle2, Eye, Heart, ImageIcon, MessageCircle, Pencil, Settings, UserRound } from 'lucide-react';
 import { Header } from '@/components/layout/Header';
 import { Footer } from '@/components/layout/Footer';
 import { Section } from '@/components/layout/Section';
@@ -30,17 +31,18 @@ import {
   getArtworkEngagementKey,
   type DiscoveryArtwork,
 } from '@/lib/artworkDiscovery';
+import { createDefaultCreativePassport } from '@/lib/passportDefaults';
 import { resolveProfileIdentity } from '@/lib/profileIdentity';
 import type {
   Artist,
   Badge as PassportBadge,
-  CreativePassport,
   CommunityPost,
-  CreateDocument,
   Artwork,
   Exhibition,
   Quest,
   QuestSubmission,
+  Session,
+  SessionRegistration,
 } from '../../lib/schema';
 
 const numericValue = (value: unknown) => (typeof value === 'number' && Number.isFinite(value) ? value : 0);
@@ -58,6 +60,19 @@ const toMillis = (value: unknown): number => {
 };
 
 const readKeyList = (value: unknown): string[] => (Array.isArray(value) ? value.filter((item): item is string => typeof item === 'string') : []);
+
+type PassportTab = 'posts' | 'artist' | 'quests' | 'events' | 'liked' | 'bookmarked';
+
+const formatDate = (value: unknown): string => {
+  const timestamp = toMillis(value);
+  if (!timestamp) return 'Date pending';
+
+  return new Date(timestamp).toLocaleDateString('en-US', {
+    month: 'short',
+    day: 'numeric',
+    year: 'numeric',
+  });
+};
 
 type ArtworkStripProps = {
   title: string;
@@ -164,6 +179,7 @@ const ArtworkStrip: React.FC<ArtworkStripProps> = ({ title, icon, items, isLoadi
 
 const Passport: React.FC = () => {
   const [isCreating, setIsCreating] = useState(false);
+  const [activePassportTab, setActivePassportTab] = useState<PassportTab>('posts');
 
   // Get current user from auth context
   const { user: authUser, firebaseUser, loading: authLoading, initialized } = useAuth();
@@ -191,6 +207,19 @@ const Passport: React.FC = () => {
     loading: communityPostsLoading,
   } = useCollection('communityPosts', {
     where: [{ field: 'userId', operator: '==', value: firebaseUser?.uid || '' }],
+    skip: !firebaseUser?.uid,
+  });
+  const {
+    data: sessionRegistrations,
+    loading: sessionRegistrationsLoading,
+  } = useCollection('sessionRegistrations', {
+    where: [{ field: 'userId', operator: '==', value: firebaseUser?.uid || '' }],
+    skip: !firebaseUser?.uid,
+  });
+  const {
+    data: sessions,
+    loading: sessionsLoading,
+  } = useCollection('sessions', {
     skip: !firebaseUser?.uid,
   });
   const {
@@ -222,6 +251,9 @@ const Passport: React.FC = () => {
     const completedQuestIds = new Set<string>(passport?.questsCompleted || []);
     const submissionsByQuest = new Map<string, { count: number; lastSubmittedAt: unknown }>();
     const questById = new Map((quests as Quest[]).map((quest) => [quest.id, quest]));
+    const sessionById = new Map((sessions as Session[]).map((session) => [session.id, session]));
+    const attendedEventIds = new Set<string>(passport?.eventsAttended || []);
+    const currentUserId = firebaseUser?.uid || '';
 
     (questSubmissions as QuestSubmission[]).forEach((submission) => {
       if (submission.questId) {
@@ -271,17 +303,45 @@ const Passport: React.FC = () => {
       })
       .sort((a, b) => toMillis(b.lastSubmittedAt) - toMillis(a.lastSubmittedAt));
 
+    (sessionRegistrations as SessionRegistration[]).forEach((registration) => {
+      if (registration.status === 'confirmed' && registration.sessionId) {
+        attendedEventIds.add(registration.sessionId);
+      }
+    });
+
+    (sessions as Session[]).forEach((session) => {
+      if (currentUserId && session.attendees?.includes(currentUserId)) {
+        attendedEventIds.add(session.id);
+      }
+    });
+
+    const attendedEvents = Array.from(attendedEventIds)
+      .map((eventId) => {
+        const session = sessionById.get(eventId);
+
+        return {
+          id: eventId,
+          title: session?.title || `Event ${eventId.slice(0, 8)}`,
+          date: session?.date,
+          locationName: session?.isOnline ? 'Online' : session?.location?.name,
+          dateMs: toMillis(session?.date),
+          hasSession: !!session,
+        };
+      })
+      .sort((a, b) => b.dateMs - a.dateMs || a.title.localeCompare(b.title));
+
     return {
       completedQuestIds: Array.from(completedQuestIds),
       completedQuests,
-      eventsAttended: passport?.eventsAttended || [],
+      eventsAttended: Array.from(attendedEventIds),
+      attendedEvents,
       collaborations: passport?.collaborations || [],
       postsCreated: communityPosts.length,
       reactionsReceived: postReactions + submissionReactions,
       points: submissionPoints,
       badges: Array.from(badgeMap.values()).sort((a, b) => toMillis(b.earnedAt) - toMillis(a.earnedAt)),
     };
-  }, [communityPosts, passport, questSubmissions, quests]);
+  }, [communityPosts, firebaseUser?.uid, passport, questSubmissions, quests, sessionRegistrations, sessions]);
 
   const savedArtwork = useMemo(() => {
     const allArtwork = buildDiscoveryArtworks({
@@ -300,10 +360,15 @@ const Passport: React.FC = () => {
     return { loved, bookmarked };
   }, [artists, authUser?.bookmarkedArtworkKeys, authUser?.lovedArtworkKeys, exhibitions, uploadedArtworks]);
 
+  const userCommunityPosts = useMemo(
+    () => [...(communityPosts as CommunityPost[])].sort((a, b) => toMillis(b.createdAt) - toMillis(a.createdAt)),
+    [communityPosts]
+  );
+
   const savedArtworkLoading = artistsLoading || uploadedArtworksLoading || exhibitionsLoading;
 
   // Loading state
-  const isLoading = authLoading || passportLoading || questSubmissionsLoading || communityPostsLoading || questsLoading || !initialized;
+  const isLoading = authLoading || passportLoading || questSubmissionsLoading || communityPostsLoading || sessionRegistrationsLoading || sessionsLoading || questsLoading || !initialized;
 
   // If not authenticated, show login prompt
   if (initialized && !firebaseUser) {
@@ -501,35 +566,7 @@ const Passport: React.FC = () => {
                   }
                   setIsCreating(true);
                   try {
-                    const now = Timestamp.now();
-                    const newPassport: CreateDocument<CreativePassport> = {
-                      userId: firebaseUser.uid,
-                      level: 1,
-                      points: 0,
-                      badges: [],
-                      questsCompleted: [],
-                      questsInProgress: [],
-                      eventsAttended: [],
-                      mediums: [],
-                      interests: [],
-                      collaborations: [],
-                      timeline: [],
-                      streaks: {
-                        current: 0,
-                        longest: 0,
-                        lastActivityDate: now,
-                        weeklyGoal: 3,
-                        weeklyProgress: 0,
-                      },
-                      stats: {
-                        totalQuestsCompleted: 0,
-                        totalEventsAttended: 0,
-                        totalCollaborations: 0,
-                        totalPostsCreated: 0,
-                        totalReactionsReceived: 0,
-                        joinedAt: now,
-                      },
-                    };
+                    const newPassport = createDefaultCreativePassport(firebaseUser.uid);
                     console.log('Creating passport for user:', firebaseUser.uid);
                     const result = await createDocumentWithId('creativePassports', firebaseUser.uid, newPassport);
                     console.log('Create result:', result);
@@ -578,6 +615,7 @@ const Passport: React.FC = () => {
     timeline: passport.timeline || [],
     streaks: passport.streaks,
     eventsAttended: liveActivity.eventsAttended,
+    attendedEvents: liveActivity.attendedEvents,
     questsCompleted: liveActivity.completedQuestIds,
     completedQuests: liveActivity.completedQuests,
     questsInProgress: (passport.questsInProgress || []).filter((questId) => !liveActivity.completedQuestIds.includes(questId)),
@@ -587,7 +625,7 @@ const Passport: React.FC = () => {
   const stats = [
     {
       label: 'Events Attended',
-      value: Math.max(displayUser.stats?.totalEventsAttended || 0, displayUser.eventsAttended.length),
+      value: displayUser.eventsAttended.length,
       icon: (
         <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z" />
@@ -642,6 +680,14 @@ const Passport: React.FC = () => {
   ];
   const hasArtistProfile = !!artistProfile;
   const artistDisplayName = artistProfile?.artistName || artistProfile?.name || 'Artist profile';
+  const passportTabs: { id: PassportTab; label: string; count?: number }[] = [
+    { id: 'posts', label: 'Posts', count: userCommunityPosts.length },
+    { id: 'artist', label: 'Artist Profile' },
+    { id: 'quests', label: 'Completed Quests', count: displayUser.completedQuests.length },
+    { id: 'events', label: 'Events Attended', count: displayUser.attendedEvents.length },
+    { id: 'liked', label: 'Liked Artwork', count: savedArtwork.loved.length },
+    { id: 'bookmarked', label: 'Bookmarked Artwork', count: savedArtwork.bookmarked.length },
+  ];
 
   return (
     <Box bg="gray.950" minH="100vh">
@@ -700,6 +746,24 @@ const Passport: React.FC = () => {
                     <Text color="whiteAlpha.500" fontSize="xs">Badges</Text>
                   </Box>
                 </HStack>
+                <Link to="/profile">
+                  <ChakraButton
+                    size="sm"
+                    mt={3}
+                    h={10}
+                    px={4}
+                    gap={2}
+                    bg="whiteAlpha.50"
+                    color="whiteAlpha.800"
+                    border="1px solid"
+                    borderColor="whiteAlpha.200"
+                    borderRadius="full"
+                    _hover={{ bg: 'whiteAlpha.100', color: 'white' }}
+                  >
+                    <Settings size={15} />
+                    Manage Profile
+                  </ChakraButton>
+                </Link>
               </VStack>
 
               {/* Streak */}
@@ -718,280 +782,444 @@ const Passport: React.FC = () => {
           </Box>
 
           {/* Stats Grid */}
-          <SimpleGrid columns={{ base: 2, md: 4 }} gap={4} mb={8}>
+          <SimpleGrid columns={{ base: 3, lg: 6 }} gap={{ base: 3, md: 4 }} mb={8}>
             {stats.map((stat) => (
               <Box
                 key={stat.label}
-                p={5}
-                borderRadius="xl"
+                p={{ base: 3, md: 5 }}
+                minH={{ base: '112px', md: '132px' }}
+                borderRadius={{ base: 'lg', md: 'xl' }}
                 bg="gray.900"
                 border="1px solid"
                 borderColor="whiteAlpha.100"
                 textAlign="center"
               >
-                <Flex justify="center" mb={2} color="whiteAlpha.500">
+                <Flex justify="center" mb={{ base: 1.5, md: 2 }} color="whiteAlpha.500">
                   {stat.icon}
                 </Flex>
-                <Text color="white" fontSize="2xl" fontWeight="bold">{stat.value}</Text>
-                <Text color="whiteAlpha.500" fontSize="xs">{stat.label}</Text>
+                <Text color="white" fontSize={{ base: 'xl', md: '2xl' }} fontWeight="bold" lineHeight="1.15">{stat.value}</Text>
+                <Text color="whiteAlpha.500" fontSize={{ base: '10px', md: 'xs' }} lineHeight="1.2" mt={1}>{stat.label}</Text>
               </Box>
             ))}
           </SimpleGrid>
 
-          {/* Quick Actions */}
-          <SimpleGrid columns={{ base: 1, md: 2, xl: 4 }} gap={6}>
-            {/* Artist Profile */}
-            <Box
-              p={{ base: 5, md: 6 }}
-              borderRadius="xl"
-              bg="gray.900"
-              border="1px solid"
-              borderColor="whiteAlpha.100"
-              minH="260px"
-              display="flex"
-              flexDirection="column"
+          <Box>
+            <HStack
+              gap={2}
+              overflowX="auto"
+              pb={2}
+              css={{
+                scrollbarWidth: 'none',
+                '&::-webkit-scrollbar': { display: 'none' },
+              }}
             >
-              <HStack justify="space-between" align="start" gap={4} mb={5}>
-                <Box>
-                  <Heading as="h3" fontSize="lg" color="white" mb={1}>Artist Profile</Heading>
-                  <Text color="whiteAlpha.500" fontSize="sm">
-                    Public creator presence
-                  </Text>
-                </Box>
-                <Flex
-                  w={12}
-                  h={12}
-                  borderRadius="full"
-                  bg={hasArtistProfile ? 'brand.500/20' : 'whiteAlpha.50'}
-                  color={hasArtistProfile ? 'brand.300' : 'whiteAlpha.500'}
-                  align="center"
-                  justify="center"
-                  flexShrink={0}
-                >
-                  {hasArtistProfile ? <Pencil size={20} /> : <UserRound size={20} />}
-                </Flex>
-              </HStack>
+              {passportTabs.map((tab) => {
+                const active = activePassportTab === tab.id;
 
-              {artistProfileLoading ? (
-                <HStack gap={3} color="whiteAlpha.500" mt="auto">
-                  <Spinner size="sm" color="brand.500" />
-                  <Text fontSize="sm">Checking artist profile...</Text>
-                </HStack>
-              ) : hasArtistProfile ? (
-                <VStack align="stretch" gap={5} flex={1} justify="space-between">
-                  <Box>
-                    <Text color="white" fontSize="xl" fontWeight="bold" lineClamp={1} mb={2}>
-                      {artistDisplayName}
-                    </Text>
-                    <Text color="whiteAlpha.600" fontSize="sm" lineHeight="tall">
-                      Update your public bio, mediums, links, and availability.
-                    </Text>
-                  </Box>
-                  <SimpleGrid columns={2} gap={3}>
-                    <Link to="/artists/create" style={{ display: 'block' }}>
-                      <ChakraButton w="full" h={11} gap={2} bg="brand.500" color="white" borderRadius="full" fontSize="sm" _hover={{ bg: 'brand.600' }}>
-                        <Pencil size={15} />
-                        Edit
-                      </ChakraButton>
-                    </Link>
-                    <Link to={`/artists/${firebaseUser?.uid}`} style={{ display: 'block' }}>
-                      <ChakraButton
-                        w="full"
-                        h={11}
-                        gap={2}
-                        bg="whiteAlpha.50"
-                        color="white"
-                        border="1px solid"
-                        borderColor="whiteAlpha.200"
+                return (
+                  <ChakraButton
+                    key={tab.id}
+                    type="button"
+                    h="44px"
+                    px={4}
+                    flexShrink={0}
+                    borderRadius="full"
+                    bg={active ? 'brand.500' : 'gray.900'}
+                    color={active ? 'white' : 'whiteAlpha.700'}
+                    border="1px solid"
+                    borderColor={active ? 'brand.400' : 'whiteAlpha.100'}
+                    fontSize="sm"
+                    fontWeight="semibold"
+                    _hover={{ bg: active ? 'brand.600' : 'whiteAlpha.100', color: 'white' }}
+                    onClick={() => setActivePassportTab(tab.id)}
+                  >
+                    {tab.label}
+                    {typeof tab.count === 'number' && (
+                      <Text as="span" ml={2} color={active ? 'whiteAlpha.800' : 'whiteAlpha.500'} fontSize="xs">
+                        {tab.count}
+                      </Text>
+                    )}
+                  </ChakraButton>
+                );
+              })}
+            </HStack>
+
+            <Box mt={5}>
+              {activePassportTab === 'artist' && (
+                <SimpleGrid columns={{ base: 1, lg: 2 }} gap={6}>
+                  <Box
+                    p={{ base: 5, md: 6 }}
+                    borderRadius="xl"
+                    bg="gray.900"
+                    border="1px solid"
+                    borderColor="whiteAlpha.100"
+                    minH="260px"
+                    display="flex"
+                    flexDirection="column"
+                  >
+                    <HStack justify="space-between" align="start" gap={4} mb={5}>
+                      <Box>
+                        <Heading as="h3" fontSize="lg" color="white" mb={1}>Artist Profile</Heading>
+                        <Text color="whiteAlpha.500" fontSize="sm">
+                          Public creator presence
+                        </Text>
+                      </Box>
+                      <Flex
+                        w={12}
+                        h={12}
                         borderRadius="full"
-                        fontSize="sm"
-                        _hover={{ bg: 'whiteAlpha.100' }}
-                      >
-                        <Eye size={15} />
-                        View
-                      </ChakraButton>
-                    </Link>
-                  </SimpleGrid>
-                </VStack>
-              ) : (
-                <VStack align="stretch" gap={5} flex={1} justify="space-between">
-                  <Text color="whiteAlpha.600" fontSize="sm" lineHeight="tall">
-                    Create a public profile so artists can discover your work and collaboration interests.
-                  </Text>
-                  <Link to="/artists/create" style={{ display: 'block' }}>
-                    <ChakraButton w="full" h={11} gap={2} bg="brand.500" color="white" borderRadius="full" fontSize="sm" _hover={{ bg: 'brand.600' }}>
-                      <UserRound size={15} />
-                      Create Profile
-                    </ChakraButton>
-                  </Link>
-                </VStack>
-              )}
-            </Box>
-
-            {/* Badges */}
-            <Box
-              p={6}
-              borderRadius="xl"
-              bg="gray.900"
-              border="1px solid"
-              borderColor="whiteAlpha.100"
-              minH="260px"
-            >
-              <HStack justify="space-between" align="start" gap={4} mb={4}>
-                <Box>
-                  <Heading as="h3" fontSize="md" color="white" mb={1}>Recent Badges</Heading>
-                  <Text color="whiteAlpha.500" fontSize="sm">Earned from quest submissions</Text>
-                </Box>
-                <Flex w={11} h={11} borderRadius="full" bg="purple.500/15" color="purple.200" align="center" justify="center" flexShrink={0}>
-                  <Award size={18} />
-                </Flex>
-              </HStack>
-              {displayUser.badges.length > 0 ? (
-                <VStack align="stretch" gap={3}>
-                  {displayUser.badges.slice(0, 4).map((badge) => {
-                    const visual = getBadgeVisual(badge.id);
-
-                    return (
-                    <HStack key={badge.id} p={3} borderRadius="xl" bg="whiteAlpha.50" gap={3}>
-                      <Box
-                        w={10}
-                        h={10}
-                        borderRadius="full"
-                        bg={visual.bg}
-                        color={visual.color}
-                        display="flex"
-                        alignItems="center"
-                        justifyContent="center"
-                        fontWeight="bold"
+                        bg={hasArtistProfile ? 'brand.500/20' : 'whiteAlpha.50'}
+                        color={hasArtistProfile ? 'brand.300' : 'whiteAlpha.500'}
+                        align="center"
+                        justify="center"
                         flexShrink={0}
                       >
-                        {visual.icon}
-                      </Box>
-                      <Box minW={0}>
-                        <Text color="white" fontSize="sm" fontWeight="bold" lineClamp={1}>{badge.name}</Text>
-                        <Text color="whiteAlpha.500" fontSize="xs" lineClamp={1}>{badge.description}</Text>
-                      </Box>
+                        {hasArtistProfile ? <Pencil size={20} /> : <UserRound size={20} />}
+                      </Flex>
                     </HStack>
-                    );
-                  })}
-                </VStack>
-              ) : (
-                <VStack align="stretch" gap={3}>
-                  <Text color="whiteAlpha.500" fontSize="sm" lineHeight="tall">
-                    No badges earned yet. Submit a quest response to unlock your first badge.
-                  </Text>
-                  <Link to="/quests" style={{ display: 'block' }}>
-                    <ChakraButton size="sm" w="fit-content" bg="purple.500/15" color="purple.200" border="1px solid" borderColor="purple.400/30" borderRadius="full" _hover={{ bg: 'purple.500/25' }}>
-                      Browse Quests
-                    </ChakraButton>
-                  </Link>
-                </VStack>
-              )}
-            </Box>
 
-            {/* Quests */}
-            <Box
-              p={6}
-              borderRadius="xl"
-              bg="gray.900"
-              border="1px solid"
-              borderColor="whiteAlpha.100"
-              minH="260px"
-            >
-              <HStack justify="space-between" align="start" gap={4} mb={4}>
-                <Box>
-                  <Heading as="h3" fontSize="md" color="white" mb={1}>Completed Quests</Heading>
-                  <Text color="whiteAlpha.500" fontSize="sm">Based on submitted responses</Text>
-                </Box>
-                <Flex w={11} h={11} borderRadius="full" bg="green.500/15" color="green.200" align="center" justify="center" flexShrink={0}>
-                  <CheckCircle2 size={18} />
-                </Flex>
-              </HStack>
-              {displayUser.completedQuests.length > 0 ? (
-                <VStack align="stretch" gap={3}>
-                  {displayUser.completedQuests.slice(0, 4).map((quest) => (
-                    <Link key={quest.id} to={`/quests/${quest.id}`} style={{ display: 'block' }}>
-                      <HStack p={3} borderRadius="xl" bg="whiteAlpha.50" border="1px solid" borderColor="transparent" _hover={{ bg: 'whiteAlpha.100', borderColor: 'green.400/30' }}>
-                        <Flex w={10} h={10} borderRadius="full" bg="green.500/15" color="green.200" align="center" justify="center" flexShrink={0}>
-                          <CheckCircle2 size={17} />
-                        </Flex>
-                        <Box minW={0} flex={1}>
-                          <Text color="white" fontSize="sm" fontWeight="bold" lineClamp={1}>{quest.title}</Text>
-                          <Text color="whiteAlpha.500" fontSize="xs">
-                            {quest.submissions || 1} {(quest.submissions || 1) === 1 ? 'submission' : 'submissions'}
+                    {artistProfileLoading ? (
+                      <HStack gap={3} color="whiteAlpha.500" mt="auto">
+                        <Spinner size="sm" color="brand.500" />
+                        <Text fontSize="sm">Checking artist profile...</Text>
+                      </HStack>
+                    ) : hasArtistProfile ? (
+                      <VStack align="stretch" gap={5} flex={1} justify="space-between">
+                        <Box>
+                          <Text color="white" fontSize="xl" fontWeight="bold" lineClamp={1} mb={2}>
+                            {artistDisplayName}
+                          </Text>
+                          <Text color="whiteAlpha.600" fontSize="sm" lineHeight="tall">
+                            Update your public bio, mediums, links, and availability.
                           </Text>
                         </Box>
-                      </HStack>
-                    </Link>
-                  ))}
-                </VStack>
-              ) : (
-                <VStack align="stretch" gap={3}>
-                  <Text color="whiteAlpha.500" fontSize="sm" lineHeight="tall">
-                    No completed quest submissions yet.
-                  </Text>
-                  <Link to="/quests">
-                    <ChakraButton size="sm" w="fit-content" bg="green.500/15" color="green.200" border="1px solid" borderColor="green.400/30" borderRadius="full" _hover={{ bg: 'green.500/25' }}>
-                      Browse Quests
-                    </ChakraButton>
-                  </Link>
-                </VStack>
-              )}
-            </Box>
+                        <SimpleGrid columns={2} gap={3}>
+                          <Link to="/artists/create" style={{ display: 'block' }}>
+                            <ChakraButton w="full" h={11} gap={2} bg="brand.500" color="white" borderRadius="full" fontSize="sm" _hover={{ bg: 'brand.600' }}>
+                              <Pencil size={15} />
+                              Edit
+                            </ChakraButton>
+                          </Link>
+                          <Link to={`/artists/${firebaseUser?.uid}`} style={{ display: 'block' }}>
+                            <ChakraButton
+                              w="full"
+                              h={11}
+                              gap={2}
+                              bg="whiteAlpha.50"
+                              color="white"
+                              border="1px solid"
+                              borderColor="whiteAlpha.200"
+                              borderRadius="full"
+                              fontSize="sm"
+                              _hover={{ bg: 'whiteAlpha.100' }}
+                            >
+                              <Eye size={15} />
+                              View
+                            </ChakraButton>
+                          </Link>
+                        </SimpleGrid>
+                      </VStack>
+                    ) : (
+                      <VStack align="stretch" gap={5} flex={1} justify="space-between">
+                        <Text color="whiteAlpha.600" fontSize="sm" lineHeight="tall">
+                          Create a public profile so artists can discover your work and collaboration interests.
+                        </Text>
+                        <Link to="/artists/create" style={{ display: 'block' }}>
+                          <ChakraButton w="full" h={11} gap={2} bg="brand.500" color="white" borderRadius="full" fontSize="sm" _hover={{ bg: 'brand.600' }}>
+                            <UserRound size={15} />
+                            Create Profile
+                          </ChakraButton>
+                        </Link>
+                      </VStack>
+                    )}
+                  </Box>
 
-            {/* Events */}
-            <Box
-              p={6}
-              borderRadius="xl"
-              bg="gray.900"
-              border="1px solid"
-              borderColor="whiteAlpha.100"
-            >
-              <Heading as="h3" fontSize="md" color="white" mb={4}>Events Attended</Heading>
-              {displayUser.eventsAttended.length > 0 ? (
-                <VStack align="stretch" gap={2}>
-                  {displayUser.eventsAttended.slice(0, 3).map((eventId) => (
-                    <HStack key={eventId} p={2} borderRadius="lg" bg="whiteAlpha.50">
-                      <Box w={8} h={8} borderRadius="md" bg="green.500" display="flex" alignItems="center" justifyContent="center">
-                        <svg width="16" height="16" fill="none" stroke="white" viewBox="0 0 24 24">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
-                        </svg>
+                  <Box
+                    p={6}
+                    borderRadius="xl"
+                    bg="gray.900"
+                    border="1px solid"
+                    borderColor="whiteAlpha.100"
+                    minH="260px"
+                  >
+                    <HStack justify="space-between" align="start" gap={4} mb={4}>
+                      <Box>
+                        <Heading as="h3" fontSize="md" color="white" mb={1}>Recent Badges</Heading>
+                        <Text color="whiteAlpha.500" fontSize="sm">Earned from quest submissions</Text>
                       </Box>
-                      <Text color="white" fontSize="sm" fontFamily="mono">{eventId.slice(0, 8)}...</Text>
+                      <Flex w={11} h={11} borderRadius="full" bg="purple.500/15" color="purple.200" align="center" justify="center" flexShrink={0}>
+                        <Award size={18} />
+                      </Flex>
                     </HStack>
-                  ))}
-                </VStack>
-              ) : (
-                <VStack gap={3}>
-                  <Text color="whiteAlpha.500" fontSize="sm">No events attended yet</Text>
-                  <Link to="/sessions">
-                    <ChakraButton size="sm" colorScheme="green" borderRadius="full">
-                      Browse Events
-                    </ChakraButton>
-                  </Link>
-                </VStack>
+                    {displayUser.badges.length > 0 ? (
+                      <VStack align="stretch" gap={3}>
+                        {displayUser.badges.slice(0, 6).map((badge) => {
+                          const visual = getBadgeVisual(badge.id);
+
+                          return (
+                          <HStack key={badge.id} p={3} borderRadius="xl" bg="whiteAlpha.50" gap={3}>
+                            <Box
+                              w={10}
+                              h={10}
+                              borderRadius="full"
+                              bg={visual.bg}
+                              color={visual.color}
+                              display="flex"
+                              alignItems="center"
+                              justifyContent="center"
+                              fontWeight="bold"
+                              flexShrink={0}
+                            >
+                              {visual.icon}
+                            </Box>
+                            <Box minW={0}>
+                              <Text color="white" fontSize="sm" fontWeight="bold" lineClamp={1}>{badge.name}</Text>
+                              <Text color="whiteAlpha.500" fontSize="xs" lineClamp={1}>{badge.description}</Text>
+                            </Box>
+                          </HStack>
+                          );
+                        })}
+                      </VStack>
+                    ) : (
+                      <VStack align="stretch" gap={3}>
+                        <Text color="whiteAlpha.500" fontSize="sm" lineHeight="tall">
+                          No badges earned yet. Submit a quest response to unlock your first badge.
+                        </Text>
+                        <Link to="/quests" style={{ display: 'block' }}>
+                          <ChakraButton size="sm" w="fit-content" bg="purple.500/15" color="purple.200" border="1px solid" borderColor="purple.400/30" borderRadius="full" _hover={{ bg: 'purple.500/25' }}>
+                            Browse Quests
+                          </ChakraButton>
+                        </Link>
+                      </VStack>
+                    )}
+                  </Box>
+                </SimpleGrid>
+              )}
+
+              {activePassportTab === 'quests' && (
+                <Box p={{ base: 5, md: 6 }} borderRadius="xl" bg="gray.900" border="1px solid" borderColor="whiteAlpha.100">
+                  <HStack justify="space-between" align="start" gap={4} mb={5}>
+                    <Box>
+                      <Heading as="h3" fontSize="lg" color="white" mb={1}>Completed Quests</Heading>
+                      <Text color="whiteAlpha.500" fontSize="sm">Based on submitted responses</Text>
+                    </Box>
+                    <Flex w={11} h={11} borderRadius="full" bg="green.500/15" color="green.200" align="center" justify="center" flexShrink={0}>
+                      <CheckCircle2 size={18} />
+                    </Flex>
+                  </HStack>
+                  {displayUser.completedQuests.length > 0 ? (
+                    <SimpleGrid columns={{ base: 1, md: 2 }} gap={3}>
+                      {displayUser.completedQuests.map((quest) => (
+                        <Link key={quest.id} to={`/quests/${quest.id}`} style={{ display: 'block' }}>
+                          <HStack p={3} borderRadius="xl" bg="whiteAlpha.50" border="1px solid" borderColor="transparent" _hover={{ bg: 'whiteAlpha.100', borderColor: 'green.400/30' }}>
+                            <Flex w={10} h={10} borderRadius="full" bg="green.500/15" color="green.200" align="center" justify="center" flexShrink={0}>
+                              <CheckCircle2 size={17} />
+                            </Flex>
+                            <Box minW={0} flex={1}>
+                              <Text color="white" fontSize="sm" fontWeight="bold" lineClamp={1}>{quest.title}</Text>
+                              <Text color="whiteAlpha.500" fontSize="xs">
+                                {quest.submissions || 1} {(quest.submissions || 1) === 1 ? 'submission' : 'submissions'}
+                              </Text>
+                            </Box>
+                          </HStack>
+                        </Link>
+                      ))}
+                    </SimpleGrid>
+                  ) : (
+                    <VStack align="stretch" gap={3}>
+                      <Text color="whiteAlpha.500" fontSize="sm" lineHeight="tall">
+                        No completed quest submissions yet.
+                      </Text>
+                      <Link to="/quests">
+                        <ChakraButton size="sm" w="fit-content" bg="green.500/15" color="green.200" border="1px solid" borderColor="green.400/30" borderRadius="full" _hover={{ bg: 'green.500/25' }}>
+                          Browse Quests
+                        </ChakraButton>
+                      </Link>
+                    </VStack>
+                  )}
+                </Box>
+              )}
+
+              {activePassportTab === 'events' && (
+                <Box p={{ base: 5, md: 6 }} borderRadius="xl" bg="gray.900" border="1px solid" borderColor="whiteAlpha.100">
+                  <HStack justify="space-between" align="start" gap={4} mb={5}>
+                    <Box>
+                      <Heading as="h3" fontSize="lg" color="white" mb={1}>Events Attended</Heading>
+                      <Text color="whiteAlpha.500" fontSize="sm">{displayUser.attendedEvents.length} confirmed {displayUser.attendedEvents.length === 1 ? 'event' : 'events'}</Text>
+                    </Box>
+                    <Flex w={11} h={11} borderRadius="full" bg="green.500/15" color="green.200" align="center" justify="center" flexShrink={0}>
+                      <CalendarDays size={18} />
+                    </Flex>
+                  </HStack>
+                  {displayUser.attendedEvents.length > 0 ? (
+                    <SimpleGrid columns={{ base: 1, md: 2 }} gap={3}>
+                      {displayUser.attendedEvents.map((event) => {
+                        const eventContent = (
+                          <HStack p={3} borderRadius="xl" bg="whiteAlpha.50" border="1px solid" borderColor="transparent" _hover={event.hasSession ? { bg: 'whiteAlpha.100', borderColor: 'green.400/30' } : undefined}>
+                            <Flex w={10} h={10} borderRadius="full" bg="green.500/15" color="green.200" align="center" justify="center" flexShrink={0}>
+                              <CalendarDays size={17} />
+                            </Flex>
+                            <Box minW={0} flex={1}>
+                              <Text color="white" fontSize="sm" fontWeight="bold" lineClamp={1}>{event.title}</Text>
+                              <Text color="whiteAlpha.500" fontSize="xs" lineClamp={1}>
+                                {formatDate(event.date)}{event.locationName ? ` - ${event.locationName}` : ''}
+                              </Text>
+                            </Box>
+                          </HStack>
+                        );
+
+                        return event.hasSession ? (
+                          <Link key={event.id} to={`/sessions/${event.id}`} style={{ display: 'block' }}>
+                            {eventContent}
+                          </Link>
+                        ) : (
+                          <Box key={event.id}>{eventContent}</Box>
+                        );
+                      })}
+                    </SimpleGrid>
+                  ) : (
+                    <VStack gap={3}>
+                      <Text color="whiteAlpha.500" fontSize="sm">No events attended yet</Text>
+                      <Link to="/sessions">
+                        <ChakraButton size="sm" colorScheme="green" borderRadius="full">
+                          Browse Events
+                        </ChakraButton>
+                      </Link>
+                    </VStack>
+                  )}
+                </Box>
+              )}
+
+              {activePassportTab === 'liked' && (
+                <ArtworkStrip
+                  title="Liked Artwork"
+                  icon={<Heart size={18} fill="currentColor" />}
+                  items={savedArtwork.loved}
+                  isLoading={savedArtworkLoading}
+                  emptyTitle="No liked artwork yet"
+                  emptyDescription="Love artwork from exhibitions or the artwork viewer and it will collect here."
+                />
+              )}
+
+              {activePassportTab === 'bookmarked' && (
+                <ArtworkStrip
+                  title="Bookmarked Artwork"
+                  icon={<Bookmark size={18} fill="currentColor" />}
+                  items={savedArtwork.bookmarked}
+                  isLoading={savedArtworkLoading}
+                  emptyTitle="No bookmarks yet"
+                  emptyDescription="Bookmark pieces you want to revisit and they will stay available from your Passport."
+                />
+              )}
+
+              {activePassportTab === 'posts' && (
+                <Box p={{ base: 5, md: 6 }} borderRadius="xl" bg="gray.900" border="1px solid" borderColor="whiteAlpha.100">
+                  <HStack justify="space-between" align="center" mb={5}>
+                    <HStack gap={3}>
+                      <Flex w={10} h={10} borderRadius="full" bg="whiteAlpha.50" color="brand.300" align="center" justify="center">
+                        <MessageCircle size={18} />
+                      </Flex>
+                      <Box>
+                        <Heading as="h3" fontSize="lg" color="white">Community Posts</Heading>
+                        <Text color="whiteAlpha.500" fontSize="sm">
+                          {userCommunityPosts.length} {userCommunityPosts.length === 1 ? 'post' : 'posts'}
+                        </Text>
+                      </Box>
+                    </HStack>
+                    <Link to="/community/wall">
+                      <ChakraButton
+                        size="sm"
+                        bg="whiteAlpha.50"
+                        color="whiteAlpha.800"
+                        border="1px solid"
+                        borderColor="whiteAlpha.100"
+                        borderRadius="full"
+                        _hover={{ bg: 'whiteAlpha.100' }}
+                      >
+                        Wall
+                      </ChakraButton>
+                    </Link>
+                  </HStack>
+
+                  {communityPostsLoading ? (
+                    <HStack gap={3} color="whiteAlpha.500">
+                      <Spinner size="sm" color="brand.500" />
+                      <Text fontSize="sm">Loading posts...</Text>
+                    </HStack>
+                  ) : userCommunityPosts.length > 0 ? (
+                    <VStack align="stretch" gap={3}>
+                      {userCommunityPosts.map((post) => {
+                        const thumbnail = post.mediaType === 'image' ? post.mediaUrls?.[0] : undefined;
+
+                        return (
+                          <Box key={post.id} p={4} borderRadius="xl" bg="whiteAlpha.50" border="1px solid" borderColor="whiteAlpha.100">
+                            <Flex gap={4} align="flex-start" direction={{ base: 'column', sm: 'row' }}>
+                              {thumbnail && (
+                                <Box w={{ base: 'full', sm: '120px' }} h={{ base: '180px', sm: '120px' }} borderRadius="lg" overflow="hidden" bg="gray.800" flexShrink={0}>
+                                  <Image src={thumbnail} alt="Community post media" w="full" h="full" objectFit="cover" />
+                                </Box>
+                              )}
+                              <Box flex={1} minW={0}>
+                                <HStack gap={3} color="whiteAlpha.500" fontSize="xs" mb={2} flexWrap="wrap">
+                                  <Text>{formatDate(post.createdAt)}</Text>
+                                  <Text>{post.reactionsCount || 0} reactions</Text>
+                                  <Text>{post.commentsCount || 0} comments</Text>
+                                </HStack>
+                                {post.prompt && (
+                                  <Text color="brand.300" fontSize="xs" fontWeight="semibold" mb={2} lineClamp={1}>
+                                    {post.prompt}
+                                  </Text>
+                                )}
+                                <Text color="whiteAlpha.900" fontSize="sm" lineHeight="tall" whiteSpace="pre-wrap">
+                                  {post.content}
+                                </Text>
+                                {post.tags?.length > 0 && (
+                                  <HStack gap={2} mt={3} flexWrap="wrap">
+                                    {post.tags.slice(0, 8).map((tag) => (
+                                      <Text key={tag} px={2.5} py={1} borderRadius="full" bg="blackAlpha.300" color="whiteAlpha.600" fontSize="xs">
+                                        #{tag}
+                                      </Text>
+                                    ))}
+                                  </HStack>
+                                )}
+                              </Box>
+                            </Flex>
+                          </Box>
+                        );
+                      })}
+                    </VStack>
+                  ) : (
+                    <Flex
+                      minH="180px"
+                      borderRadius="xl"
+                      border="1px dashed"
+                      borderColor="whiteAlpha.200"
+                      bg="blackAlpha.200"
+                      align="center"
+                      justify="center"
+                      textAlign="center"
+                      px={6}
+                    >
+                      <VStack gap={3}>
+                        <Flex w={12} h={12} borderRadius="full" bg="whiteAlpha.50" color="whiteAlpha.500" align="center" justify="center">
+                          <MessageCircle size={20} />
+                        </Flex>
+                        <Box>
+                          <Text color="white" fontWeight="bold">No community posts yet</Text>
+                          <Text color="whiteAlpha.500" fontSize="sm" maxW="sm">Posts you make on the community wall will show here.</Text>
+                        </Box>
+                        <Link to="/community/wall">
+                          <ChakraButton size="sm" bg="brand.500" color="white" borderRadius="full" _hover={{ bg: 'brand.600' }}>
+                            Create Post
+                          </ChakraButton>
+                        </Link>
+                      </VStack>
+                    </Flex>
+                  )}
+                </Box>
               )}
             </Box>
-          </SimpleGrid>
-
-          <SimpleGrid columns={{ base: 1, xl: 2 }} gap={6} mt={8}>
-            <ArtworkStrip
-              title="Liked Artwork"
-              icon={<Heart size={18} fill="currentColor" />}
-              items={savedArtwork.loved}
-              isLoading={savedArtworkLoading}
-              emptyTitle="No liked artwork yet"
-              emptyDescription="Love artwork from exhibitions or the artwork viewer and it will collect here."
-            />
-            <ArtworkStrip
-              title="Bookmarked Artwork"
-              icon={<Bookmark size={18} fill="currentColor" />}
-              items={savedArtwork.bookmarked}
-              isLoading={savedArtworkLoading}
-              emptyTitle="No bookmarks yet"
-              emptyDescription="Bookmark pieces you want to revisit and they will stay available from your Passport."
-            />
-          </SimpleGrid>
+          </Box>
         </ChakraContainer>
       </Box>
 
