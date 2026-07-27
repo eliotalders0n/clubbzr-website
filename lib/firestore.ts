@@ -20,7 +20,6 @@ import {
   limit,
   startAfter,
   endBefore,
-  limitToLast,
   onSnapshot,
   writeBatch,
   runTransaction,
@@ -29,29 +28,24 @@ import {
   arrayRemove,
   serverTimestamp,
   Timestamp,
-  DocumentReference,
   DocumentSnapshot,
   QuerySnapshot,
   QueryConstraint,
-  Query,
   DocumentData,
   Unsubscribe,
   WhereFilterOp,
   OrderByDirection,
-  FieldPath,
   getCountFromServer,
   QueryDocumentSnapshot,
 } from 'firebase/firestore';
 
-import { db, COLLECTIONS } from './config';
+import { db } from './config';
 import type {
   BaseDocument,
   CreateDocument,
   UpdateDocument,
   CollectionTypes,
   CollectionName,
-  QueryFilters,
-  PaginationCursor,
 } from './schema';
 
 // =============================================================================
@@ -132,6 +126,34 @@ const queryToArray = <T extends BaseDocument>(
   return querySnap.docs.map((doc) => docToObject<T>(doc)!).filter(Boolean);
 };
 
+const isPlainObject = (value: unknown): value is Record<string, unknown> => {
+  if (!value || typeof value !== 'object') return false;
+  const prototype = Object.getPrototypeOf(value);
+  return prototype === Object.prototype || prototype === null;
+};
+
+const stripUndefined = (value: unknown): unknown => {
+  if (value === undefined) return undefined;
+
+  if (Array.isArray(value)) {
+    return value
+      .map((entry) => stripUndefined(entry))
+      .filter((entry) => entry !== undefined);
+  }
+
+  if (isPlainObject(value)) {
+    return Object.entries(value).reduce<Record<string, unknown>>((cleaned, [key, entry]) => {
+      const cleanedEntry = stripUndefined(entry);
+      if (cleanedEntry !== undefined) {
+        cleaned[key] = cleanedEntry;
+      }
+      return cleaned;
+    }, {});
+  }
+
+  return value;
+};
+
 // =============================================================================
 // GENERIC CRUD OPERATIONS
 // =============================================================================
@@ -173,7 +195,7 @@ export const createDocument = async <K extends CollectionName>(
       updatedAt: serverTimestamp(),
     };
 
-    const docRef = await addDoc(collRef, docData);
+    const docRef = await addDoc(collRef, stripUndefined(docData) as DocumentData);
     const newDoc = await getDoc(docRef);
 
     return {
@@ -201,7 +223,7 @@ export const createDocumentWithId = async <K extends CollectionName>(
       updatedAt: serverTimestamp(),
     };
 
-    await setDoc(docRef, docData);
+    await setDoc(docRef, stripUndefined(docData) as DocumentData);
     const newDoc = await getDoc(docRef);
 
     return {
@@ -228,7 +250,7 @@ export const updateDocument = async <K extends CollectionName>(
       updatedAt: serverTimestamp(),
     };
 
-    await updateDoc(docRef, updateData as DocumentData);
+    await updateDoc(docRef, stripUndefined(updateData) as DocumentData);
     const updatedDoc = await getDoc(docRef);
 
     return {
@@ -497,17 +519,17 @@ export const executeBatch = async (
 
       switch (op.type) {
         case 'create':
-          batch.set(docRef, {
+          batch.set(docRef, stripUndefined({
             ...op.data,
             createdAt: serverTimestamp(),
             updatedAt: serverTimestamp(),
-          });
+          }) as DocumentData);
           break;
         case 'update':
-          batch.update(docRef, {
+          batch.update(docRef, stripUndefined({
             ...op.data,
             updatedAt: serverTimestamp(),
-          });
+          }) as DocumentData);
           break;
         case 'delete':
           batch.delete(docRef);

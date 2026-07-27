@@ -202,10 +202,10 @@ const modalFooterButtonProps = {
 } as const
 
 const registrationActionButtonProps = {
-  h: '38px',
-  minW: '118px',
+  h: '42px',
+  minW: { base: 'full', md: '124px' },
   w: { base: 'full', sm: 'auto' },
-  px: 4,
+  px: 4.5,
   borderRadius: 'full',
   fontSize: 'sm',
   fontWeight: 'semibold',
@@ -623,7 +623,7 @@ export default function ManageSessions() {
         photoURL: targetUser.photoURL || null,
         status,
         paymentStatus,
-        paymentMethod: paymentStatus === 'paid_external' ? 'bank_transfer' : undefined,
+        ...(paymentStatus === 'paid_external' ? { paymentMethod: 'bank_transfer' as const } : {}),
         requestedAt: now,
         ...(status === 'confirmed' ? { confirmedAt: now, confirmedBy: firebaseUser?.uid || 'admin' } : {}),
         ...(paymentStatus === 'paid_external' ? { paidAt: now } : {}),
@@ -1269,8 +1269,13 @@ function RegistrationRow({
   const canDecline = !isTerminal && !isConfirmed
 
   return (
-    <Box p={4} bg="whiteAlpha.50" border="1px solid" borderColor="whiteAlpha.100" borderRadius="xl">
-      <Flex gap={3} justify="space-between" align={{ base: 'stretch', sm: 'flex-start' }} direction={{ base: 'column', sm: 'row' }}>
+    <Box p={{ base: 4, md: 5 }} bg="whiteAlpha.50" border="1px solid" borderColor="whiteAlpha.100" borderRadius="xl">
+      <Flex
+        gap={{ base: 4, lg: 6 }}
+        justify="space-between"
+        align={{ base: 'stretch', lg: 'flex-start' }}
+        direction={{ base: 'column', lg: 'row' }}
+      >
         <HStack gap={3} minW={0} align="flex-start">
           {registration.photoURL ? (
             <Image src={registration.photoURL} alt={registration.displayName} boxSize="40px" borderRadius="full" objectFit="cover" />
@@ -1291,8 +1296,14 @@ function RegistrationRow({
           </Box>
         </HStack>
 
-        <VStack align={{ base: 'stretch', sm: 'flex-end' }} gap={2}>
-          <HStack gap={2} flexWrap="wrap" justify={{ base: 'flex-start', sm: 'flex-end' }}>
+        <VStack
+          align={{ base: 'stretch', lg: 'flex-end' }}
+          gap={3}
+          w={{ base: 'full', lg: 'auto' }}
+          minW={{ lg: '408px' }}
+          flexShrink={0}
+        >
+          <Flex gap={3} flexWrap="wrap" justify={{ base: 'flex-start', lg: 'flex-end' }} w="full">
             <Badge bg="whiteAlpha.100" color="whiteAlpha.800" borderRadius="full" px={3} py={1}>
               {paymentStatusLabels[registration.paymentStatus]}
             </Badge>
@@ -1301,8 +1312,13 @@ function RegistrationRow({
                 {registration.paymentCurrency || 'ZMW'} {registration.paymentAmount.toFixed(2)}
               </Badge>
             )}
-          </HStack>
-          <HStack gap={2.5} flexWrap="wrap" justify={{ base: 'stretch', sm: 'flex-end' }} w={{ base: 'full', sm: 'auto' }}>
+          </Flex>
+          <Flex
+            gap={3}
+            flexWrap="wrap"
+            justify={{ base: 'stretch', lg: 'flex-end' }}
+            w="full"
+          >
             {canMarkPaid && (
               <Button {...registrationActionButtonProps} bg="blue.500/15" color="blue.200" _hover={{ bg: 'blue.500/25' }} onClick={() => onMarkPaid(registration)}>
                 <CreditCard size={14} />
@@ -1333,7 +1349,7 @@ function RegistrationRow({
                 Decline
               </Button>
             )}
-          </HStack>
+          </Flex>
         </VStack>
       </Flex>
     </Box>

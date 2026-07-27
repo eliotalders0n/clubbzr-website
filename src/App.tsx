@@ -31,6 +31,7 @@ const ManageUsers = lazy(() => import('@/pages/admin/ManageUsers'))
 const ManageSessions = lazy(() => import('@/pages/admin/ManageSessions'))
 const ManageQuests = lazy(() => import('@/pages/admin/ManageQuests'))
 const ManageExhibitions = lazy(() => import('@/pages/admin/ManageExhibitions'))
+const Payments = lazy(() => import('@/pages/admin/Payments'))
 const ManageRadio = lazy(() => import('@/pages/admin/ManageRadio'))
 const ManageCommunity = lazy(() => import('@/pages/admin/ManageCommunity'))
 const ManageMap = lazy(() => import('@/pages/admin/ManageMap'))
@@ -125,6 +126,7 @@ function App() {
           <Route path="/admin" element={<AdminRoute><AdminDashboard /></AdminRoute>} />
           <Route path="/admin/users" element={<AdminRoute><ManageUsers /></AdminRoute>} />
           <Route path="/admin/sessions" element={<AdminRoute><ManageSessions /></AdminRoute>} />
+          <Route path="/admin/payments" element={<AdminRoute><Payments /></AdminRoute>} />
           <Route path="/admin/quests" element={<AdminRoute><ManageQuests /></AdminRoute>} />
           <Route path="/admin/exhibitions" element={<AdminRoute><ManageExhibitions /></AdminRoute>} />
           <Route path="/admin/radio" element={<AdminRoute><ManageRadio /></AdminRoute>} />
