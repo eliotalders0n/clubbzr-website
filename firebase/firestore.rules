@@ -436,6 +436,20 @@ service cloud.firestore {
     }
 
     // ========================================
+    // OUTBOUND MESSAGE LEDGER COLLECTIONS
+    // ========================================
+    match /messageJobs/{messageJobId} {
+      // Cloud Functions writes outbound WhatsApp/message jobs with Admin SDK.
+      // Clients should not read private contact payloads or spoof delivery jobs.
+      allow read, write: if false;
+    }
+
+    match /whatsappWebhookEvents/{eventId} {
+      // Raw Meta webhook payloads are private operational logs.
+      allow read, write: if false;
+    }
+
+    // ========================================
     // PROMPTS COLLECTION
     // ========================================
     match /prompts/{promptId} {

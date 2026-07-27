@@ -1,5 +1,5 @@
 import * as admin from "firebase-admin";
-import {randomBytes} from "node:crypto";
+import {createHmac, randomBytes, timingSafeEqual} from "node:crypto";
 import {defineSecret} from "firebase-functions/params";
 import {setGlobalOptions} from "firebase-functions/v2";
 import {onDocumentCreated, onDocumentUpdated} from "firebase-functions/v2/firestore";
@@ -11,10 +11,20 @@ setGlobalOptions({maxInstances: 10});
 
 const db = admin.firestore();
 const lencoSecretKey = defineSecret("LENCO_SECRET_KEY");
+const metaAppSecret = defineSecret("META_APP_SECRET");
+const whatsappAccessToken = defineSecret("WHATSAPP_ACCESS_TOKEN");
+const whatsappPhoneNumberId = defineSecret("WHATSAPP_PHONE_NUMBER_ID");
 const whatsappWebhookVerifyToken = defineSecret("WHATSAPP_WEBHOOK_VERIFY_TOKEN");
 
 const LENCO_API_BASE = "https://api.lenco.co/access/v2";
 const LENCO_REQUEST_TIMEOUT_MS = 15000;
+const WHATSAPP_API_BASE = "https://graph.facebook.com/v25.0";
+const WHATSAPP_REQUEST_TIMEOUT_MS = 15000;
+const CLUB_BZR_WHATSAPP_BUSINESS_NUMBER = "260960912464";
+const WHATSAPP_CONFIRMATION_TEMPLATE_NAME =
+  process.env.WHATSAPP_CONFIRMATION_TEMPLATE_NAME || "session_confirmation_v1";
+const WHATSAPP_TEMPLATE_LANGUAGE =
+  process.env.WHATSAPP_TEMPLATE_LANGUAGE || "en_US";
 const DEFAULT_CURRENCY = "ZMW";
 const DEFAULT_ADMIN_NOTIFICATION_EMAIL = "clubbzrzm@gmail.com";
 const APP_BASE_URL = process.env.APP_BASE_URL || "https://clubbzr.com";
@@ -23,6 +33,7 @@ const SESSION_REGISTRATIONS_COLLECTION = "sessionRegistrations";
 const SESSION_PAYMENT_TRANSACTIONS_COLLECTION = "sessionPaymentTransactions";
 const SESSION_PAYMENT_RETURNS_COLLECTION = "sessionPaymentReturns";
 const SESSION_PAYMENT_WITHDRAWALS_COLLECTION = "sessionPaymentWithdrawals";
+const MESSAGE_JOBS_COLLECTION = "messageJobs";
 const WHATSAPP_WEBHOOK_EVENTS_COLLECTION = "whatsappWebhookEvents";
 const MAIL_COLLECTION = "mail";
 
@@ -81,6 +92,11 @@ interface AdminRecordPaymentReturnData {
   notes?: string;
 }
 
+interface AdminSendSessionConfirmationWhatsAppData {
+  registrationId?: string;
+  force?: boolean;
+}
+
 interface SessionEmailSummary {
   title: string;
   dateText: string;
@@ -92,6 +108,15 @@ interface QueuedEmail {
   subject: string;
   text: string;
   html: string;
+  tag: string;
+  metadata: Record<string, string | null>;
+}
+
+interface QueuedWhatsAppTemplate {
+  to: string;
+  templateName: string;
+  languageCode: string;
+  bodyParameters: string[];
   tag: string;
   metadata: Record<string, string | null>;
 }
@@ -133,6 +158,17 @@ function formatPhoneNumber(value: string): string {
     "invalid-argument",
     "Enter a valid Zambian mobile money number."
   );
+}
+
+function normalizeWhatsAppPhoneNumber(value: unknown): string | null {
+  const phone = normalizeOptionalString(value);
+  if (!phone) return null;
+
+  try {
+    return formatPhoneNumber(phone);
+  } catch {
+    return null;
+  }
 }
 
 function mapOperator(value: string): MobileMoneyOperator {
@@ -437,6 +473,327 @@ async function queueEmail(input: QueuedEmail): Promise<void> {
   });
 }
 
+async function whatsappRequest(
+  path: string,
+  init: RequestInit,
+  accessToken: string,
+  timeoutMs = WHATSAPP_REQUEST_TIMEOUT_MS
+): Promise<Record<string, unknown>> {
+  if (!accessToken) {
+    throw new HttpsError(
+      "failed-precondition",
+      "WhatsApp access token is not configured."
+    );
+  }
+
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+  let response: Response;
+
+  try {
+    response = await fetch(`${WHATSAPP_API_BASE}${path}`, {
+      ...init,
+      signal: controller.signal,
+      headers: {
+        "Content-Type": "application/json",
+        "Authorization": `Bearer ${accessToken}`,
+        ...(init.headers || {}),
+      },
+    });
+  } catch (error) {
+    if (error instanceof Error && error.name === "AbortError") {
+      logger.warn("WhatsApp API request timed out", {
+        path,
+        timeoutMs,
+      });
+      throw new HttpsError(
+        "deadline-exceeded",
+        "WhatsApp request timed out."
+      );
+    }
+
+    throw error;
+  } finally {
+    clearTimeout(timeoutId);
+  }
+
+  const parsedResponse = await response.json().catch(() => ({}));
+  const responseData = parsedResponse as Record<string, unknown>;
+
+  if (!response.ok) {
+    logger.error("WhatsApp API request failed", {
+      path,
+      status: response.status,
+      responseData,
+    });
+
+    const errorData = responseData.error as Record<string, unknown> | undefined;
+    const message = normalizeOptionalString(errorData?.message) ??
+      normalizeOptionalString(responseData.message) ??
+      "WhatsApp request failed.";
+    const errorCode: "failed-precondition" | "unavailable" =
+      response.status === 408 || response.status === 429 || response.status >= 500 ?
+        "unavailable" :
+        "failed-precondition";
+
+    throw new HttpsError(errorCode, message);
+  }
+
+  return responseData;
+}
+
+function getWhatsAppMessageId(responseData: Record<string, unknown>): string | null {
+  const messages = responseData.messages;
+  if (!Array.isArray(messages)) return null;
+
+  const firstMessage = messages[0] as Record<string, unknown> | undefined;
+  return normalizeOptionalString(firstMessage?.id);
+}
+
+async function sendWhatsAppTemplate(
+  input: QueuedWhatsAppTemplate
+): Promise<Record<string, unknown>> {
+  const phoneNumberId = whatsappPhoneNumberId.value();
+  if (!phoneNumberId) {
+    throw new HttpsError(
+      "failed-precondition",
+      "WhatsApp phone number ID is not configured."
+    );
+  }
+
+  return whatsappRequest(
+    `/${phoneNumberId}/messages`,
+    {
+      method: "POST",
+      body: JSON.stringify({
+        messaging_product: "whatsapp",
+        to: input.to,
+        type: "template",
+        template: {
+          name: input.templateName,
+          language: {code: input.languageCode},
+          components: [
+            {
+              type: "body",
+              parameters: input.bodyParameters.map((text) => ({
+                type: "text",
+                text,
+              })),
+            },
+          ],
+        },
+      }),
+    },
+    whatsappAccessToken.value()
+  );
+}
+
+async function getRegistrationWhatsAppRecipient(input: {
+  registrationId: string;
+  registrationData: FirebaseFirestore.DocumentData;
+}): Promise<string | null> {
+  const registrationPhone = [
+    input.registrationData.whatsappPhone,
+    input.registrationData.phone,
+    input.registrationData.mobilePhone,
+    input.registrationData.contactPhone,
+  ]
+    .map((value) => normalizeWhatsAppPhoneNumber(value))
+    .find(Boolean);
+  if (registrationPhone) return registrationPhone;
+
+  const userId = normalizeOptionalString(input.registrationData.userId);
+  if (userId) {
+    const userSnapshot = await db.collection("users").doc(userId).get();
+    const userData = userSnapshot.data() || {};
+    const userPhone = [
+      userData.whatsappPhone,
+      userData.phone,
+      userData.mobilePhone,
+      userData.contactPhone,
+    ]
+      .map((value) => normalizeWhatsAppPhoneNumber(value))
+      .find(Boolean);
+    if (userPhone) return userPhone;
+  }
+
+  const paymentSnapshot = await db
+    .collection(SESSION_PAYMENT_TRANSACTIONS_COLLECTION)
+    .where("registrationId", "==", input.registrationId)
+    .limit(1)
+    .get();
+
+  if (!paymentSnapshot.empty) {
+    return normalizeWhatsAppPhoneNumber(paymentSnapshot.docs[0].data().phone);
+  }
+
+  return null;
+}
+
+async function queueUserConfirmationWhatsApp(input: {
+  registrationId: string;
+  registrationData: FirebaseFirestore.DocumentData;
+  force?: boolean;
+}): Promise<{
+  status: "sent" | "skipped" | "failed";
+  messageId?: string | null;
+  reason?: string;
+}> {
+  const jobRef = db
+    .collection(MESSAGE_JOBS_COLLECTION)
+    .doc(`whatsapp_session_confirmation_${input.registrationId}`);
+  const existingJobSnapshot = await jobRef.get();
+  const existingJob = existingJobSnapshot.data() || {};
+
+  if (!input.force && existingJob.status === "sent") {
+    return {
+      status: "sent",
+      messageId: normalizeOptionalString(existingJob.providerMessageId),
+    };
+  }
+
+  const recipient = await getRegistrationWhatsAppRecipient(input);
+  const sessionId = normalizeOptionalString(input.registrationData.sessionId);
+  const session = await getSessionEmailSummary(sessionId);
+  const memberName = getRegistrationName(input.registrationData);
+  const userId = normalizeOptionalString(input.registrationData.userId);
+  const metadata = {
+    sessionId,
+    registrationId: input.registrationId,
+    userId,
+  };
+
+  if (!recipient) {
+    const reason = "No WhatsApp-capable phone number is recorded.";
+    await jobRef.set(
+      {
+        channel: "whatsapp",
+        type: "session_confirmation",
+        tag: "session_confirmation_user",
+        status: "skipped",
+        reason,
+        from: CLUB_BZR_WHATSAPP_BUSINESS_NUMBER,
+        metadata,
+        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+        createdAt: existingJobSnapshot.exists && existingJob.createdAt ?
+          existingJob.createdAt :
+          admin.firestore.FieldValue.serverTimestamp(),
+      },
+      {merge: true}
+    );
+    await db
+      .collection(SESSION_REGISTRATIONS_COLLECTION)
+      .doc(input.registrationId)
+      .set(
+        {
+          confirmationWhatsAppSkippedAt:
+            admin.firestore.FieldValue.serverTimestamp(),
+          confirmationWhatsAppSkipReason: reason,
+          updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+        },
+        {merge: true}
+      );
+
+    return {status: "skipped", reason};
+  }
+
+  const message: QueuedWhatsAppTemplate = {
+    to: recipient,
+    templateName: WHATSAPP_CONFIRMATION_TEMPLATE_NAME,
+    languageCode: WHATSAPP_TEMPLATE_LANGUAGE,
+    bodyParameters: [
+      memberName,
+      session.title,
+      session.dateText,
+    ],
+    tag: "session_confirmation_user",
+    metadata,
+  };
+
+  await jobRef.set(
+    {
+      channel: "whatsapp",
+      type: "session_confirmation",
+      tag: message.tag,
+      status: "sending",
+      from: CLUB_BZR_WHATSAPP_BUSINESS_NUMBER,
+      to: recipient,
+      templateName: message.templateName,
+      languageCode: message.languageCode,
+      bodyParameters: message.bodyParameters,
+      metadata,
+      attempts: admin.firestore.FieldValue.increment(1),
+      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      createdAt: existingJobSnapshot.exists && existingJob.createdAt ?
+        existingJob.createdAt :
+        admin.firestore.FieldValue.serverTimestamp(),
+    },
+    {merge: true}
+  );
+
+  try {
+    const responseData = await sendWhatsAppTemplate(message);
+    const messageId = getWhatsAppMessageId(responseData);
+
+    await jobRef.set(
+      {
+        status: "sent",
+        provider: "meta_whatsapp_cloud_api",
+        providerMessageId: messageId,
+        providerResponse: serializeForCallable(responseData),
+        sentAt: admin.firestore.FieldValue.serverTimestamp(),
+        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      },
+      {merge: true}
+    );
+    await db
+      .collection(SESSION_REGISTRATIONS_COLLECTION)
+      .doc(input.registrationId)
+      .set(
+        {
+          whatsappPhone: recipient,
+          confirmationWhatsAppSentAt:
+            admin.firestore.FieldValue.serverTimestamp(),
+          confirmationWhatsAppMessageId: messageId,
+          updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+        },
+        {merge: true}
+      );
+
+    return {status: "sent", messageId};
+  } catch (error) {
+    const errorMessage = getErrorMessage(error);
+    await jobRef.set(
+      {
+        status: "failed",
+        lastError: errorMessage,
+        failedAt: admin.firestore.FieldValue.serverTimestamp(),
+        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      },
+      {merge: true}
+    );
+    await db
+      .collection(SESSION_REGISTRATIONS_COLLECTION)
+      .doc(input.registrationId)
+      .set(
+        {
+          confirmationWhatsAppFailedAt:
+            admin.firestore.FieldValue.serverTimestamp(),
+          confirmationWhatsAppError: errorMessage,
+          updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+        },
+        {merge: true}
+      );
+    logger.error("Session confirmation WhatsApp failed", {
+      registrationId: input.registrationId,
+      sessionId,
+      errorMessage,
+    });
+
+    return {status: "failed", reason: errorMessage};
+  }
+}
+
 async function queueAdminSignupEmail(input: {
   registrationId: string;
   registrationData: FirebaseFirestore.DocumentData;
@@ -666,10 +1023,112 @@ async function requirePaymentAccess(
   );
 }
 
+function extractWhatsAppStatuses(body: unknown): Record<string, unknown>[] {
+  const statuses: Record<string, unknown>[] = [];
+  const bodyRecord = body as Record<string, unknown>;
+  const entries = Array.isArray(bodyRecord.entry) ? bodyRecord.entry : [];
+
+  entries.forEach((entry) => {
+    const entryRecord = entry as Record<string, unknown>;
+    const changes = Array.isArray(entryRecord.changes) ?
+      entryRecord.changes :
+      [];
+
+    changes.forEach((change) => {
+      const changeRecord = change as Record<string, unknown>;
+      const value = changeRecord.value as Record<string, unknown> | undefined;
+      const changeStatuses = Array.isArray(value?.statuses) ?
+        value?.statuses :
+        [];
+
+      changeStatuses.forEach((status) => {
+        if (status && typeof status === "object") {
+          statuses.push(status as Record<string, unknown>);
+        }
+      });
+    });
+  });
+
+  return statuses;
+}
+
+function isValidMetaSignature(input: {
+  signatureHeader: string | null;
+  rawBody: Buffer | undefined;
+  appSecret: string;
+}): boolean {
+  const signature = input.signatureHeader?.startsWith("sha256=") ?
+    input.signatureHeader.slice("sha256=".length) :
+    null;
+
+  if (!signature || !input.rawBody || !input.appSecret) {
+    return false;
+  }
+
+  const expectedSignature = createHmac("sha256", input.appSecret)
+    .update(input.rawBody)
+    .digest("hex");
+
+  const received = Buffer.from(signature, "hex");
+  const expected = Buffer.from(expectedSignature, "hex");
+
+  return received.length === expected.length && timingSafeEqual(received, expected);
+}
+
+async function applyWhatsAppStatusUpdates(
+  statuses: Record<string, unknown>[]
+): Promise<void> {
+  await Promise.all(statuses.map(async (statusRecord) => {
+    const messageId = normalizeOptionalString(statusRecord.id);
+    if (!messageId) return;
+
+    const status = normalizeOptionalString(statusRecord.status) ?? "unknown";
+    const matchingJobs = await db
+      .collection(MESSAGE_JOBS_COLLECTION)
+      .where("providerMessageId", "==", messageId)
+      .limit(5)
+      .get();
+
+    await Promise.all(matchingJobs.docs.map((jobSnapshot) => {
+      const timestampPatch: Record<string, unknown> = {};
+      if (status === "sent") {
+        timestampPatch.providerSentAt =
+          admin.firestore.FieldValue.serverTimestamp();
+      }
+      if (status === "delivered") {
+        timestampPatch.deliveredAt =
+          admin.firestore.FieldValue.serverTimestamp();
+      }
+      if (status === "read") {
+        timestampPatch.readAt =
+          admin.firestore.FieldValue.serverTimestamp();
+      }
+      if (status === "failed") {
+        timestampPatch.providerFailedAt =
+          admin.firestore.FieldValue.serverTimestamp();
+      }
+
+      return jobSnapshot.ref.set(
+        {
+          deliveryStatus: status,
+          recipientId: normalizeOptionalString(statusRecord.recipient_id),
+          lastStatusEvent: serializeForCallable(statusRecord),
+          statusEvents: admin.firestore.FieldValue.arrayUnion(
+            serializeForCallable(statusRecord)
+          ),
+          updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+          ...timestampPatch,
+        },
+        {merge: true}
+      );
+    }));
+  }));
+}
+
 export const whatsappWebhook = onRequest(
   {
     invoker: "public",
-    secrets: [whatsappWebhookVerifyToken],
+    secrets: [metaAppSecret, whatsappWebhookVerifyToken],
   },
   async (request, response) => {
     if (request.method === "GET") {
@@ -697,16 +1156,34 @@ export const whatsappWebhook = onRequest(
     }
 
     if (request.method === "POST") {
+      const signatureHeader = normalizeOptionalString(
+        request.get("x-hub-signature-256")
+      );
+      const rawBody = (request as {rawBody?: Buffer}).rawBody;
+      if (!isValidMetaSignature({
+        signatureHeader,
+        rawBody,
+        appSecret: metaAppSecret.value(),
+      })) {
+        logger.warn("WhatsApp webhook signature verification failed", {
+          hasSignature: Boolean(signatureHeader),
+          hasRawBody: Boolean(rawBody),
+        });
+        response.status(403).send("Forbidden");
+        return;
+      }
+
+      const statuses = extractWhatsAppStatuses(request.body || {});
       await db.collection(WHATSAPP_WEBHOOK_EVENTS_COLLECTION).add({
         body: serializeForCallable(request.body || {}),
         headers: {
-          "x-hub-signature-256": normalizeOptionalString(
-            request.get("x-hub-signature-256")
-          ),
+          "x-hub-signature-256": signatureHeader,
           "user-agent": normalizeOptionalString(request.get("user-agent")),
         },
+        statusCount: statuses.length,
         receivedAt: admin.firestore.FieldValue.serverTimestamp(),
       });
+      await applyWhatsAppStatusUpdates(statuses);
 
       response.status(200).send("EVENT_RECEIVED");
       return;
@@ -717,8 +1194,50 @@ export const whatsappWebhook = onRequest(
   }
 );
 
+export const adminSendSessionConfirmationWhatsApp = onCall(
+  {
+    cors: true,
+    invoker: "public",
+    secrets: [whatsappAccessToken, whatsappPhoneNumberId],
+  },
+  async (request) => {
+    await requireAdminAuth(request.auth?.uid);
+
+    const data = (request.data || {}) as AdminSendSessionConfirmationWhatsAppData;
+    const registrationId = requireString(
+      data.registrationId,
+      "Registration ID is required."
+    );
+    const registrationSnapshot = await db
+      .collection(SESSION_REGISTRATIONS_COLLECTION)
+      .doc(registrationId)
+      .get();
+
+    if (!registrationSnapshot.exists) {
+      throw new HttpsError("not-found", "Session registration not found.");
+    }
+
+    const registrationData = registrationSnapshot.data() || {};
+    if (registrationData.status !== "confirmed") {
+      throw new HttpsError(
+        "failed-precondition",
+        "WhatsApp confirmation can only be sent to confirmed registrations."
+      );
+    }
+
+    return queueUserConfirmationWhatsApp({
+      registrationId,
+      registrationData,
+      force: data.force === true,
+    });
+  }
+);
+
 export const notifyAdminsOnSessionRegistration = onDocumentCreated(
-  `${SESSION_REGISTRATIONS_COLLECTION}/{registrationId}`,
+  {
+    document: `${SESSION_REGISTRATIONS_COLLECTION}/{registrationId}`,
+    secrets: [whatsappAccessToken, whatsappPhoneNumberId],
+  },
   async (event) => {
     const registrationData = event.data?.data();
     const registrationId = event.params.registrationId;
@@ -734,6 +1253,7 @@ export const notifyAdminsOnSessionRegistration = onDocumentCreated(
 
     if (registrationData.status === "confirmed") {
       await queueUserConfirmationEmail({registrationId, registrationData});
+      await queueUserConfirmationWhatsApp({registrationId, registrationData});
       await event.data?.ref.set(
         {
           confirmationEmailSentAt: admin.firestore.FieldValue.serverTimestamp(),
@@ -746,7 +1266,10 @@ export const notifyAdminsOnSessionRegistration = onDocumentCreated(
 );
 
 export const notifyOnSessionRegistrationUpdate = onDocumentUpdated(
-  `${SESSION_REGISTRATIONS_COLLECTION}/{registrationId}`,
+  {
+    document: `${SESSION_REGISTRATIONS_COLLECTION}/{registrationId}`,
+    secrets: [whatsappAccessToken, whatsappPhoneNumberId],
+  },
   async (event) => {
     const beforeData = event.data?.before.data();
     const afterData = event.data?.after.data();
@@ -768,6 +1291,10 @@ export const notifyOnSessionRegistrationUpdate = onDocumentUpdated(
 
     if (beforeData.status !== "confirmed" && afterData.status === "confirmed") {
       await queueUserConfirmationEmail({registrationId, registrationData: afterData});
+      await queueUserConfirmationWhatsApp({
+        registrationId,
+        registrationData: afterData,
+      });
       await event.data?.after.ref.set(
         {
           confirmationEmailSentAt: admin.firestore.FieldValue.serverTimestamp(),

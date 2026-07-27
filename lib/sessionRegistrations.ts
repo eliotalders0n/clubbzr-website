@@ -147,6 +147,8 @@ export const buildSessionRegistrationPayload = (
     userId: user.uid || user.id,
     displayName: user.displayName || 'Club BZR member',
     email: user.email || '',
+    ...(user.phone ? { phone: user.phone } : {}),
+    ...(user.whatsappPhone ? { whatsappPhone: user.whatsappPhone } : {}),
     photoURL: user.photoURL || null,
     status: initialState.status,
     paymentStatus: initialState.paymentStatus,

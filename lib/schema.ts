@@ -161,6 +161,8 @@ export interface User extends BaseDocument {
   email: string;
   displayName: string;
   photoURL: string | null;
+  phone?: string;
+  whatsappPhone?: string;
   role: UserRole;
   bio?: string;
   location?: string;
@@ -453,6 +455,8 @@ export interface SessionRegistration extends BaseDocument {
   userId: string;
   displayName: string;
   email: string;
+  phone?: string;
+  whatsappPhone?: string;
   photoURL?: string | null;
 
   status: SessionRegistrationStatus;
@@ -469,6 +473,12 @@ export interface SessionRegistration extends BaseDocument {
   confirmedAt?: FirestoreTimestamp;
   confirmedBy?: string;
   confirmationEmailSentAt?: FirestoreTimestamp;
+  confirmationWhatsAppSentAt?: FirestoreTimestamp;
+  confirmationWhatsAppMessageId?: string | null;
+  confirmationWhatsAppSkippedAt?: FirestoreTimestamp;
+  confirmationWhatsAppSkipReason?: string;
+  confirmationWhatsAppFailedAt?: FirestoreTimestamp;
+  confirmationWhatsAppError?: string;
   declinedAt?: FirestoreTimestamp;
   declinedBy?: string;
   cancelledAt?: FirestoreTimestamp;

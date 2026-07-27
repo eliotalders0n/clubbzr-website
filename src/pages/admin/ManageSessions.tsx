@@ -593,7 +593,8 @@ export default function ManageSessions() {
     session: Session,
     targetUser: FirestoreUser,
     status: SessionRegistrationStatus,
-    paymentStatus: SessionRegistrationPaymentStatus
+    paymentStatus: SessionRegistrationPaymentStatus,
+    whatsappPhone?: string
   ) => {
     const userId = targetUser.uid || targetUser.id
 
@@ -620,6 +621,8 @@ export default function ManageSessions() {
         userId,
         displayName: targetUser.displayName || targetUser.email || 'Club BZR member',
         email: targetUser.email || '',
+        ...(whatsappPhone?.trim() ? { whatsappPhone: whatsappPhone.trim() } : {}),
+        ...(targetUser.phone ? { phone: targetUser.phone } : {}),
         photoURL: targetUser.photoURL || null,
         status,
         paymentStatus,
@@ -1093,7 +1096,8 @@ function RegistrationManager({
     session: Session,
     user: FirestoreUser,
     status: SessionRegistrationStatus,
-    paymentStatus: SessionRegistrationPaymentStatus
+    paymentStatus: SessionRegistrationPaymentStatus,
+    whatsappPhone?: string
   ) => Promise<boolean>
   onMarkPaid: (registration: SessionRegistration) => void
   onConfirm: (registration: SessionRegistration, markPaid?: boolean) => void
@@ -1101,6 +1105,7 @@ function RegistrationManager({
   onDecline: (registration: SessionRegistration) => void
 }) {
   const [selectedUserId, setSelectedUserId] = useState('')
+  const [newRegistrationPhone, setNewRegistrationPhone] = useState('')
   const [newRegistrationStatus, setNewRegistrationStatus] = useState<SessionRegistrationStatus>('requested')
   const [addingRegistration, setAddingRegistration] = useState(false)
   const existingUserIds = useMemo(
@@ -1123,11 +1128,18 @@ function RegistrationManager({
     if (!targetUser) return
 
     setAddingRegistration(true)
-    const success = await onAddRegistration(session, targetUser, newRegistrationStatus, newPaymentStatus)
+    const success = await onAddRegistration(
+      session,
+      targetUser,
+      newRegistrationStatus,
+      newPaymentStatus,
+      newRegistrationPhone.trim() || undefined
+    )
     setAddingRegistration(false)
 
     if (success) {
       setSelectedUserId('')
+      setNewRegistrationPhone('')
       setNewRegistrationStatus('requested')
     }
   }
@@ -1144,10 +1156,15 @@ function RegistrationManager({
         </Badge>
       </Flex>
       <form onSubmit={handleAddRegistrationSubmit}>
-        <SimpleGrid columns={{ base: 1, lg: 3 }} gap={3}>
+        <SimpleGrid columns={{ base: 1, lg: 4 }} gap={3}>
           <select
             value={selectedUserId}
-            onChange={(event) => setSelectedUserId(event.target.value)}
+            onChange={(event) => {
+              const userId = event.target.value
+              const selectedUser = availableUsers.find((user) => (user.uid || user.id) === userId)
+              setSelectedUserId(userId)
+              setNewRegistrationPhone(selectedUser?.whatsappPhone || selectedUser?.phone || '')
+            }}
             style={filterSelectStyle}
             disabled={usersLoading || addingRegistration}
           >
@@ -1161,6 +1178,16 @@ function RegistrationManager({
               )
             })}
           </select>
+          <Input
+            value={newRegistrationPhone}
+            onChange={(event) => setNewRegistrationPhone(event.target.value)}
+            placeholder="WhatsApp number"
+            h="46px"
+            bg="whiteAlpha.50"
+            borderColor="whiteAlpha.200"
+            color="white"
+            disabled={addingRegistration}
+          />
           <select
             value={newRegistrationStatus}
             onChange={(event) => setNewRegistrationStatus(event.target.value as SessionRegistrationStatus)}
