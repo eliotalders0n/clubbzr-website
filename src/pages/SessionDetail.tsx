@@ -418,6 +418,8 @@ export default function SessionDetail() {
   const isInviteOnly = sessionData?.config.accessMode === 'invite_only'
   const isPaidSession = sessionData?.config.paymentMode === 'paid'
   const isLencoPayment = isPaidSession && sessionData?.config.paymentProvider === 'lenco'
+  const autoConfirmAfterOnlinePayment =
+    isLencoPayment && sessionData?.config.approvalMode === 'auto' && !isInviteOnly
   const currency = session.currency || 'ZMW'
   const paymentAmount = Number(session.price || 0)
   const hasPendingOnlinePayment =
@@ -773,7 +775,9 @@ export default function SessionDetail() {
                             hasPendingOnlinePayment
                               ? 'Your mobile money payment is still being checked. You can reopen the payment window to continue checking the same payment.'
                               : isLencoPayment
-                              ? 'Your signup is saved. Pay with mobile money, then an admin will confirm your spot.'
+                              ? autoConfirmAfterOnlinePayment
+                                ? 'Your signup is saved. Pay with mobile money and your spot will be confirmed automatically.'
+                                : 'Your signup is saved. Pay with mobile money, then an admin will confirm your spot.'
                               : 'Your signup is saved. Complete payment with Club BZR, then an admin will confirm your spot.'
                           }
                           onCancel={handleUnregister}
@@ -884,7 +888,9 @@ export default function SessionDetail() {
                         {currency} {session.price.toFixed(2)}
                       </Text>
                       <Text color="whiteAlpha.500" fontSize="sm" mt={1}>
-                        Payment is confirmed by Club BZR before your spot is reserved.
+                        {autoConfirmAfterOnlinePayment
+                          ? 'Successful mobile money payment confirms your spot automatically.'
+                          : 'Payment is confirmed by Club BZR before your spot is reserved.'}
                       </Text>
                       {session.paymentInstructions && (
                         <Text color="whiteAlpha.650" fontSize="sm" mt={3} whiteSpace="pre-line">
@@ -1048,6 +1054,7 @@ export default function SessionDetail() {
           sessionTitle={session.title}
           amount={paymentAmount}
           currency={currency}
+          autoConfirmOnSuccess={autoConfirmAfterOnlinePayment}
           defaultPhoneNumber={savedWhatsAppPhone}
           existingTransactionId={
             hasPendingOnlinePayment ? sessionData.currentRegistration.paymentTransactionId : undefined

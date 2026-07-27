@@ -30,6 +30,7 @@ interface SessionPaymentModalProps {
   sessionTitle: string
   amount: number
   currency: string
+  autoConfirmOnSuccess?: boolean
   defaultPhoneNumber?: string
   existingTransactionId?: string
   existingReference?: string
@@ -91,6 +92,7 @@ export function SessionPaymentModal({
   sessionTitle,
   amount,
   currency,
+  autoConfirmOnSuccess = false,
   defaultPhoneNumber,
   existingTransactionId,
   existingReference,
@@ -288,8 +290,12 @@ export function SessionPaymentModal({
                 <CheckCircle2 size={32} />
               </Flex>
               <Box>
-                <Text color="white" fontWeight="semibold" fontSize="lg">Payment received</Text>
-                <Text color="whiteAlpha.600" mt={1}>{statusMessage}</Text>
+                <Text color="white" fontWeight="semibold" fontSize="lg">
+                  {autoConfirmOnSuccess ? 'Payment received. Spot confirmed.' : 'Payment received'}
+                </Text>
+                <Text color="whiteAlpha.600" mt={1}>
+                  {statusMessage}
+                </Text>
               </Box>
             </VStack>
           ) : (
@@ -301,7 +307,9 @@ export function SessionPaymentModal({
                   </Text>
                   <Text color="white" fontSize="2xl" fontWeight="bold" mt={1}>{formattedAmount}</Text>
                   <Text color="whiteAlpha.500" fontSize="sm" mt={2}>
-                    Your payment will be reviewed by Club BZR before your spot is confirmed.
+                    {autoConfirmOnSuccess
+                      ? 'Your spot will be confirmed automatically once payment succeeds.'
+                      : 'Your payment will be reviewed by Club BZR before your spot is confirmed.'}
                   </Text>
                 </Box>
 

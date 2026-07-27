@@ -17,12 +17,13 @@ import {
   Spinner,
 } from '@chakra-ui/react'
 import { motion, AnimatePresence } from 'framer-motion'
-import { CalendarDays, CheckCircle2, CreditCard, ImagePlus, Link as LinkIcon, Mail, MapPin, MessageCircle, Pencil, Plus, Search, Trash2, UserRoundMinus, Users, X } from 'lucide-react'
+import { CalendarDays, CheckCircle2, CreditCard, ImagePlus, Link as LinkIcon, Mail, MapPin, MessageCircle, Pencil, Plus, Search, Send, Trash2, UserRoundMinus, Users, X } from 'lucide-react'
 import { Timestamp, arrayRemove, arrayUnion } from 'firebase/firestore'
 
 import { AdminLayout } from '@/components/layout/AdminLayout'
 import { useAuth } from '@/contexts/AuthContext'
 import { useCollection } from '@/hooks'
+import { sendSessionConfirmationWhatsApp } from '../../../lib/adminNotifications'
 import { createDocument, createDocumentWithId, deleteDocument, updateDocument } from '../../../lib/firestore'
 import { getRegistrationCounts, getSessionRegistrationId, getUserWhatsAppPhone, normalizeSessionRegistrationConfig, updateSessionRegistration } from '../../../lib/sessionRegistrations'
 import { STORAGE_PATHS, uploadFileSimple, validateFile } from '../../../lib/storage'
@@ -282,6 +283,11 @@ const formatDateTime = (value: unknown): string => {
   return `${formatDate(date)} ${formatTime(date)}`
 }
 
+const getClientErrorMessage = (error: unknown, fallback: string): string => {
+  if (error instanceof Error && error.message) return error.message
+  return fallback
+}
+
 const toInputDate = (value: unknown): string => {
   const date = toDate(value)
   return date ? date.toISOString().slice(0, 10) : ''
@@ -497,6 +503,7 @@ export default function ManageSessions() {
   const [detailSession, setDetailSession] = useState<Session | null>(null)
   const [formData, setFormData] = useState<SessionForm>(emptyForm)
   const [submitting, setSubmitting] = useState(false)
+  const [resendingWhatsAppId, setResendingWhatsAppId] = useState<string | null>(null)
 
   const sessions = useMemo(
     () => [...data].sort((a, b) => toMillis(b.date) - toMillis(a.date)),
@@ -735,6 +742,32 @@ export default function ManageSessions() {
     })()
   }
 
+  const handleRetryWhatsApp = (registration: SessionRegistration) => {
+    void (async () => {
+      setResendingWhatsAppId(registration.id)
+
+      try {
+        const result = await sendSessionConfirmationWhatsApp({
+          registrationId: registration.id,
+          force: true,
+        })
+
+        await refetchRegistrations()
+
+        if (result.status === 'sent') {
+          alert('WhatsApp confirmation sent.')
+          return
+        }
+
+        alert(result.reason || 'WhatsApp confirmation was not sent.')
+      } catch (error) {
+        alert(getClientErrorMessage(error, 'Failed to send WhatsApp confirmation.'))
+      } finally {
+        setResendingWhatsAppId(null)
+      }
+    })()
+  }
+
   const handleExport = () => {
     const csv = [
       'Title,Type,Status,Access,Payment Mode,Date,Facilitator,Capacity,Confirmed Count,Confirmed Names,Confirmed Emails,Pending Payment Count,Pending Payment Names,Waitlist Count,Waitlist Names,Waitlist Emails',
@@ -964,6 +997,8 @@ export default function ManageSessions() {
                 onConfirm={handleConfirmRegistration}
                 onWaitlist={handleWaitlistRegistration}
                 onDecline={handleDeclineRegistration}
+                onRetryWhatsApp={handleRetryWhatsApp}
+                resendingWhatsAppId={resendingWhatsAppId}
               />
               {getSessionRegistrations(registrationsBySessionId, detailSession.id).length === 0 && (
                 <>
@@ -1111,6 +1146,8 @@ function RegistrationManager({
   onConfirm,
   onWaitlist,
   onDecline,
+  onRetryWhatsApp,
+  resendingWhatsAppId,
 }: {
   session: Session
   users: FirestoreUser[]
@@ -1129,6 +1166,8 @@ function RegistrationManager({
   onConfirm: (registration: SessionRegistration, markPaid?: boolean) => void
   onWaitlist: (registration: SessionRegistration) => void
   onDecline: (registration: SessionRegistration) => void
+  onRetryWhatsApp: (registration: SessionRegistration) => void
+  resendingWhatsAppId: string | null
 }) {
   const [selectedUserId, setSelectedUserId] = useState('')
   const [newRegistrationPhone, setNewRegistrationPhone] = useState('')
@@ -1291,6 +1330,8 @@ function RegistrationManager({
                     onConfirm={onConfirm}
                     onWaitlist={onWaitlist}
                     onDecline={onDecline}
+                    onRetryWhatsApp={onRetryWhatsApp}
+                    isRetryingWhatsApp={resendingWhatsAppId === registration.id}
                   />
                 ))}
               </VStack>
@@ -1308,12 +1349,16 @@ function RegistrationRow({
   onConfirm,
   onWaitlist,
   onDecline,
+  onRetryWhatsApp,
+  isRetryingWhatsApp,
 }: {
   registration: SessionRegistration
   onMarkPaid: (registration: SessionRegistration) => void
   onConfirm: (registration: SessionRegistration, markPaid?: boolean) => void
   onWaitlist: (registration: SessionRegistration) => void
   onDecline: (registration: SessionRegistration) => void
+  onRetryWhatsApp: (registration: SessionRegistration) => void
+  isRetryingWhatsApp: boolean
 }) {
   const isTerminal = registration.status === 'declined' || registration.status === 'cancelled'
   const isConfirmed = registration.status === 'confirmed'
@@ -1326,6 +1371,14 @@ function RegistrationRow({
   const canMoveToWaitlist = !isTerminal && registration.status !== 'waitlisted' && !isConfirmed
   const canDecline = !isTerminal && !isConfirmed
   const whatsappState = getWhatsAppConfirmationState(registration)
+  const whatsappIssue = registration.confirmationWhatsAppError || registration.confirmationWhatsAppSkipReason || ''
+  const showWhatsAppIssue = Boolean(whatsappIssue) && !registration.confirmationWhatsAppSentAt
+  const canRetryWhatsApp = isConfirmed && !isTerminal
+  const whatsappActionLabel = registration.confirmationWhatsAppSentAt
+    ? 'Resend WhatsApp'
+    : registration.confirmationWhatsAppFailedAt
+      ? 'Retry WhatsApp'
+      : 'Send WhatsApp'
 
   return (
     <Box p={{ base: 4, md: 5 }} bg="whiteAlpha.50" border="1px solid" borderColor="whiteAlpha.100" borderRadius="xl">
@@ -1383,12 +1436,45 @@ function RegistrationRow({
               </Badge>
             )}
           </Flex>
+          {showWhatsAppIssue && (
+            <Box
+              w="full"
+              maxW={{ lg: '460px' }}
+              p={3}
+              bg={registration.confirmationWhatsAppError ? 'red.500/10' : 'orange.500/10'}
+              border="1px solid"
+              borderColor={registration.confirmationWhatsAppError ? 'red.500/25' : 'orange.500/25'}
+              borderRadius="lg"
+            >
+              <Text
+                color={registration.confirmationWhatsAppError ? 'red.100' : 'orange.100'}
+                fontSize="xs"
+                lineHeight="1.45"
+                overflowWrap="anywhere"
+              >
+                {whatsappIssue}
+              </Text>
+            </Box>
+          )}
           <Flex
             gap={3}
             flexWrap="wrap"
             justify={{ base: 'stretch', lg: 'flex-end' }}
             w="full"
           >
+            {canRetryWhatsApp && (
+              <Button
+                {...registrationActionButtonProps}
+                bg="whiteAlpha.50"
+                color="whiteAlpha.800"
+                _hover={{ bg: 'whiteAlpha.100', color: 'white' }}
+                onClick={() => onRetryWhatsApp(registration)}
+                disabled={isRetryingWhatsApp}
+              >
+                {isRetryingWhatsApp ? <Spinner size="sm" /> : <Send size={14} />}
+                {whatsappActionLabel}
+              </Button>
+            )}
             {canMarkPaid && (
               <Button {...registrationActionButtonProps} bg="blue.500/15" color="blue.200" _hover={{ bg: 'blue.500/25' }} onClick={() => onMarkPaid(registration)}>
                 <CreditCard size={14} />
@@ -1679,8 +1765,7 @@ function SessionFormFields({ form, setForm }: { form: SessionForm; setForm: Reac
               setForm((prev) => ({
                 ...prev,
                 paymentMode,
-                paymentProvider: paymentMode === 'paid' && prev.paymentProvider === 'none' ? 'manual_external' : paymentMode === 'free' ? 'none' : prev.paymentProvider,
-                approvalMode: paymentMode === 'paid' && prev.approvalMode === 'auto' ? 'manual' : prev.approvalMode,
+                paymentProvider: paymentMode === 'paid' && prev.paymentProvider === 'none' ? 'lenco' : paymentMode === 'free' ? 'none' : prev.paymentProvider,
               }))
             }}
             style={selectStyle}
@@ -1690,7 +1775,19 @@ function SessionFormFields({ form, setForm }: { form: SessionForm; setForm: Reac
           </select>
         </Field>
         <Field label="Provider">
-          <select value={form.paymentProvider} onChange={(e) => setForm((prev) => ({ ...prev, paymentProvider: e.target.value as SessionPaymentProvider }))} style={selectStyle} disabled={form.paymentMode === 'free'}>
+          <select
+            value={form.paymentProvider}
+            onChange={(e) => {
+              const paymentProvider = e.target.value as SessionPaymentProvider
+              setForm((prev) => ({
+                ...prev,
+                paymentProvider,
+                approvalMode: paymentProvider === 'manual_external' && prev.approvalMode === 'auto' ? 'manual' : prev.approvalMode,
+              }))
+            }}
+            style={selectStyle}
+            disabled={form.paymentMode === 'free'}
+          >
             <option value="none">None</option>
             <option value="manual_external">Manual external</option>
             <option value="lenco">Lenco</option>

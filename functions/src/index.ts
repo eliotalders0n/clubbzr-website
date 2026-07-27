@@ -328,6 +328,15 @@ function normalizeReturnMethod(value: unknown): string {
     "other";
 }
 
+function canAutoConfirmPaidRegistration(
+  sessionData: FirebaseFirestore.DocumentData
+): boolean {
+  const approvalMode = normalizeOptionalString(sessionData.approvalMode) ??
+    "manual";
+  const accessMode = normalizeOptionalString(sessionData.accessMode) ?? "open";
+  return approvalMode === "auto" && accessMode === "open";
+}
+
 function serializeForCallable(value: unknown): unknown {
   if (value instanceof admin.firestore.Timestamp) {
     return value.toDate().toISOString();
@@ -755,6 +764,10 @@ async function queueUserConfirmationWhatsApp(input: {
           confirmationWhatsAppSentAt:
             admin.firestore.FieldValue.serverTimestamp(),
           confirmationWhatsAppMessageId: messageId,
+          confirmationWhatsAppSkippedAt: admin.firestore.FieldValue.delete(),
+          confirmationWhatsAppSkipReason: admin.firestore.FieldValue.delete(),
+          confirmationWhatsAppFailedAt: admin.firestore.FieldValue.delete(),
+          confirmationWhatsAppError: admin.firestore.FieldValue.delete(),
           updatedAt: admin.firestore.FieldValue.serverTimestamp(),
         },
         {merge: true}
@@ -1365,15 +1378,46 @@ async function markRegistrationPaid(input: {
   const registrationRef = db
     .collection(SESSION_REGISTRATIONS_COLLECTION)
     .doc(input.metadata.registrationId);
-  const registrationSnapshot = await registrationRef.get();
+  const sessionRef = db
+    .collection(SESSIONS_COLLECTION)
+    .doc(input.metadata.sessionId);
 
-  if (!registrationSnapshot.exists) {
-    throw new HttpsError("not-found", "Session registration not found.");
-  }
+  await db.runTransaction(async (transaction) => {
+    const registrationSnapshot = await transaction.get(registrationRef);
+    const sessionSnapshot = await transaction.get(sessionRef);
 
-  await registrationRef.set(
-    {
-      status: "paid_pending_confirmation",
+    if (!registrationSnapshot.exists) {
+      throw new HttpsError("not-found", "Session registration not found.");
+    }
+
+    if (!sessionSnapshot.exists) {
+      throw new HttpsError("not-found", "Session not found.");
+    }
+
+    const registrationData = registrationSnapshot.data() || {};
+    const sessionData = sessionSnapshot.data() || {};
+
+    if (registrationData.sessionId !== input.metadata.sessionId) {
+      throw new HttpsError(
+        "invalid-argument",
+        "Registration does not belong to this session."
+      );
+    }
+
+    const userId = normalizeOptionalString(registrationData.userId);
+    const attendees = Array.isArray(sessionData.attendees) ?
+      sessionData.attendees :
+      [];
+    const alreadyConfirmed = registrationData.status === "confirmed";
+    const alreadyAttending = userId ? attendees.includes(userId) : false;
+    const capacity = Number(sessionData.capacity);
+    const hasCapacity = alreadyAttending ||
+      (Number.isFinite(capacity) && capacity > attendees.length);
+    const shouldConfirm = alreadyConfirmed ||
+      (canAutoConfirmPaidRegistration(sessionData) && hasCapacity);
+
+    const registrationPatch: FirebaseFirestore.DocumentData = {
+      status: shouldConfirm ? "confirmed" : "paid_pending_confirmation",
       paymentStatus: "paid_online",
       paymentMethod: "mobile_money",
       paymentTransactionId: input.transactionId,
@@ -1382,9 +1426,28 @@ async function markRegistrationPaid(input: {
       paymentCurrency: input.currency,
       paidAt: admin.firestore.FieldValue.serverTimestamp(),
       updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-    },
-    {merge: true}
-  );
+    };
+
+    if (shouldConfirm && !registrationData.confirmedAt) {
+      registrationPatch.confirmedAt =
+        admin.firestore.FieldValue.serverTimestamp();
+      registrationPatch.confirmedBy = "lenco";
+    }
+
+    transaction.set(registrationRef, registrationPatch, {merge: true});
+
+    if (shouldConfirm && userId) {
+      transaction.set(
+        sessionRef,
+        {
+          attendees: admin.firestore.FieldValue.arrayUnion(userId),
+          waitlist: admin.firestore.FieldValue.arrayRemove(userId),
+          updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+        },
+        {merge: true}
+      );
+    }
+  });
 }
 
 export const adminGetPaymentsDashboard = onCall(
