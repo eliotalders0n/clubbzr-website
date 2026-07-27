@@ -30,6 +30,7 @@ import {
 import { doc, setDoc, getDoc, deleteDoc, serverTimestamp } from 'firebase/firestore';
 
 import { auth, db, COLLECTIONS } from './config';
+import { upsertPublicProfile } from './publicProfiles';
 import type { User, UserRole, UserPreferences } from './schema';
 
 // =============================================================================
@@ -139,6 +140,20 @@ const createUserDocument = async (
   };
 
   await setDoc(userRef, userData);
+
+  const publicProfileResult = await upsertPublicProfile({
+    userId: firebaseUser.uid,
+    displayName: userData.displayName,
+    photoURL: userData.photoURL,
+    bio: userData.bio,
+    location: userData.location,
+    website: userData.website,
+    interests: [],
+  });
+
+  if (!publicProfileResult.success) {
+    console.warn('Public profile creation failed:', publicProfileResult.error);
+  }
 
   return {
     id: firebaseUser.uid,
@@ -368,6 +383,19 @@ export const updateProfile = async (data: UpdateProfileData): Promise<AuthResult
       },
       { merge: true }
     );
+
+    const publicProfileResult = await upsertPublicProfile({
+      userId: user.uid,
+      displayName: data.displayName || user.displayName || '',
+      photoURL: data.photoURL || user.photoURL || null,
+      bio: data.bio,
+      location: data.location,
+      website: data.website,
+    });
+
+    if (!publicProfileResult.success) {
+      console.warn('Public profile update failed:', publicProfileResult.error);
+    }
 
     return { success: true, user };
   } catch (error) {

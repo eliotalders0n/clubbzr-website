@@ -27,6 +27,7 @@ import { Footer } from '@/components/layout/Footer'
 import { useAuth } from '@/contexts/AuthContext'
 import { useCollection, useDocument } from '@/hooks/useFirestore'
 import { createDocument, createDocumentWithId, updateDocument } from '../../lib/firestore'
+import { upsertPublicProfile } from '../../lib/publicProfiles'
 import { STORAGE_PATHS, uploadFileSimple, validateFile, VALIDATION_PRESETS } from '../../lib/storage'
 import type { Artist, Artwork, ArtMedium, CreateDocument, UpdateDocument } from '../../lib/schema'
 
@@ -562,6 +563,24 @@ export default function ArtistCreate() {
       console.error('Artist profile saved but identity sync failed:', identityResult.error)
     } else {
       await refreshUser()
+    }
+
+    const publicProfileResult = await upsertPublicProfile({
+      userId: firebaseUser.uid,
+      displayName: form.name.trim(),
+      photoURL: profilePhotoUrl || user?.photoURL || firebaseUser.photoURL || null,
+      bio: form.bio,
+      website: form.website,
+      interests: splitList(form.interests),
+      mediums: form.mediums,
+      hasArtistProfile: true,
+      artistName: form.artistName || form.name,
+      followersCount: existingArtist?.followersCount || 0,
+      worksCount: Math.max(existingArtist?.worksCount || 0, artistArtworks.length),
+    })
+
+    if (!publicProfileResult.success) {
+      console.error('Artist profile saved but public profile sync failed:', publicProfileResult.error)
     }
 
     setFeedback({ type: 'success', message: 'Artist profile saved.' })

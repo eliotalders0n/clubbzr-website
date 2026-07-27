@@ -118,6 +118,51 @@ service cloud.firestore {
     }
 
     // ========================================
+    // PUBLIC PROFILES COLLECTION
+    // ========================================
+    match /publicProfiles/{profileId} {
+      function hasPublicProfileFieldsOnly() {
+        return request.resource.data.keys().hasOnly([
+          'userId',
+          'displayName',
+          'username',
+          'photoURL',
+          'bio',
+          'location',
+          'website',
+          'interests',
+          'mediums',
+          'hasArtistProfile',
+          'artistName',
+          'postsCount',
+          'followersCount',
+          'worksCount',
+          'questsCompletedCount',
+          'badgesCount',
+          'eventsAttendedCount',
+          'createdAt',
+          'updatedAt'
+        ]);
+      }
+
+      function isValidPublicProfileWrite() {
+        return request.resource.data.userId == profileId
+          && request.resource.data.displayName is string
+          && request.resource.data.username is string
+          && request.resource.data.interests is list
+          && (!('mediums' in request.resource.data) || request.resource.data.mediums is list);
+      }
+
+      allow read: if true;
+      allow create, update: if isAdmin() || (
+        isOwner(profileId)
+        && hasPublicProfileFieldsOnly()
+        && isValidPublicProfileWrite()
+      );
+      allow delete: if isAdmin();
+    }
+
+    // ========================================
     // ARTISTS COLLECTION
     // ========================================
     match /artists/{artistId} {

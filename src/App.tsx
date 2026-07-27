@@ -22,6 +22,7 @@ const ExhibitionView = lazy(() => import('@/pages/ExhibitionView'))
 const Radio = lazy(() => import('@/pages/Radio'))
 const Passport = lazy(() => import('@/pages/Passport'))
 const Profile = lazy(() => import('@/pages/Profile'))
+const MemberProfile = lazy(() => import('@/pages/MemberProfile'))
 const Auth = lazy(() => import('@/pages/Auth'))
 const Terms = lazy(() => import('@/pages/Terms'))
 const Privacy = lazy(() => import('@/pages/Privacy'))
@@ -116,6 +117,7 @@ function App() {
           {/* User Routes */}
           <Route path="/passport" element={<Passport />} />
           <Route path="/profile" element={<Profile />} />
+          <Route path="/members/:id" element={<MemberProfile />} />
           <Route path="/auth" element={<Auth />} />
           <Route path="/auth/login" element={<Auth />} />
           <Route path="/auth/signup" element={<Auth />} />

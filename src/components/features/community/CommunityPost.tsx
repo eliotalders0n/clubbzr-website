@@ -1,15 +1,18 @@
 'use client';
 
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
+import { Link } from 'react-router-dom';
 import { motion, AnimatePresence } from 'framer-motion';
 import { clsx } from 'clsx';
 import { twMerge } from 'tailwind-merge';
-import { LogIn } from 'lucide-react';
+import { ChevronLeft, ChevronRight, Expand, LogIn, X } from 'lucide-react';
 import type { CommunityPost as CommunityPostType, ReactionType, Comment } from '../../../../lib/schema';
 import { Timestamp } from 'firebase/firestore';
 import { ReactionBar } from './ReactionBar';
 
 const cn = (...inputs: (string | undefined | null | false)[]) => twMerge(clsx(inputs));
+const getMemberHref = (userId: string) => `/members/${userId}`;
+const isVideoMedia = (mediaType: CommunityPostType['mediaType']): boolean => mediaType === 'video';
 
 interface CommunityPostProps {
   post: CommunityPostType;
@@ -202,6 +205,180 @@ const CommentAvatar: React.FC<{
   );
 };
 
+const MediaPreview: React.FC<{
+  url: string;
+  mediaType: CommunityPostType['mediaType'];
+  className?: string;
+  controls?: boolean;
+  onLoad?: () => void;
+}> = ({ url, mediaType, className, controls = false, onLoad }) => {
+  if (isVideoMedia(mediaType)) {
+    return (
+      <video
+        src={url}
+        className={cn('h-full w-full object-cover', className)}
+        controls={controls}
+        onLoadedData={onLoad}
+      />
+    );
+  }
+
+  return (
+    <img
+      src={url}
+      alt=""
+      className={cn('h-full w-full object-cover', className)}
+      onLoad={onLoad}
+    />
+  );
+};
+
+const MediaCountBadge: React.FC<{
+  currentIndex: number;
+  total: number;
+}> = ({ currentIndex, total }) => (
+  <div className="pointer-events-none absolute bottom-3 left-1/2 z-10 flex -translate-x-1/2 items-center gap-2 rounded-full border border-white/15 bg-black/70 px-3 py-1.5 text-xs font-semibold text-white shadow-[0_10px_30px_rgba(0,0,0,0.35)] backdrop-blur-md">
+    <span>{currentIndex + 1}</span>
+    <span className="h-1 w-1 rounded-full bg-white/45" />
+    <span>{total}</span>
+  </div>
+);
+
+const MediaDots: React.FC<{
+  currentIndex: number;
+  total: number;
+}> = ({ currentIndex, total }) => (
+  <div className="pointer-events-none absolute bottom-3 right-3 z-10 flex items-center gap-1.5 rounded-full bg-black/55 px-2.5 py-2 backdrop-blur-md">
+    {Array.from({ length: total }).map((_, index) => (
+      <span
+        key={index}
+        className={cn(
+          'block h-1.5 rounded-full transition-all',
+          index === currentIndex ? 'w-4 bg-white' : 'w-1.5 bg-white/40'
+        )}
+      />
+    ))}
+  </div>
+);
+
+const MediaNavButton: React.FC<{
+  direction: 'previous' | 'next';
+  onClick: () => void;
+  className?: string;
+}> = ({ direction, onClick, className }) => {
+  const Icon = direction === 'previous' ? ChevronLeft : ChevronRight;
+
+  return (
+    <button
+      type="button"
+      aria-label={direction === 'previous' ? 'Previous image' : 'Next image'}
+      onClick={(event) => {
+        event.stopPropagation();
+        onClick();
+      }}
+      className={cn(
+        'absolute top-1/2 z-10 flex h-10 w-10 -translate-y-1/2 items-center justify-center rounded-full border border-white/15 bg-black/55 text-white backdrop-blur-md transition hover:bg-black/75',
+        className
+      )}
+    >
+      <Icon size={20} strokeWidth={2.4} />
+    </button>
+  );
+};
+
+const FullscreenMediaViewer: React.FC<{
+  mediaUrls: string[];
+  mediaType: CommunityPostType['mediaType'];
+  currentIndex: number;
+  onClose: () => void;
+  onNavigate: (index: number) => void;
+}> = ({ mediaUrls, mediaType, currentIndex, onClose, onNavigate }) => {
+  const currentUrl = mediaUrls[currentIndex];
+  const hasMultipleMedia = mediaUrls.length > 1;
+
+  useEffect(() => {
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        onClose();
+      }
+      if (event.key === 'ArrowLeft' && hasMultipleMedia) {
+        onNavigate((currentIndex - 1 + mediaUrls.length) % mediaUrls.length);
+      }
+      if (event.key === 'ArrowRight' && hasMultipleMedia) {
+        onNavigate((currentIndex + 1) % mediaUrls.length);
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+
+    return () => {
+      document.body.style.overflow = previousOverflow;
+      window.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [currentIndex, hasMultipleMedia, mediaUrls.length, onClose, onNavigate]);
+
+  if (!currentUrl) return null;
+
+  return (
+    <motion.div
+      initial={{ opacity: 0 }}
+      animate={{ opacity: 1 }}
+      exit={{ opacity: 0 }}
+      transition={{ duration: 0.18 }}
+      className="fixed inset-0 z-[120] flex flex-col bg-black/95"
+    >
+      <div className="flex h-16 items-center justify-between border-b border-white/10 px-4 sm:px-6">
+        <div className="rounded-full bg-white/10 px-3 py-1.5 text-sm font-semibold text-white">
+          {currentIndex + 1} / {mediaUrls.length}
+        </div>
+        <button
+          type="button"
+          aria-label="Close fullscreen media"
+          onClick={onClose}
+          className="flex h-10 w-10 items-center justify-center rounded-full bg-white/10 text-white transition hover:bg-white/20"
+        >
+          <X size={20} strokeWidth={2.4} />
+        </button>
+      </div>
+
+      <div className="relative flex min-h-0 flex-1 items-center justify-center px-3 py-5 sm:px-8">
+        {hasMultipleMedia && (
+          <>
+            <MediaNavButton
+              direction="previous"
+              onClick={() => onNavigate((currentIndex - 1 + mediaUrls.length) % mediaUrls.length)}
+              className="left-3 sm:left-6"
+            />
+            <MediaNavButton
+              direction="next"
+              onClick={() => onNavigate((currentIndex + 1) % mediaUrls.length)}
+              className="right-3 sm:right-6"
+            />
+          </>
+        )}
+
+        {isVideoMedia(mediaType) ? (
+          <video
+            src={currentUrl}
+            className="max-h-full max-w-full rounded-lg object-contain"
+            controls
+            autoPlay
+          />
+        ) : (
+          <img
+            src={currentUrl}
+            alt=""
+            className="max-h-full max-w-full rounded-lg object-contain"
+          />
+        )}
+      </div>
+    </motion.div>
+  );
+};
+
 // Single comment component
 const CommentItem: React.FC<{
   comment: Comment;
@@ -216,7 +393,9 @@ const CommentItem: React.FC<{
       width: '100%',
     }}
   >
-    <CommentAvatar name={comment.userName} photoURL={comment.userPhotoURL} />
+    <Link to={getMemberHref(comment.userId)} style={{ textDecoration: 'none' }}>
+      <CommentAvatar name={comment.userName} photoURL={comment.userPhotoURL} />
+    </Link>
 
     {/* Content */}
     <div style={{ flex: 1, minWidth: 0 }}>
@@ -228,7 +407,8 @@ const CommentItem: React.FC<{
           border: '1px solid rgba(255, 255, 255, 0.03)',
         }}
       >
-        <span
+        <Link
+          to={getMemberHref(comment.userId)}
           style={{
             display: 'block',
             color: '#fff',
@@ -236,10 +416,11 @@ const CommentItem: React.FC<{
             fontWeight: 600,
             lineHeight: 1.25,
             marginBottom: '6px',
+            textDecoration: 'none',
           }}
         >
           {comment.userName}
-        </span>
+        </Link>
         <p
           style={{
             color: '#D1D5DB',
@@ -400,10 +581,23 @@ export const CommunityPost: React.FC<CommunityPostProps> = ({
 }) => {
   const [showComments, setShowComments] = useState(false);
   const [imageLoaded, setImageLoaded] = useState(false);
+  const [activeMediaIndex, setActiveMediaIndex] = useState(0);
+  const [lightboxIndex, setLightboxIndex] = useState<number | null>(null);
 
   const isOwner = post.userId === currentUserId;
-  const hasMedia = post.mediaUrls && post.mediaUrls.length > 0;
+  const mediaUrls = post.mediaUrls || [];
+  const hasMedia = mediaUrls.length > 0;
   const displayCommentsCount = Math.max(post.commentsCount || 0, comments.length);
+  const activeMediaUrl = mediaUrls[activeMediaIndex] || mediaUrls[0];
+
+  const navigateMedia = (direction: 'previous' | 'next') => {
+    setActiveMediaIndex((currentIndex) => {
+      if (mediaUrls.length === 0) return 0;
+      return direction === 'previous'
+        ? (currentIndex - 1 + mediaUrls.length) % mediaUrls.length
+        : (currentIndex + 1) % mediaUrls.length;
+    });
+  };
 
   const handleCommentsToggle = () => {
     const nextShowComments = !showComments;
@@ -429,12 +623,21 @@ export const CommunityPost: React.FC<CommunityPostProps> = ({
       {/* Header */}
       <div style={{ padding: '20px', paddingBottom: '12px' }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
-          <div style={{ display: 'flex', gap: '12px', alignItems: 'center' }}>
+          <Link
+            to={getMemberHref(post.userId)}
+            style={{
+              display: 'flex',
+              gap: '12px',
+              alignItems: 'center',
+              minWidth: 0,
+              textDecoration: 'none',
+            }}
+          >
             {/* Avatar */}
             <CommentAvatar name={post.userName} photoURL={post.userPhotoURL} size={44} />
 
             {/* User info */}
-            <div>
+            <div style={{ minWidth: 0 }}>
               <h3 style={{ color: '#fff', fontWeight: 500, fontSize: '15px', marginBottom: '2px' }}>
                 {post.userName}
               </h3>
@@ -447,7 +650,7 @@ export const CommunityPost: React.FC<CommunityPostProps> = ({
                 )}
               </p>
             </div>
-          </div>
+          </Link>
 
           {/* Menu */}
           <PostMenu
@@ -469,52 +672,136 @@ export const CommunityPost: React.FC<CommunityPostProps> = ({
       {/* Media */}
       {hasMedia && (
         <div className="relative">
-          {post.mediaUrls.length === 1 ? (
+          {mediaUrls.length === 1 ? (
             <div className="relative aspect-video">
               {!imageLoaded && (
                 <div className="absolute inset-0 bg-bzr-gray-800 animate-pulse" />
               )}
-              {post.mediaType === 'video' ? (
-                <video
-                  src={post.mediaUrls[0]}
-                  className="w-full h-full object-cover"
-                  controls
-                  onLoadedData={() => setImageLoaded(true)}
-                />
+              {isVideoMedia(post.mediaType) ? (
+                <>
+                  <MediaPreview
+                    url={mediaUrls[0]}
+                    mediaType={post.mediaType}
+                    controls
+                    onLoad={() => setImageLoaded(true)}
+                  />
+                  <button
+                    type="button"
+                    aria-label="Open media fullscreen"
+                    onClick={() => setLightboxIndex(0)}
+                    className="absolute right-3 top-3 flex h-9 w-9 items-center justify-center rounded-full border border-white/15 bg-black/55 text-white backdrop-blur-md transition hover:bg-black/75"
+                  >
+                    <Expand size={17} strokeWidth={2.3} />
+                  </button>
+                </>
               ) : (
-                <img
-                  src={post.mediaUrls[0]}
-                  alt=""
-                  className={cn(
-                    'w-full h-full object-cover transition-opacity',
-                    imageLoaded ? 'opacity-100' : 'opacity-0'
-                  )}
-                  onLoad={() => setImageLoaded(true)}
-                />
+                <button
+                  type="button"
+                  aria-label="Open image fullscreen"
+                  onClick={() => setLightboxIndex(0)}
+                  className="group block h-full w-full cursor-zoom-in bg-bzr-gray-900"
+                >
+                  <MediaPreview
+                    url={mediaUrls[0]}
+                    mediaType={post.mediaType}
+                    className={cn('transition-opacity', imageLoaded ? 'opacity-100' : 'opacity-0')}
+                    onLoad={() => setImageLoaded(true)}
+                  />
+                  <span className="absolute right-3 top-3 flex h-9 w-9 items-center justify-center rounded-full border border-white/15 bg-black/55 text-white opacity-0 backdrop-blur-md transition group-hover:opacity-100">
+                    <Expand size={17} strokeWidth={2.3} />
+                  </span>
+                </button>
               )}
             </div>
           ) : (
-            <div className="grid grid-cols-2 gap-0.5">
-              {post.mediaUrls.slice(0, 4).map((url, index) => (
-                <div key={index} className="relative aspect-square">
-                  <img
-                    src={url}
-                    alt=""
-                    className="w-full h-full object-cover"
-                  />
-                  {index === 3 && post.mediaUrls.length > 4 && (
-                    <div className="absolute inset-0 bg-bzr-black/60 flex items-center justify-center">
-                      <span className="text-2xl font-bold text-bzr-white">
-                        +{post.mediaUrls.length - 4}
-                      </span>
-                    </div>
+            <>
+              <div className="block md:hidden">
+                <div className="relative aspect-[4/5] overflow-hidden bg-black">
+                  {isVideoMedia(post.mediaType) ? (
+                    <MediaPreview
+                      url={activeMediaUrl}
+                      mediaType={post.mediaType}
+                      className="object-contain"
+                      controls
+                    />
+                  ) : (
+                    <button
+                      type="button"
+                      aria-label={`Open image ${activeMediaIndex + 1} fullscreen`}
+                      onClick={() => setLightboxIndex(activeMediaIndex)}
+                      className="block h-full w-full cursor-zoom-in"
+                    >
+                      <MediaPreview
+                        url={activeMediaUrl}
+                        mediaType={post.mediaType}
+                        className="object-contain"
+                      />
+                    </button>
                   )}
+
+                  <button
+                    type="button"
+                    aria-label="Open media fullscreen"
+                    onClick={() => setLightboxIndex(activeMediaIndex)}
+                    className="absolute right-3 top-3 z-10 flex h-9 w-9 items-center justify-center rounded-full border border-white/15 bg-black/55 text-white backdrop-blur-md transition hover:bg-black/75"
+                  >
+                    <Expand size={17} strokeWidth={2.3} />
+                  </button>
+
+                  <MediaNavButton
+                    direction="previous"
+                    onClick={() => navigateMedia('previous')}
+                    className="left-3"
+                  />
+                  <MediaNavButton
+                    direction="next"
+                    onClick={() => navigateMedia('next')}
+                    className="right-3"
+                  />
+                  <MediaCountBadge currentIndex={activeMediaIndex} total={mediaUrls.length} />
+                  <MediaDots currentIndex={activeMediaIndex} total={mediaUrls.length} />
                 </div>
-              ))}
-            </div>
+              </div>
+
+              <div className="hidden grid-cols-2 gap-0.5 md:grid">
+                {mediaUrls.slice(0, 4).map((url, index) => (
+                  <button
+                    key={index}
+                    type="button"
+                    aria-label={`Open media ${index + 1} fullscreen`}
+                    onClick={() => setLightboxIndex(index)}
+                    className="group relative aspect-square cursor-zoom-in overflow-hidden bg-bzr-gray-900"
+                  >
+                    <MediaPreview url={url} mediaType={post.mediaType} />
+                    <span className="absolute right-3 top-3 flex h-8 w-8 items-center justify-center rounded-full border border-white/15 bg-black/55 text-white opacity-0 backdrop-blur-md transition group-hover:opacity-100">
+                      <Expand size={16} strokeWidth={2.3} />
+                    </span>
+                    {index === 3 && mediaUrls.length > 4 && (
+                      <div className="absolute inset-0 flex items-center justify-center bg-bzr-black/60">
+                        <span className="text-2xl font-bold text-bzr-white">
+                          +{mediaUrls.length - 4}
+                        </span>
+                      </div>
+                    )}
+                  </button>
+                ))}
+              </div>
+            </>
           )}
         </div>
       )}
+
+      <AnimatePresence>
+        {lightboxIndex !== null && (
+          <FullscreenMediaViewer
+            mediaUrls={mediaUrls}
+            mediaType={post.mediaType}
+            currentIndex={lightboxIndex}
+            onClose={() => setLightboxIndex(null)}
+            onNavigate={setLightboxIndex}
+          />
+        )}
+      </AnimatePresence>
 
       {/* Reactions */}
       <div style={{ padding: '12px 20px', borderTop: '1px solid #262626' }}>

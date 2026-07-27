@@ -33,6 +33,7 @@ import { useAuth, type AuthContextValue } from '@/contexts/AuthContext'
 import { useDocument } from '@/hooks/useFirestore'
 import { createDefaultCreativePassport } from '@/lib/passportDefaults'
 import { createDocumentWithId, updateDocument } from '../../lib/firestore'
+import { upsertPublicProfile } from '../../lib/publicProfiles'
 import type { CreativePassport } from '../../lib/schema'
 
 type Feedback = { type: 'success' | 'error'; message: string } | null
@@ -296,6 +297,20 @@ function ProfileFormScreen({
           message: passportResult.error?.message || 'Profile saved, but interests could not be updated.',
         })
         return
+      }
+
+      const publicProfileResult = await upsertPublicProfile({
+        userId: firebaseUser.uid,
+        displayName,
+        photoURL: user?.photoURL || firebaseUser.photoURL || null,
+        bio: user?.bio,
+        location: user?.location,
+        website: user?.website,
+        interests: savedInterests,
+      })
+
+      if (!publicProfileResult.success) {
+        console.warn('Public profile update failed:', publicProfileResult.error)
       }
 
       await Promise.all([refreshUser(), refetchPassport()])

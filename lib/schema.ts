@@ -177,6 +177,30 @@ export interface User extends BaseDocument {
   lastActiveAt?: FirestoreTimestamp;
 }
 
+/**
+ * Public Profile - Safe community-facing member data
+ * Stored in: /publicProfiles/{userId}
+ */
+export interface PublicProfile extends BaseDocument {
+  userId: string;
+  displayName: string;
+  username: string;
+  photoURL?: string | null;
+  bio?: string;
+  location?: string;
+  website?: string;
+  interests: string[];
+  mediums?: ArtMedium[];
+  hasArtistProfile?: boolean;
+  artistName?: string;
+  postsCount?: number;
+  followersCount?: number;
+  worksCount?: number;
+  questsCompletedCount?: number;
+  badgesCount?: number;
+  eventsAttendedCount?: number;
+}
+
 /** Social media links */
 export interface SocialLinks {
   instagram?: string;
@@ -1009,6 +1033,7 @@ export interface QueryFilters {
 /** Map of collection names to their document types */
 export interface CollectionTypes {
   users: User;
+  publicProfiles: PublicProfile;
   creativePassports: CreativePassport;
   artists: Artist;
   artistFollows: ArtistFollow;

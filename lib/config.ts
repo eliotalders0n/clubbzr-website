@@ -64,6 +64,7 @@ if (import.meta.env.DEV && import.meta.env.VITE_USE_FIREBASE_EMULATORS === 'true
 // Collection names
 export const COLLECTIONS = {
   USERS: 'users',
+  PUBLIC_PROFILES: 'publicProfiles',
   ARTISTS: 'artists',
   ARTIST_FOLLOWS: 'artistFollows',
   ARTWORKS: 'artworks',
