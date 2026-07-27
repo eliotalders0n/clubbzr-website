@@ -24,7 +24,7 @@ const CLUB_BZR_WHATSAPP_BUSINESS_NUMBER = "260960912464";
 const WHATSAPP_CONFIRMATION_TEMPLATE_NAME =
   process.env.WHATSAPP_CONFIRMATION_TEMPLATE_NAME || "session_confirmation_v1";
 const WHATSAPP_TEMPLATE_LANGUAGE =
-  process.env.WHATSAPP_TEMPLATE_LANGUAGE || "en_US";
+  process.env.WHATSAPP_TEMPLATE_LANGUAGE || "en";
 const DEFAULT_CURRENCY = "ZMW";
 const DEFAULT_ADMIN_NOTIFICATION_EMAIL = "clubbzrzm@gmail.com";
 const APP_BASE_URL = process.env.APP_BASE_URL || "https://clubbzr.com";
