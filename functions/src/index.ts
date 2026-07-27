@@ -23,8 +23,7 @@ const WHATSAPP_REQUEST_TIMEOUT_MS = 15000;
 const CLUB_BZR_WHATSAPP_BUSINESS_NUMBER = "260960912464";
 const WHATSAPP_CONFIRMATION_TEMPLATE_NAME =
   process.env.WHATSAPP_CONFIRMATION_TEMPLATE_NAME || "session_confirmation_v1";
-const WHATSAPP_TEMPLATE_LANGUAGE =
-  process.env.WHATSAPP_TEMPLATE_LANGUAGE || "en";
+const WHATSAPP_TEMPLATE_LANGUAGE = "en_US";
 const DEFAULT_CURRENCY = "ZMW";
 const DEFAULT_ADMIN_NOTIFICATION_EMAIL = "clubbzrzm@gmail.com";
 const APP_BASE_URL = process.env.APP_BASE_URL || "https://clubbzr.com";
@@ -537,9 +536,15 @@ async function whatsappRequest(
     });
 
     const errorData = responseData.error as Record<string, unknown> | undefined;
-    const message = normalizeOptionalString(errorData?.message) ??
+    const providerErrorData = errorData?.error_data as
+      Record<string, unknown> | undefined;
+    const baseMessage = normalizeOptionalString(errorData?.message) ??
       normalizeOptionalString(responseData.message) ??
       "WhatsApp request failed.";
+    const details = normalizeOptionalString(providerErrorData?.details);
+    const message = details && details !== baseMessage ?
+      `${baseMessage}: ${details}` :
+      baseMessage;
     const errorCode: "failed-precondition" | "unavailable" =
       response.status === 408 || response.status === 429 || response.status >= 500 ?
         "unavailable" :
