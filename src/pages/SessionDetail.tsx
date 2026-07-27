@@ -361,6 +361,13 @@ export default function SessionDetail() {
   const isLencoPayment = isPaidSession && sessionData?.config.paymentProvider === 'lenco'
   const currency = session.currency || 'ZMW'
   const paymentAmount = Number(session.price || 0)
+  const hasPendingOnlinePayment =
+    isLencoPayment &&
+    sessionData?.currentRegistration?.paymentStatus === 'pending' &&
+    Boolean(
+      sessionData.currentRegistration.paymentTransactionId ||
+      sessionData.currentRegistration.paymentReference
+    )
 
   return (
     <Box bg="gray.950" minH="100vh">
@@ -702,7 +709,9 @@ export default function SessionDetail() {
                         <PendingRegistrationState
                           title="Payment pending"
                           description={
-                            isLencoPayment
+                            hasPendingOnlinePayment
+                              ? 'Your mobile money payment is still being checked. You can reopen the payment window to continue checking the same payment.'
+                              : isLencoPayment
                               ? 'Your signup is saved. Pay with mobile money, then an admin will confirm your spot.'
                               : 'Your signup is saved. Complete payment with Club BZR, then an admin will confirm your spot.'
                           }
@@ -720,7 +729,7 @@ export default function SessionDetail() {
                               onClick={() => setPaymentModalOpen(true)}
                               disabled={registrationBusy}
                             >
-                              Pay with Mobile Money
+                              {hasPendingOnlinePayment ? 'Check Mobile Money Status' : 'Pay with Mobile Money'}
                             </Button>
                           )}
                         </PendingRegistrationState>
@@ -952,6 +961,12 @@ export default function SessionDetail() {
           sessionTitle={session.title}
           amount={paymentAmount}
           currency={currency}
+          existingTransactionId={
+            hasPendingOnlinePayment ? sessionData.currentRegistration.paymentTransactionId : undefined
+          }
+          existingReference={
+            hasPendingOnlinePayment ? sessionData.currentRegistration.paymentReference : undefined
+          }
         />
       )}
 

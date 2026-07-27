@@ -30,6 +30,7 @@ interface ChargeMobileMoneyData {
   phone?: string;
   operator?: string;
   currency?: string;
+  reference?: string;
 }
 
 interface CheckMomoStatusData {
@@ -170,8 +171,57 @@ function getMessageForStatus(status: PaymentStatus): string {
   return "Charge initiated. Approve the prompt on your phone.";
 }
 
+function getErrorMessage(error: unknown): string {
+  if (error instanceof Error && error.message) {
+    return error.message;
+  }
+
+  return String(error || "Unknown error");
+}
+
+function getFallbackPaymentStatus(
+  value: unknown
+): PaymentStatus {
+  const status = mapCollectionStatus(value);
+  return status === "completed" || status === "failed" || status === "processing" ?
+    status :
+    "pending";
+}
+
+function isRecoverablePaymentProviderError(error: unknown): boolean {
+  if (!(error instanceof HttpsError)) {
+    return true;
+  }
+
+  return [
+    "deadline-exceeded",
+    "internal",
+    "resource-exhausted",
+    "unavailable",
+  ].includes(error.code);
+}
+
+function isRecentFirestoreTimestamp(value: unknown, maxAgeMs: number): boolean {
+  if (!(value instanceof admin.firestore.Timestamp)) {
+    return false;
+  }
+
+  return Date.now() - value.toMillis() <= maxAgeMs;
+}
+
 function generateReference(): string {
   return `club_bzr_${Date.now()}_${randomBytes(4).toString("hex")}`;
+}
+
+function normalizePaymentReference(value: unknown): string | null {
+  const reference = normalizeOptionalString(value);
+  if (!reference) return null;
+
+  if (!/^[A-Za-z0-9_-]{8,96}$/.test(reference)) {
+    throw new HttpsError("invalid-argument", "Payment reference is invalid.");
+  }
+
+  return reference;
 }
 
 function getAdminNotificationEmails(): string[] {
@@ -446,7 +496,12 @@ async function lencoRequest(
     const message = normalizeOptionalString(responseData.message) ??
       "Lenco request failed.";
 
-    throw new HttpsError("internal", message);
+    const errorCode: "failed-precondition" | "unavailable" =
+      response.status === 408 || response.status === 429 || response.status >= 500 ?
+        "unavailable" :
+        "failed-precondition";
+
+    throw new HttpsError(errorCode, message);
   }
 
   return responseData;
@@ -684,36 +739,196 @@ export const chargeSessionMobileMoney = onCall(
       );
     }
 
-    const reference = generateReference();
+    const reference = normalizePaymentReference(data.reference) ??
+      generateReference();
     const metadata: SessionPaymentMetadata = {
       source: "club-bzr-web",
       sessionId,
       registrationId,
     };
+    const roundedAmount = roundCurrency(amount);
+    const normalizedCurrency = currency.toUpperCase();
+    const email = normalizeOptionalString(request.auth?.token.email);
+    const transactionRef = db
+      .collection(SESSION_PAYMENT_TRANSACTIONS_COLLECTION)
+      .doc(reference);
+    const existingTransactionSnapshot = await transactionRef.get();
 
-    const responseData = await lencoRequest(
-      "/collections/mobile-money",
-      {
-        method: "POST",
-        body: JSON.stringify({
-          amount: roundCurrency(amount).toFixed(2),
-          currency: currency.toUpperCase(),
-          phone,
-          operator,
+    if (existingTransactionSnapshot.exists) {
+      const existingTransaction = existingTransactionSnapshot.data() || {};
+
+      if (
+        existingTransaction.userId !== uid ||
+        existingTransaction.sessionId !== sessionId ||
+        existingTransaction.registrationId !== registrationId
+      ) {
+        throw new HttpsError(
+          "permission-denied",
+          "Payment reference belongs to another registration."
+        );
+      }
+
+      const existingStatus = getFallbackPaymentStatus(
+        existingTransaction.status
+      );
+      const existingGatewayStatus = normalizeOptionalString(
+        existingTransaction.gatewayStatus
+      );
+      const isRecentRequestStarted =
+        existingGatewayStatus === "request_started" &&
+        isRecentFirestoreTimestamp(existingTransaction.updatedAt, 120000);
+      const shouldReturnExisting =
+        existingStatus === "completed" ||
+        existingStatus === "failed" ||
+        existingStatus === "processing" ||
+        (
+          existingStatus === "pending" &&
+          (
+            isRecentRequestStarted ||
+            (
+              existingGatewayStatus !== "request_started" &&
+              existingGatewayStatus !== "request_error"
+            )
+          )
+        );
+
+      if (shouldReturnExisting) {
+        const existingTransactionId =
+          normalizeOptionalString(existingTransaction.transactionId) ??
+          reference;
+        const existingMessage =
+          normalizeOptionalString(existingTransaction.message) ??
+          getMessageForStatus(existingStatus);
+
+        return {
+          success: existingStatus === "completed",
+          transactionId: existingTransactionId,
           reference,
-        }),
-      },
-      lencoSecretKey.value()
+          status: existingStatus,
+          message: existingMessage,
+          failureReason: normalizeOptionalString(
+            existingTransaction.failureReason
+          ),
+          recoverable: existingStatus === "pending" ||
+            existingStatus === "processing",
+        };
+      }
+    }
+
+    const initialTransactionData: FirebaseFirestore.DocumentData = {
+      transactionId: reference,
+      reference,
+      sessionId,
+      registrationId,
+      userId: uid,
+      email,
+      phone,
+      operator,
+      amount: roundedAmount,
+      currency: normalizedCurrency,
+      gatewayStatus: "request_started",
+      status: "pending",
+      message: getMessageForStatus("pending"),
+      failureReason: null,
+      metadata,
+      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+    };
+
+    if (!existingTransactionSnapshot.exists) {
+      initialTransactionData.createdAt =
+        admin.firestore.FieldValue.serverTimestamp();
+    }
+
+    await transactionRef.set(
+      initialTransactionData,
+      {merge: true}
     );
+
+    await registrationRef.set(
+      {
+        paymentStatus: "pending",
+        paymentMethod: "mobile_money",
+        paymentTransactionId: reference,
+        paymentReference: reference,
+        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      },
+      {merge: true}
+    );
+
+    let responseData: Record<string, unknown>;
+
+    try {
+      responseData = await lencoRequest(
+        "/collections/mobile-money",
+        {
+          method: "POST",
+          body: JSON.stringify({
+            amount: roundedAmount.toFixed(2),
+            currency: normalizedCurrency,
+            phone,
+            operator,
+            reference,
+          }),
+        },
+        lencoSecretKey.value()
+      );
+    } catch (chargeError) {
+      const errorMessage = getErrorMessage(chargeError);
+      const isRecoverable = isRecoverablePaymentProviderError(chargeError);
+
+      logger.warn("Lenco charge request unavailable", {
+        reference,
+        sessionId,
+        registrationId,
+        isRecoverable,
+        errorMessage,
+      });
+
+      await transactionRef.set(
+        {
+          status: isRecoverable ? "pending" : "failed",
+          gatewayStatus: "request_error",
+          message: isRecoverable ?
+            "Charge request could not be confirmed. We will keep checking this payment." :
+            getMessageForStatus("failed"),
+          failureReason: isRecoverable ? null : errorMessage,
+          chargeRequestError: errorMessage,
+          lastStatusCheckFailedAt: admin.firestore.FieldValue.serverTimestamp(),
+          updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+        },
+        {merge: true}
+      );
+
+      await registrationRef.set(
+        {
+          paymentStatus: isRecoverable ? "pending" : "failed",
+          paymentMethod: "mobile_money",
+          paymentTransactionId: reference,
+          paymentReference: reference,
+          updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+        },
+        {merge: true}
+      );
+
+      if (!isRecoverable) {
+        throw chargeError;
+      }
+
+      return {
+        success: false,
+        transactionId: reference,
+        reference,
+        status: "pending",
+        message: "We could not confirm that the payment provider received the request. If you get a mobile money prompt, approve it. We will keep checking this payment.",
+        failureReason: null,
+        recoverable: true,
+      };
+    }
 
     const collection = (responseData.data || {}) as Record<string, unknown>;
     const transactionId = normalizeOptionalString(collection.id) ?? reference;
     const status = mapCollectionStatus(collection.status);
     const failureReason = getFailureReason(collection);
-
-    const transactionRef = db
-      .collection(SESSION_PAYMENT_TRANSACTIONS_COLLECTION)
-      .doc(transactionId);
 
     await transactionRef.set(
       {
@@ -722,18 +937,17 @@ export const chargeSessionMobileMoney = onCall(
         sessionId,
         registrationId,
         userId: uid,
-        email: normalizeOptionalString(request.auth?.token.email),
+        email,
         phone,
         operator,
-        amount: roundCurrency(amount),
-        currency: currency.toUpperCase(),
+        amount: roundedAmount,
+        currency: normalizedCurrency,
         gatewayStatus: normalizeOptionalString(collection.status),
         status,
         message: getMessageForStatus(status),
         failureReason,
         metadata,
         updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-        createdAt: admin.firestore.FieldValue.serverTimestamp(),
       },
       {merge: true}
     );
@@ -754,8 +968,8 @@ export const chargeSessionMobileMoney = onCall(
         transactionId,
         reference,
         metadata,
-        amount: roundCurrency(amount),
-        currency: currency.toUpperCase(),
+        amount: roundedAmount,
+        currency: normalizedCurrency,
       });
     }
 
@@ -808,11 +1022,56 @@ export const checkSessionMomoStatus = onCall(
       throw new HttpsError("failed-precondition", "Payment reference is missing.");
     }
 
-    const responseData = await lencoRequest(
-      `/collections/status/${reference}`,
-      {method: "GET"},
-      lencoSecretKey.value()
-    );
+    let responseData: Record<string, unknown>;
+
+    try {
+      responseData = await lencoRequest(
+        `/collections/status/${reference}`,
+        {method: "GET"},
+        lencoSecretKey.value()
+      );
+    } catch (statusError) {
+      const existingStatus = getFallbackPaymentStatus(
+        existingTransactionData.status
+      );
+      const fallbackStatus = existingStatus === "processing" ?
+        "pending" :
+        existingStatus;
+      const fallbackTransactionId = transactionId ??
+        normalizeOptionalString(existingTransactionData.transactionId) ??
+        transactionRecord.snapshot.id;
+      const errorMessage = getErrorMessage(statusError);
+
+      logger.warn("Lenco status check unavailable", {
+        transactionId: fallbackTransactionId,
+        reference,
+        errorMessage,
+      });
+
+      await transactionRecord.docRef.set(
+        {
+          status: fallbackStatus,
+          statusCheckError: errorMessage,
+          lastStatusCheckFailedAt: admin.firestore.FieldValue.serverTimestamp(),
+          updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+        },
+        {merge: true}
+      );
+
+      return {
+        success: fallbackStatus === "completed",
+        transactionId: fallbackTransactionId,
+        reference,
+        status: fallbackStatus,
+        message: fallbackStatus === "failed" ?
+          getMessageForStatus("failed") :
+          "We could not reach the payment provider. Your payment is still pending and we will keep checking.",
+        failureReason: fallbackStatus === "failed" ?
+          normalizeOptionalString(existingTransactionData.failureReason) :
+          null,
+        recoverable: fallbackStatus === "pending",
+      };
+    }
 
     const collection = (responseData.data || {}) as Record<string, unknown>;
     const resolvedTransactionId = normalizeOptionalString(collection.id) ??

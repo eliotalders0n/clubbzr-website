@@ -17,7 +17,7 @@ import {
   Spinner,
 } from '@chakra-ui/react'
 import { motion, AnimatePresence } from 'framer-motion'
-import { CalendarDays, CheckCircle2, CreditCard, ImagePlus, Link as LinkIcon, Mail, MapPin, Pencil, Plus, Search, Trash2, Users, X } from 'lucide-react'
+import { CalendarDays, CheckCircle2, CreditCard, ImagePlus, Link as LinkIcon, Mail, MapPin, Pencil, Plus, Search, Trash2, UserRoundMinus, Users, X } from 'lucide-react'
 import { Timestamp, arrayRemove, arrayUnion } from 'firebase/firestore'
 
 import { AdminLayout } from '@/components/layout/AdminLayout'
@@ -190,6 +190,23 @@ const modalFooterButtonProps = {
   minW: '112px',
   px: 5,
   borderRadius: 'xl',
+  fontSize: 'sm',
+  fontWeight: 'semibold',
+  lineHeight: '1',
+  gap: 2,
+  display: 'inline-flex',
+  alignItems: 'center',
+  justifyContent: 'center',
+  flexShrink: 0,
+  whiteSpace: 'nowrap',
+} as const
+
+const registrationActionButtonProps = {
+  h: '38px',
+  minW: '118px',
+  w: { base: 'full', sm: 'auto' },
+  px: 4,
+  borderRadius: 'full',
   fontSize: 'sm',
   fontWeight: 'semibold',
   lineHeight: '1',
@@ -1285,32 +1302,34 @@ function RegistrationRow({
               </Badge>
             )}
           </HStack>
-          <HStack gap={2} flexWrap="wrap" justify={{ base: 'flex-start', sm: 'flex-end' }}>
+          <HStack gap={2.5} flexWrap="wrap" justify={{ base: 'stretch', sm: 'flex-end' }} w={{ base: 'full', sm: 'auto' }}>
             {canMarkPaid && (
-              <Button size="xs" bg="blue.500/15" color="blue.200" borderRadius="full" _hover={{ bg: 'blue.500/25' }} onClick={() => onMarkPaid(registration)}>
+              <Button {...registrationActionButtonProps} bg="blue.500/15" color="blue.200" _hover={{ bg: 'blue.500/25' }} onClick={() => onMarkPaid(registration)}>
                 <CreditCard size={14} />
                 Mark Paid
               </Button>
             )}
             {canMarkPaid && (
-              <Button size="xs" bg="green.500/15" color="green.200" borderRadius="full" _hover={{ bg: 'green.500/25' }} onClick={() => onConfirm(registration, true)}>
+              <Button {...registrationActionButtonProps} minW={{ base: 'full', sm: '152px' }} bg="green.500/15" color="green.200" _hover={{ bg: 'green.500/25' }} onClick={() => onConfirm(registration, true)}>
                 <CheckCircle2 size={14} />
                 Paid + Confirm
               </Button>
             )}
             {canConfirm && !needsPayment && (
-              <Button size="xs" bg="green.500/15" color="green.200" borderRadius="full" _hover={{ bg: 'green.500/25' }} onClick={() => onConfirm(registration)}>
+              <Button {...registrationActionButtonProps} bg="green.500/15" color="green.200" _hover={{ bg: 'green.500/25' }} onClick={() => onConfirm(registration)}>
                 <CheckCircle2 size={14} />
                 Confirm
               </Button>
             )}
             {canMoveToWaitlist && (
-              <Button size="xs" bg="orange.500/15" color="orange.200" borderRadius="full" _hover={{ bg: 'orange.500/25' }} onClick={() => onWaitlist(registration)}>
+              <Button {...registrationActionButtonProps} bg="orange.500/15" color="orange.200" _hover={{ bg: 'orange.500/25' }} onClick={() => onWaitlist(registration)}>
+                <Users size={14} />
                 Waitlist
               </Button>
             )}
             {canDecline && (
-              <Button size="xs" bg="red.500/15" color="red.200" borderRadius="full" _hover={{ bg: 'red.500/25' }} onClick={() => onDecline(registration)}>
+              <Button {...registrationActionButtonProps} bg="red.500/15" color="red.200" _hover={{ bg: 'red.500/25' }} onClick={() => onDecline(registration)}>
+                <UserRoundMinus size={14} />
                 Decline
               </Button>
             )}

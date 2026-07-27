@@ -30,11 +30,51 @@ interface SessionPaymentModalProps {
   sessionTitle: string
   amount: number
   currency: string
+  existingTransactionId?: string
+  existingReference?: string
 }
 
 type PaymentUiStatus = 'idle' | 'initiating' | 'pending' | 'success'
 
 const normalizePhoneNumber = (value: string): string => value.replace(/[^\d+]/g, '')
+
+const createPaymentReference = (): string => {
+  if (typeof crypto !== 'undefined' && crypto.getRandomValues) {
+    const bytes = new Uint8Array(4)
+    crypto.getRandomValues(bytes)
+    const suffix = Array.from(bytes, (byte) => byte.toString(16).padStart(2, '0')).join('')
+    return `club_bzr_${Date.now()}_${suffix}`
+  }
+
+  return `club_bzr_${Date.now()}_${Math.random().toString(16).slice(2, 10).padEnd(8, '0')}`
+}
+
+const getPaymentErrorCode = (error: unknown): string => {
+  if (typeof error === 'object' && error && 'code' in error) {
+    const code = (error as { code?: unknown }).code
+    return typeof code === 'string' ? code : ''
+  }
+
+  return ''
+}
+
+const isRecoverablePaymentError = (error: unknown): boolean => {
+  if (typeof navigator !== 'undefined' && navigator.onLine === false) return true
+
+  const code = getPaymentErrorCode(error)
+  if (!code) return true
+
+  return [
+    'deadline-exceeded',
+    'functions/deadline-exceeded',
+    'functions/internal',
+    'functions/resource-exhausted',
+    'functions/unavailable',
+    'internal',
+    'resource-exhausted',
+    'unavailable',
+  ].includes(code)
+}
 
 const isValidPhoneNumber = (value: string): boolean => {
   const digits = value.replace(/\D/g, '')
@@ -50,6 +90,8 @@ export function SessionPaymentModal({
   sessionTitle,
   amount,
   currency,
+  existingTransactionId,
+  existingReference,
 }: SessionPaymentModalProps) {
   const [phoneNumber, setPhoneNumber] = useState('')
   const [operator, setOperator] = useState<MobileMoneyOperator>('airtel')
@@ -57,6 +99,7 @@ export function SessionPaymentModal({
   const [error, setError] = useState('')
   const [statusMessage, setStatusMessage] = useState('')
   const [transaction, setTransaction] = useState<SessionMobileMoneyResponse | null>(null)
+  const [clientReference, setClientReference] = useState('')
 
   const handleClose = useCallback(() => {
     setPhoneNumber('')
@@ -65,11 +108,26 @@ export function SessionPaymentModal({
     setError('')
     setStatusMessage('')
     setTransaction(null)
+    setClientReference('')
     onClose()
   }, [onClose])
 
+  const resumableTransaction = useMemo<SessionMobileMoneyResponse | null>(() => {
+    if (!isOpen || transaction || (!existingTransactionId && !existingReference)) return null
+
+    return {
+      success: false,
+      transactionId: existingTransactionId || existingReference || '',
+      reference: existingReference || existingTransactionId || '',
+      status: 'pending',
+      message: 'Checking existing mobile money payment.',
+    }
+  }, [existingReference, existingTransactionId, isOpen, transaction])
+
+  const activeTransaction = transaction || resumableTransaction
+
   useEffect(() => {
-    if (status !== 'pending' || !transaction) return
+    if (!activeTransaction || (status !== 'pending' && !resumableTransaction)) return
 
     let cancelled = false
     let attempts = 0
@@ -79,13 +137,14 @@ export function SessionPaymentModal({
 
       try {
         const result = await checkSessionMomoStatus({
-          transactionId: transaction.transactionId,
-          reference: transaction.reference,
+          transactionId: activeTransaction.transactionId,
+          reference: activeTransaction.reference,
         })
 
         if (cancelled) return
 
         if (result.status === 'completed') {
+          setClientReference('')
           setStatus('success')
           setStatusMessage(result.message || 'Payment completed successfully.')
           window.setTimeout(() => {
@@ -95,21 +154,28 @@ export function SessionPaymentModal({
         }
 
         if (result.status === 'failed') {
+          setClientReference('')
           setStatus('idle')
           setError(result.failureReason || result.message || 'Payment failed.')
           return
         }
 
         setStatusMessage(result.message || 'Waiting for mobile money confirmation.')
+        setError(result.recoverable ? 'Temporary connection issue. Your payment is still pending.' : '')
 
         if (attempts >= 12) {
-          setStatus('idle')
-          setError('Payment is still pending. Approve the prompt on your phone, then check again.')
+          setStatusMessage('Payment is still pending. You can keep this open, or close it and check again later.')
+          setError('')
         }
       } catch (pollError) {
         if (cancelled) return
-        setStatus('idle')
-        setError(pollError instanceof Error ? pollError.message : 'Could not confirm payment status.')
+        const isOffline = typeof navigator !== 'undefined' && navigator.onLine === false
+        setStatusMessage(
+          isOffline
+            ? 'You appear to be offline. Your payment is still pending and will be checked again when the connection returns.'
+            : 'Could not reach the payment provider. Your payment is still pending and we will keep checking.'
+        )
+        setError(pollError instanceof Error ? pollError.message : 'Temporary connection issue.')
       }
     }
 
@@ -122,12 +188,13 @@ export function SessionPaymentModal({
       cancelled = true
       window.clearInterval(intervalId)
     }
-  }, [handleClose, onSuccess, status, transaction])
+  }, [activeTransaction, handleClose, onSuccess, resumableTransaction, status])
 
   const formattedAmount = useMemo(
     () => `${currency} ${amount.toFixed(2)}`,
     [amount, currency]
   )
+  const paymentInProgress = status === 'initiating' || status === 'pending' || Boolean(resumableTransaction)
 
   if (!isOpen) return null
 
@@ -144,17 +211,23 @@ export function SessionPaymentModal({
     setStatus('initiating')
 
     try {
+      const paymentReference = clientReference || createPaymentReference()
+      setClientReference(paymentReference)
+
       const result = await chargeSessionMobileMoney({
         sessionId,
         registrationId,
         phone: phoneNumber,
         operator,
         currency,
+        reference: paymentReference,
       })
 
+      setClientReference(result.reference)
       setTransaction(result)
 
       if (result.status === 'completed') {
+        setClientReference('')
         setStatus('success')
         setStatusMessage(result.message || 'Payment completed successfully.')
         window.setTimeout(() => {
@@ -164,6 +237,7 @@ export function SessionPaymentModal({
       }
 
       if (result.status === 'failed') {
+        setClientReference('')
         setStatus('idle')
         setError(result.failureReason || result.message || 'Payment failed.')
         return
@@ -172,8 +246,15 @@ export function SessionPaymentModal({
       setStatus('pending')
       setStatusMessage(result.message || 'Approve the payment request on your phone.')
     } catch (paymentError) {
+      const recoverable = isRecoverablePaymentError(paymentError)
+      const message = paymentError instanceof Error ? paymentError.message : 'Unable to start payment.'
+      if (!recoverable) setClientReference('')
       setStatus('idle')
-      setError(paymentError instanceof Error ? paymentError.message : 'Unable to start payment.')
+      setError(
+        recoverable
+          ? `${message} You can try again; the same payment request will be reused.`
+          : message
+      )
     }
   }
 
@@ -238,7 +319,7 @@ export function SessionPaymentModal({
                         borderColor={operator === network ? 'brand.500' : 'whiteAlpha.200'}
                         _hover={{ bg: operator === network ? 'brand.600' : 'whiteAlpha.200' }}
                         onClick={() => setOperator(network)}
-                        disabled={status === 'initiating' || status === 'pending'}
+                        disabled={paymentInProgress}
                         textTransform="capitalize"
                       >
                         {network === 'airtel' ? 'Airtel Money' : 'MTN MoMo'}
@@ -266,10 +347,14 @@ export function SessionPaymentModal({
                       color="white"
                       borderColor="whiteAlpha.200"
                       placeholder="0971234567"
-                      disabled={status === 'initiating' || status === 'pending'}
+                      disabled={paymentInProgress}
                     />
                   </Box>
-                  {statusMessage && <Text color="blue.200" fontSize="sm" mt={2}>{statusMessage}</Text>}
+                  {(statusMessage || resumableTransaction) && (
+                    <Text color="blue.200" fontSize="sm" mt={2}>
+                      {statusMessage || 'Checking existing mobile money payment.'}
+                    </Text>
+                  )}
                   {error && <Text color="red.300" fontSize="sm" mt={2}>{error}</Text>}
                 </Box>
 
@@ -280,14 +365,14 @@ export function SessionPaymentModal({
                   color="white"
                   borderRadius="xl"
                   _hover={{ bg: 'brand.600' }}
-                  disabled={status === 'initiating' || status === 'pending' || !phoneNumber}
+                  disabled={paymentInProgress || !phoneNumber}
                 >
                   {status === 'initiating' ? (
                     <>
                       <Loader2 size={18} />
                       Starting payment...
                     </>
-                  ) : status === 'pending' ? (
+                  ) : status === 'pending' || resumableTransaction ? (
                     <>
                       <Spinner size="sm" />
                       Waiting for confirmation...

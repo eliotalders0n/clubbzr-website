@@ -11,6 +11,7 @@ export interface ChargeSessionMobileMoneyInput {
   phone: string;
   operator: MobileMoneyOperator;
   currency?: string;
+  reference?: string;
 }
 
 export interface SessionMobileMoneyResponse {
@@ -20,6 +21,7 @@ export interface SessionMobileMoneyResponse {
   status: MobileMoneyStatus;
   message: string;
   failureReason?: string | null;
+  recoverable?: boolean;
 }
 
 const chargeSessionMobileMoneyFn = httpsCallable<
