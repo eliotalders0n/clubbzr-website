@@ -153,7 +153,7 @@ export default function Terms() {
             <Box pt={8} borderTop="1px solid" borderColor="whiteAlpha.100">
               <Text color="whiteAlpha.500">
                 See also our{' '}
-                <Link to="/privacy">
+                <Link to="/privacy-policy">
                   <Text as="span" color="brand.500" _hover={{ textDecoration: 'underline' }}>
                     Privacy Policy
                   </Text>

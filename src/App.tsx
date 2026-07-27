@@ -124,7 +124,9 @@ function App() {
 
           {/* Legal */}
           <Route path="/terms" element={<Terms />} />
+          <Route path="/terms-of-service" element={<Terms />} />
           <Route path="/privacy" element={<Privacy />} />
+          <Route path="/privacy-policy" element={<Privacy />} />
 
           {/* Admin Routes */}
           <Route path="/admin" element={<AdminRoute><AdminDashboard /></AdminRoute>} />

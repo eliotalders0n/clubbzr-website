@@ -27,6 +27,9 @@ const WHATSAPP_TEMPLATE_LANGUAGE = "en_US";
 const DEFAULT_CURRENCY = "ZMW";
 const DEFAULT_ADMIN_NOTIFICATION_EMAIL = "clubbzrzm@gmail.com";
 const APP_BASE_URL = process.env.APP_BASE_URL || "https://clubbzr.com";
+const WHATSAPP_CONFIRMATION_HEADER_IMAGE_URL =
+  process.env.WHATSAPP_CONFIRMATION_HEADER_IMAGE_URL ||
+  "https://club-bzr.web.app/whatsapp/session-confirmation-header.png";
 const SESSIONS_COLLECTION = "sessions";
 const SESSION_REGISTRATIONS_COLLECTION = "sessionRegistrations";
 const SESSION_PAYMENT_TRANSACTIONS_COLLECTION = "sessionPaymentTransactions";
@@ -115,6 +118,7 @@ interface QueuedWhatsAppTemplate {
   to: string;
   templateName: string;
   languageCode: string;
+  headerImageUrl?: string;
   bodyParameters: string[];
   tag: string;
   metadata: Record<string, string | null>;
@@ -575,6 +579,29 @@ async function sendWhatsAppTemplate(
     );
   }
 
+  const components: Record<string, unknown>[] = [];
+  if (input.headerImageUrl) {
+    components.push({
+      type: "header",
+      parameters: [
+        {
+          type: "image",
+          image: {
+            link: input.headerImageUrl,
+          },
+        },
+      ],
+    });
+  }
+
+  components.push({
+    type: "body",
+    parameters: input.bodyParameters.map((text) => ({
+      type: "text",
+      text,
+    })),
+  });
+
   return whatsappRequest(
     `/${phoneNumberId}/messages`,
     {
@@ -586,15 +613,7 @@ async function sendWhatsAppTemplate(
         template: {
           name: input.templateName,
           language: {code: input.languageCode},
-          components: [
-            {
-              type: "body",
-              parameters: input.bodyParameters.map((text) => ({
-                type: "text",
-                text,
-              })),
-            },
-          ],
+          components,
         },
       }),
     },
@@ -715,6 +734,7 @@ async function queueUserConfirmationWhatsApp(input: {
     to: recipient,
     templateName: WHATSAPP_CONFIRMATION_TEMPLATE_NAME,
     languageCode: WHATSAPP_TEMPLATE_LANGUAGE,
+    headerImageUrl: WHATSAPP_CONFIRMATION_HEADER_IMAGE_URL,
     bodyParameters: [
       memberName,
       session.title,
@@ -734,6 +754,7 @@ async function queueUserConfirmationWhatsApp(input: {
       to: recipient,
       templateName: message.templateName,
       languageCode: message.languageCode,
+      headerImageUrl: message.headerImageUrl,
       bodyParameters: message.bodyParameters,
       metadata,
       attempts: admin.firestore.FieldValue.increment(1),

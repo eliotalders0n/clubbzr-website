@@ -177,7 +177,7 @@ export default function Privacy() {
             <Box pt={8} borderTop="1px solid" borderColor="whiteAlpha.100">
               <Text color="whiteAlpha.500">
                 See also our{' '}
-                <Link to="/terms">
+                <Link to="/terms-of-service">
                   <Text as="span" color="brand.500" _hover={{ textDecoration: 'underline' }}>
                     Terms of Service
                   </Text>

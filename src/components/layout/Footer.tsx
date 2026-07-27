@@ -20,6 +20,11 @@ const NAV_LINKS = [
   { label: 'About', href: '/about' },
 ]
 
+const LEGAL_LINKS = [
+  { label: 'Privacy Policy', href: '/privacy-policy' },
+  { label: 'Terms of Service', href: '/terms-of-service' },
+]
+
 export function Footer() {
   return (
     <Box as="footer" py={16} bg="gray.950" borderTop="1px solid" borderColor="whiteAlpha.100">
@@ -42,9 +47,20 @@ export function Footer() {
             ))}
           </HStack>
 
-          <Text color="whiteAlpha.300" fontSize="sm">
-            © 2026 Club BZR
-          </Text>
+          <Flex direction="column" align={{ base: 'center', md: 'flex-end' }} gap={3}>
+            <Text color="whiteAlpha.300" fontSize="sm">
+              © 2026 Club BZR
+            </Text>
+            <HStack as="nav" gap={5} flexWrap="wrap" justify={{ base: 'center', md: 'flex-end' }}>
+              {LEGAL_LINKS.map((link) => (
+                <Link key={link.href} to={link.href}>
+                  <Text color="whiteAlpha.450" fontSize="xs" _hover={{ color: 'white' }}>
+                    {link.label}
+                  </Text>
+                </Link>
+              ))}
+            </HStack>
+          </Flex>
         </Flex>
       </Container>
     </Box>
