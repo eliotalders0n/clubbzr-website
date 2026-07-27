@@ -19,6 +19,7 @@ export interface AdminPaymentSessionSummary {
   pending: number;
   failed: number;
   returned: number;
+  withdrawn: number;
   netCollected: number;
   transactionCount: number;
   registrationCount: number;
@@ -27,22 +28,15 @@ export interface AdminPaymentSessionSummary {
 export interface AdminPaymentDashboard {
   generatedAt: string;
   filters: AdminPaymentDashboardFilters;
-  provider: {
-    accounts: Record<string, unknown>[];
-    collections: Record<string, unknown>[];
-    settlements: Record<string, unknown>[];
-    transactions: Record<string, unknown>[];
-    withdrawals: Record<string, unknown>[];
-    errors: Record<string, string | null>;
-  };
   sessions: AdminPaymentSessionSummary[];
   localTransactions: Record<string, unknown>[];
   registrations: Record<string, unknown>[];
   returns: Record<string, unknown>[];
+  withdrawals: Record<string, unknown>[];
   reconciliation: {
-    statusMismatches: Record<string, unknown>[];
-    missingProviderCollections: Record<string, unknown>[];
-    unmatchedProviderCollections: Record<string, unknown>[];
+    transactionStatusIssues: Record<string, unknown>[];
+    registrationPaymentIssues: Record<string, unknown>[];
+    returnIssues: Record<string, unknown>[];
     issueCount: number;
   };
   totals: {
@@ -52,9 +46,12 @@ export interface AdminPaymentDashboard {
     pending: number;
     failed: number;
     returned: number;
+    withdrawn: number;
     netCollected: number;
-    providerSettlements: number;
-    providerWithdrawals: number;
+    recordedWithdrawals: number;
+    pendingWithdrawals: number;
+    cancelledWithdrawals: number;
+    totalWithdrawals: number;
     completedReturns: number;
   };
   sourceNotes: string[];

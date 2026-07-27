@@ -18,7 +18,6 @@ import {
 import {
   AlertTriangle,
   Banknote,
-  CheckCircle2,
   RefreshCw,
   RotateCcw,
   Send,
@@ -495,7 +494,7 @@ export default function Payments() {
               Payments
             </Heading>
             <Text color="whiteAlpha.600" mt={1}>
-              Collections, reconciliation, settlements, withdrawals, and returns.
+              Firestore ledger for collections, reconciliation, withdrawals, and returns.
             </Text>
           </Box>
           <HStack gap={3} flexWrap="wrap">
@@ -523,7 +522,7 @@ export default function Payments() {
         <SimpleGrid columns={{ base: 1, md: 2, xl: 4 }} gap={4} mb={6}>
           <MetricCard label="Net collected" value={formatMoney(totals?.netCollected)} helper="Online and external minus returns" icon={<Wallet size={20} />} />
           <MetricCard label="Pending" value={formatMoney(totals?.pending)} helper="Collections awaiting confirmation" icon={<RefreshCw size={20} />} />
-          <MetricCard label="Withdrawals" value={formatMoney(totals?.providerWithdrawals)} helper="Provider debit-like transactions" icon={<Banknote size={20} />} />
+          <MetricCard label="Withdrawals" value={formatMoney(totals?.recordedWithdrawals)} helper="Recorded withdrawal records" icon={<Banknote size={20} />} />
           <MetricCard label="Returns" value={formatMoney(totals?.completedReturns)} helper="Completed return records" icon={<RotateCcw size={20} />} />
         </SimpleGrid>
 
@@ -579,20 +578,10 @@ export default function Payments() {
                   </VStack>
                 </Panel>
 
-                <Panel title="Provider Status">
-                  <SimpleGrid columns={{ base: 1, md: 2, xl: 4 }} gap={3}>
-                    {Object.entries(dashboard?.provider.errors || {}).map(([key, providerError]) => (
-                      <Box key={key} p={4} bg="blackAlpha.200" borderRadius="xl" border="1px solid" borderColor="whiteAlpha.100">
-                        <HStack gap={2}>
-                          {providerError ? <AlertTriangle size={16} color="#fca5a5" /> : <CheckCircle2 size={16} color="#86efac" />}
-                          <Text color="white" textTransform="capitalize">{key}</Text>
-                        </HStack>
-                        <Text color={providerError ? 'red.200' : 'whiteAlpha.500'} fontSize="sm" mt={2}>
-                          {providerError || 'Connected'}
-                        </Text>
-                      </Box>
-                    ))}
-                  </SimpleGrid>
+                <Panel title="Ledger Source">
+                  <Text color="whiteAlpha.600">
+                    These totals are built from Firestore records only. Lenco is contacted only when collecting or manually syncing a specific payment.
+                  </Text>
                 </Panel>
               </>
             )}
@@ -648,22 +637,31 @@ export default function Payments() {
             {dashboard && activeTab === 'reconciliation' && (
               <Panel title={`Reconciliation Issues (${dashboard?.reconciliation.issueCount || 0})`}>
                 <VStack align="stretch" gap={4}>
-                  {dashboard?.reconciliation.statusMismatches.map((issue, index) => (
+                  {dashboard?.reconciliation.transactionStatusIssues.map((issue, index) => (
                     <Box key={`mismatch-${index}`} p={4} bg="orange.500/10" border="1px solid" borderColor="orange.400/30" borderRadius="xl">
-                      <Text color="orange.100" fontWeight="semibold">Status mismatch</Text>
+                      <HStack gap={2}>
+                        <AlertTriangle size={16} color="#fed7aa" />
+                        <Text color="orange.100" fontWeight="semibold">Paid transaction needs signup update</Text>
+                      </HStack>
                       <Text color="whiteAlpha.600" fontSize="sm" mt={1}>{asString(issue.reference)}</Text>
                     </Box>
                   ))}
-                  {dashboard?.reconciliation.missingProviderCollections.map((record) => (
-                    <Box key={asString(record.id)} p={4} bg="red.500/10" border="1px solid" borderColor="red.400/30" borderRadius="xl">
-                      <Text color="red.100" fontWeight="semibold">Missing provider record</Text>
-                      <Text color="whiteAlpha.600" fontSize="sm" mt={1}>{recordLabel(record, ['reference', 'transactionId'])}</Text>
+                  {dashboard?.reconciliation.registrationPaymentIssues.map((issue, index) => (
+                    <Box key={`registration-${index}`} p={4} bg="red.500/10" border="1px solid" borderColor="red.400/30" borderRadius="xl">
+                      <HStack gap={2}>
+                        <AlertTriangle size={16} color="#fca5a5" />
+                        <Text color="red.100" fontWeight="semibold">Paid signup missing completed transaction</Text>
+                      </HStack>
+                      <Text color="whiteAlpha.600" fontSize="sm" mt={1}>{asString(issue.reference) || 'No payment reference'}</Text>
                     </Box>
                   ))}
-                  {dashboard?.reconciliation.unmatchedProviderCollections.slice(0, 20).map((record, index) => (
-                    <Box key={`provider-${index}`} p={4} bg="whiteAlpha.50" border="1px solid" borderColor="whiteAlpha.100" borderRadius="xl">
-                      <Text color="white" fontWeight="semibold">Unmatched Lenco collection</Text>
-                      <Text color="whiteAlpha.600" fontSize="sm" mt={1}>{recordLabel(record, ['reference', 'id'])}</Text>
+                  {dashboard?.reconciliation.returnIssues.map((issue, index) => (
+                    <Box key={`return-${index}`} p={4} bg="red.500/10" border="1px solid" borderColor="red.400/30" borderRadius="xl">
+                      <HStack gap={2}>
+                        <AlertTriangle size={16} color="#fca5a5" />
+                        <Text color="red.100" fontWeight="semibold">Return needs transaction review</Text>
+                      </HStack>
+                      <Text color="whiteAlpha.600" fontSize="sm" mt={1}>{asString(issue.reference) || 'No payment reference'}</Text>
                     </Box>
                   ))}
                   {dashboard?.reconciliation.issueCount === 0 && <Text color="whiteAlpha.500">No reconciliation issues in the loaded window.</Text>}
@@ -672,49 +670,23 @@ export default function Payments() {
             )}
 
             {dashboard && activeTab === 'withdrawals' && (
-              <>
-                <Panel title="Accounts">
-                  <SimpleGrid columns={{ base: 1, lg: 2 }} gap={3}>
-                    {(dashboard?.provider.accounts || []).map((account, index) => (
-                      <Box key={String(account.id || index)} p={4} bg="blackAlpha.200" borderRadius="xl" border="1px solid" borderColor="whiteAlpha.100">
-                        <Text color="white" fontWeight="semibold">{recordLabel(account, ['name', 'accountName', 'id'])}</Text>
-                        <Text color="brand.200" fontSize="xl" fontWeight="bold" mt={2}>
-                          {formatMoney(account.balance || account.availableBalance || account.amount, asString(account.currency) || 'ZMW')}
-                        </Text>
+              <Panel title="Recorded Withdrawals">
+                <VStack align="stretch" gap={3}>
+                  {(dashboard?.withdrawals || []).map((record) => (
+                    <Flex key={asString(record.id)} justify="space-between" gap={4} p={4} bg="blackAlpha.200" borderRadius="xl">
+                      <Box minW={0}>
+                        <HStack gap={2} flexWrap="wrap">
+                          <Text color="white" fontWeight="semibold">{recordLabel(record, ['reason', 'reference', 'id'])}</Text>
+                          <StatusBadge status={record.status} />
+                        </HStack>
+                        <Text color="whiteAlpha.500" fontSize="sm" mt={1}>{formatDate(record.createdAt)}</Text>
                       </Box>
-                    ))}
-                    {dashboard?.provider.accounts.length === 0 && <Text color="whiteAlpha.500">No provider accounts returned.</Text>}
-                  </SimpleGrid>
-                </Panel>
-                <Panel title="Withdrawals And Debits">
-                  <VStack align="stretch" gap={3}>
-                    {(dashboard?.provider.withdrawals || []).map((record, index) => (
-                      <Flex key={String(record.id || index)} justify="space-between" gap={4} p={4} bg="blackAlpha.200" borderRadius="xl">
-                        <Box minW={0}>
-                          <Text color="white" fontWeight="semibold" lineClamp={1}>{recordLabel(record, ['description', 'narration', 'type'])}</Text>
-                          <Text color="whiteAlpha.500" fontSize="sm">{recordLabel(record, ['reference', 'id'])}</Text>
-                        </Box>
-                        <Text color="orange.200" fontWeight="bold">{formatMoney(Math.abs(asNumber(record.amount)), asString(record.currency) || 'ZMW')}</Text>
-                      </Flex>
-                    ))}
-                    {dashboard?.provider.withdrawals.length === 0 && <Text color="whiteAlpha.500">No provider withdrawals/debits returned.</Text>}
-                  </VStack>
-                </Panel>
-                <Panel title="Settlements">
-                  <VStack align="stretch" gap={3}>
-                    {(dashboard?.provider.settlements || []).slice(0, 20).map((record, index) => (
-                      <Flex key={String(record.id || index)} justify="space-between" gap={4} p={4} bg="blackAlpha.200" borderRadius="xl">
-                        <Box minW={0}>
-                          <Text color="white" fontWeight="semibold">{recordLabel(record, ['reference', 'id', 'status'])}</Text>
-                          <Text color="whiteAlpha.500" fontSize="sm">{formatDate(record.createdAt || record.date)}</Text>
-                        </Box>
-                        <Text color="green.200" fontWeight="bold">{formatMoney(record.amount || record.total, asString(record.currency) || 'ZMW')}</Text>
-                      </Flex>
-                    ))}
-                    {dashboard?.provider.settlements.length === 0 && <Text color="whiteAlpha.500">No provider settlements returned.</Text>}
-                  </VStack>
-                </Panel>
-              </>
+                      <Text color="orange.200" fontWeight="bold">{formatMoney(record.amount, asString(record.currency) || 'ZMW')}</Text>
+                    </Flex>
+                  ))}
+                  {dashboard?.withdrawals.length === 0 && <Text color="whiteAlpha.500">No Firestore withdrawal records yet.</Text>}
+                </VStack>
+              </Panel>
             )}
 
             {dashboard && activeTab === 'returns' && (

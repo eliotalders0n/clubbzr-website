@@ -14,7 +14,6 @@ const lencoSecretKey = defineSecret("LENCO_SECRET_KEY");
 
 const LENCO_API_BASE = "https://api.lenco.co/access/v2";
 const LENCO_REQUEST_TIMEOUT_MS = 15000;
-const LENCO_DASHBOARD_REQUEST_TIMEOUT_MS = 6000;
 const DEFAULT_CURRENCY = "ZMW";
 const DEFAULT_ADMIN_NOTIFICATION_EMAIL = "clubbzrzm@gmail.com";
 const APP_BASE_URL = process.env.APP_BASE_URL || "https://clubbzr.com";
@@ -22,6 +21,7 @@ const SESSIONS_COLLECTION = "sessions";
 const SESSION_REGISTRATIONS_COLLECTION = "sessionRegistrations";
 const SESSION_PAYMENT_TRANSACTIONS_COLLECTION = "sessionPaymentTransactions";
 const SESSION_PAYMENT_RETURNS_COLLECTION = "sessionPaymentReturns";
+const SESSION_PAYMENT_WITHDRAWALS_COLLECTION = "sessionPaymentWithdrawals";
 const MAIL_COLLECTION = "mail";
 
 type MobileMoneyOperator = "mtn" | "airtel" | "zamtel";
@@ -320,63 +320,12 @@ function snapshotToCallableObject(
   };
 }
 
-function extractLencoList(responseData: Record<string, unknown> | null): Record<string, unknown>[] {
-  if (!responseData) return [];
-
-  const data = responseData.data;
-  if (Array.isArray(data)) {
-    return data.filter((entry): entry is Record<string, unknown> =>
-      Boolean(entry && typeof entry === "object")
-    );
-  }
-
-  if (data && typeof data === "object") {
-    const nestedData = (data as Record<string, unknown>).data;
-    if (Array.isArray(nestedData)) {
-      return nestedData.filter((entry): entry is Record<string, unknown> =>
-        Boolean(entry && typeof entry === "object")
-      );
-    }
-  }
-
-  return [];
-}
-
-function getLencoRecordReference(record: Record<string, unknown>): string | null {
+function getLocalPaymentKey(record: Record<string, unknown>): string | null {
   return normalizeOptionalString(record.reference) ??
-    normalizeOptionalString(record.id) ??
-    normalizeOptionalString(record.collectionId) ??
-    normalizeOptionalString(record.transactionId);
-}
-
-function getLencoRecordAmount(record: Record<string, unknown>): number {
-  return getFiniteAmount(record.amount) ??
-    getFiniteAmount(record.total) ??
-    getFiniteAmount(record.value) ??
-    0;
-}
-
-function getLencoRecordText(record: Record<string, unknown>): string {
-  return [
-    record.type,
-    record.entry,
-    record.category,
-    record.description,
-    record.narration,
-    record.status,
-  ]
-    .map((value) => String(value ?? "").toLowerCase())
-    .join(" ");
-}
-
-function isProviderWithdrawalRecord(record: Record<string, unknown>): boolean {
-  const text = getLencoRecordText(record);
-  const amount = getLencoRecordAmount(record);
-  return amount < 0 ||
-    text.includes("withdraw") ||
-    text.includes("payout") ||
-    text.includes("debit") ||
-    text.includes("transfer");
+    normalizeOptionalString(record.paymentReference) ??
+    normalizeOptionalString(record.transactionId) ??
+    normalizeOptionalString(record.paymentTransactionId) ??
+    normalizeOptionalString(record.id);
 }
 
 function getAdminNotificationEmails(): string[] {
@@ -702,28 +651,6 @@ async function requireAdminAuth(uid: string | undefined): Promise<string> {
   return uid;
 }
 
-async function safeLencoRead(
-  path: string,
-  secret: string,
-  timeoutMs = LENCO_DASHBOARD_REQUEST_TIMEOUT_MS
-): Promise<{data: Record<string, unknown> | null; error: string | null}> {
-  try {
-    return {
-      data: await lencoRequest(path, {method: "GET"}, secret, timeoutMs),
-      error: null,
-    };
-  } catch (error) {
-    logger.warn("Lenco admin dashboard read failed", {
-      path,
-      errorMessage: getErrorMessage(error),
-    });
-    return {
-      data: null,
-      error: getErrorMessage(error),
-    };
-  }
-}
-
 async function requirePaymentAccess(
   uid: string,
   transactionData: FirebaseFirestore.DocumentData
@@ -884,7 +811,6 @@ export const adminGetPaymentsDashboard = onCall(
   {
     cors: true,
     invoker: "public",
-    secrets: [lencoSecretKey],
     timeoutSeconds: 30,
   },
   async (request) => {
@@ -900,17 +826,23 @@ export const adminGetPaymentsDashboard = onCall(
       .collection(SESSION_REGISTRATIONS_COLLECTION);
     let returnQuery: FirebaseFirestore.Query = db
       .collection(SESSION_PAYMENT_RETURNS_COLLECTION);
+    let withdrawalQuery: FirebaseFirestore.Query = db
+      .collection(SESSION_PAYMENT_WITHDRAWALS_COLLECTION);
 
     if (sessionId) {
       transactionQuery = transactionQuery.where("sessionId", "==", sessionId);
       registrationQuery = registrationQuery.where("sessionId", "==", sessionId);
       returnQuery = returnQuery.where("sessionId", "==", sessionId);
+      withdrawalQuery = withdrawalQuery.where("sessionId", "==", sessionId);
     } else {
       transactionQuery = transactionQuery
         .orderBy("createdAt", "desc")
         .limit(limitCount);
       registrationQuery = registrationQuery.limit(1000);
       returnQuery = returnQuery.orderBy("createdAt", "desc").limit(limitCount);
+      withdrawalQuery = withdrawalQuery
+        .orderBy("createdAt", "desc")
+        .limit(limitCount);
     }
 
     const sessionPromise = sessionId ?
@@ -921,20 +853,14 @@ export const adminGetPaymentsDashboard = onCall(
       transactionSnapshot,
       registrationSnapshot,
       returnSnapshot,
+      withdrawalSnapshot,
       sessionResult,
-      accountsResult,
-      collectionsResult,
-      settlementsResult,
-      transactionsResult,
     ] = await Promise.all([
       transactionQuery.get(),
       registrationQuery.get(),
       returnQuery.get(),
+      withdrawalQuery.get(),
       sessionPromise,
-      safeLencoRead("/accounts", lencoSecretKey.value()),
-      safeLencoRead("/collections", lencoSecretKey.value()),
-      safeLencoRead("/settlements", lencoSecretKey.value()),
-      safeLencoRead("/transactions", lencoSecretKey.value()),
     ]);
 
     const sessions = sessionId ?
@@ -953,71 +879,82 @@ export const adminGetPaymentsDashboard = onCall(
     const returns = returnSnapshot.docs.map((snapshot) =>
       snapshotToCallableObject(snapshot)
     );
-
-    const lencoCollections = extractLencoList(collectionsResult.data).map(
-      (record) => serializeForCallable(record) as Record<string, unknown>
-    );
-    const lencoSettlements = extractLencoList(settlementsResult.data).map(
-      (record) => serializeForCallable(record) as Record<string, unknown>
-    );
-    const lencoTransactions = extractLencoList(transactionsResult.data).map(
-      (record) => serializeForCallable(record) as Record<string, unknown>
-    );
-    const lencoAccounts = extractLencoList(accountsResult.data).map(
-      (record) => serializeForCallable(record) as Record<string, unknown>
+    const withdrawals = withdrawalSnapshot.docs.map((snapshot) =>
+      snapshotToCallableObject(snapshot)
     );
 
-    const localByReference = new Map<string, Record<string, unknown>>();
+    const localTransactionsByKey = new Map<string, Record<string, unknown>>();
     localTransactions.forEach((transaction) => {
-      const reference = normalizeOptionalString(transaction.reference);
-      if (reference) localByReference.set(reference, transaction);
-      const transactionId = normalizeOptionalString(transaction.transactionId);
-      if (transactionId) localByReference.set(transactionId, transaction);
+      const key = getLocalPaymentKey(transaction);
+      if (key) localTransactionsByKey.set(key, transaction);
     });
 
-    const providerByReference = new Map<string, Record<string, unknown>>();
-    lencoCollections.forEach((collection) => {
-      const reference = getLencoRecordReference(collection);
-      if (reference) providerByReference.set(reference, collection);
+    const registrationsById = new Map<string, Record<string, unknown>>();
+    registrations.forEach((registration) => {
+      const id = normalizeOptionalString(registration.id);
+      if (id) registrationsById.set(id, registration);
     });
 
-    const statusMismatches: Record<string, unknown>[] = [];
-    const missingProviderCollections: Record<string, unknown>[] = [];
-
+    const transactionStatusIssues: Record<string, unknown>[] = [];
     localTransactions.forEach((transaction) => {
-      const reference = normalizeOptionalString(transaction.reference) ??
-        normalizeOptionalString(transaction.transactionId);
-      if (!reference) return;
+      if (getFallbackPaymentStatus(transaction.status) !== "completed") return;
 
-      const providerRecord = providerByReference.get(reference);
-      if (!providerRecord) {
-        missingProviderCollections.push(transaction);
-        return;
-      }
+      const registrationId = normalizeOptionalString(transaction.registrationId);
+      if (!registrationId) return;
 
-      const providerStatus = mapCollectionStatus(providerRecord.status);
-      const localStatus = getFallbackPaymentStatus(transaction.status);
-      const normalizedLocalStatus = localStatus === "processing" ?
-        "pending" :
-        localStatus;
-      const normalizedProviderStatus = providerStatus === "processing" ?
-        "pending" :
-        providerStatus;
+      const registration = registrationsById.get(registrationId);
+      const registrationStatus = normalizeOptionalString(registration?.status);
+      const paymentStatus = normalizeOptionalString(registration?.paymentStatus);
+      const paymentStateMatches = paymentStatus === "paid_online" ||
+        paymentStatus === "paid_external";
+      const signupStateMatches = registrationStatus === "paid_pending_confirmation" ||
+        registrationStatus === "confirmed";
 
-      if (normalizedLocalStatus !== normalizedProviderStatus) {
-        statusMismatches.push({
-          reference,
-          localStatus,
-          providerStatus,
-          localTransaction: transaction,
-          providerCollection: providerRecord,
+      if (!registration || !paymentStateMatches || !signupStateMatches) {
+        transactionStatusIssues.push({
+          reference: getLocalPaymentKey(transaction),
+          transaction,
+          registration: registration ?? null,
         });
       }
     });
 
-    const unmatchedProviderCollections = lencoCollections.filter((collection) => {
-      const reference = getLencoRecordReference(collection);
-      return reference ? !localByReference.has(reference) : true;
+    const registrationPaymentIssues: Record<string, unknown>[] = [];
+    registrations.forEach((registration) => {
+      if (normalizeOptionalString(registration.paymentStatus) !== "paid_online") {
+        return;
+      }
+
+      const key = getLocalPaymentKey(registration);
+      const transaction = key ? localTransactionsByKey.get(key) : undefined;
+      if (!transaction ||
+        getFallbackPaymentStatus(transaction.status) !== "completed") {
+        registrationPaymentIssues.push({
+          reference: key,
+          registration,
+          transaction: transaction ?? null,
+        });
+      }
+    });
+
+    const returnIssues: Record<string, unknown>[] = [];
+    returns.forEach((returnRecord) => {
+      if (normalizeOptionalString(returnRecord.status) !== "completed") return;
+
+      const key = getLocalPaymentKey(returnRecord);
+      const transaction = key ? localTransactionsByKey.get(key) : undefined;
+      const returnedAmount = getFiniteAmount(returnRecord.amount) ?? 0;
+      const paidAmount = transaction ?
+        getFiniteAmount(transaction.amount) ?? 0 :
+        0;
+
+      if (!transaction || returnedAmount > paidAmount) {
+        returnIssues.push({
+          reference: key,
+          returnRecord,
+          transaction: transaction ?? null,
+        });
+      }
     });
 
     const sessionsById = new Map<string, Record<string, unknown>>();
@@ -1036,6 +973,9 @@ export const adminGetPaymentsDashboard = onCall(
       );
       const sessionReturns = returns.filter((returnRecord) =>
         normalizeOptionalString(returnRecord.sessionId) === id
+      );
+      const sessionWithdrawals = withdrawals.filter((withdrawal) =>
+        normalizeOptionalString(withdrawal.sessionId) === id
       );
 
       const onlineCollected = sessionTransactions
@@ -1056,6 +996,9 @@ export const adminGetPaymentsDashboard = onCall(
       const returned = sessionReturns
         .filter((returnRecord) => returnRecord.status === "completed")
         .reduce((sum, returnRecord) => sum + (getFiniteAmount(returnRecord.amount) ?? 0), 0);
+      const withdrawn = sessionWithdrawals
+        .filter((withdrawal) => withdrawal.status === "completed")
+        .reduce((sum, withdrawal) => sum + (getFiniteAmount(withdrawal.amount) ?? 0), 0);
 
       return {
         sessionId: id,
@@ -1068,19 +1011,35 @@ export const adminGetPaymentsDashboard = onCall(
         pending: roundCurrency(pending),
         failed: roundCurrency(failed),
         returned: roundCurrency(returned),
-        netCollected: roundCurrency(onlineCollected + externalCollected - returned),
+        withdrawn: roundCurrency(withdrawn),
+        netCollected: roundCurrency(
+          onlineCollected + externalCollected - returned - withdrawn
+        ),
         transactionCount: sessionTransactions.length,
         registrationCount: sessionRegistrations.length,
       };
     });
 
-    const providerWithdrawals = lencoTransactions.filter(isProviderWithdrawalRecord);
-    const settlementTotal = lencoSettlements.reduce(
-      (sum, settlement) => sum + Math.abs(getLencoRecordAmount(settlement)),
-      0
-    );
-    const withdrawalTotal = providerWithdrawals.reduce(
-      (sum, transaction) => sum + Math.abs(getLencoRecordAmount(transaction)),
+    const recordedWithdrawalTotal = withdrawals
+      .filter((withdrawal) => withdrawal.status === "completed")
+      .reduce(
+        (sum, withdrawal) => sum + (getFiniteAmount(withdrawal.amount) ?? 0),
+        0
+      );
+    const pendingWithdrawalTotal = withdrawals
+      .filter((withdrawal) => withdrawal.status === "pending")
+      .reduce(
+        (sum, withdrawal) => sum + (getFiniteAmount(withdrawal.amount) ?? 0),
+        0
+      );
+    const cancelledWithdrawalTotal = withdrawals
+      .filter((withdrawal) => withdrawal.status === "cancelled")
+      .reduce(
+        (sum, withdrawal) => sum + (getFiniteAmount(withdrawal.amount) ?? 0),
+        0
+      );
+    const withdrawalTotal = withdrawals.reduce(
+      (sum, withdrawal) => sum + (getFiniteAmount(withdrawal.amount) ?? 0),
       0
     );
     const completedReturnTotal = returns
@@ -1095,6 +1054,7 @@ export const adminGetPaymentsDashboard = onCall(
         pending: summary.pending + Number(session.pending),
         failed: summary.failed + Number(session.failed),
         returned: summary.returned + Number(session.returned),
+        withdrawn: summary.withdrawn + Number(session.withdrawn),
         netCollected: summary.netCollected + Number(session.netCollected),
       }),
       {
@@ -1104,6 +1064,7 @@ export const adminGetPaymentsDashboard = onCall(
         pending: 0,
         failed: 0,
         returned: 0,
+        withdrawn: 0,
         netCollected: 0,
       }
     );
@@ -1111,32 +1072,20 @@ export const adminGetPaymentsDashboard = onCall(
     return {
       generatedAt: new Date().toISOString(),
       filters: {sessionId, limit: limitCount},
-      provider: {
-        accounts: lencoAccounts,
-        collections: lencoCollections.slice(0, limitCount),
-        settlements: lencoSettlements.slice(0, limitCount),
-        transactions: lencoTransactions.slice(0, limitCount),
-        withdrawals: providerWithdrawals.slice(0, limitCount),
-        errors: {
-          accounts: accountsResult.error,
-          collections: collectionsResult.error,
-          settlements: settlementsResult.error,
-          transactions: transactionsResult.error,
-        },
-      },
       sessions: sessionSummaries.sort((a, b) =>
         Number(b.netCollected) - Number(a.netCollected)
       ),
       localTransactions,
       registrations,
       returns,
+      withdrawals,
       reconciliation: {
-        statusMismatches,
-        missingProviderCollections,
-        unmatchedProviderCollections,
-        issueCount: statusMismatches.length +
-          missingProviderCollections.length +
-          unmatchedProviderCollections.length,
+        transactionStatusIssues,
+        registrationPaymentIssues,
+        returnIssues,
+        issueCount: transactionStatusIssues.length +
+          registrationPaymentIssues.length +
+          returnIssues.length,
       },
       totals: {
         onlineCollected: roundCurrency(totals.onlineCollected),
@@ -1145,15 +1094,18 @@ export const adminGetPaymentsDashboard = onCall(
         pending: roundCurrency(totals.pending),
         failed: roundCurrency(totals.failed),
         returned: roundCurrency(totals.returned),
+        withdrawn: roundCurrency(totals.withdrawn),
         netCollected: roundCurrency(totals.netCollected),
-        providerSettlements: roundCurrency(settlementTotal),
-        providerWithdrawals: roundCurrency(withdrawalTotal),
+        recordedWithdrawals: roundCurrency(recordedWithdrawalTotal),
+        pendingWithdrawals: roundCurrency(pendingWithdrawalTotal),
+        cancelledWithdrawals: roundCurrency(cancelledWithdrawalTotal),
+        totalWithdrawals: roundCurrency(withdrawalTotal),
         completedReturns: roundCurrency(completedReturnTotal),
       },
       sourceNotes: [
-        "Collections and status data come from Lenco.",
-        "External payments and manual returns are local admin records.",
-        "Withdrawals are reported as provider debit/withdrawal-like transactions; no outgoing withdrawal is initiated here.",
+        "Dashboard totals come from Firestore ledger records.",
+        "Lenco is only contacted for explicit payment actions and manual payment syncs.",
+        "Provider-wide accounts, settlements, and transactions are not loaded here.",
       ],
     };
   }
