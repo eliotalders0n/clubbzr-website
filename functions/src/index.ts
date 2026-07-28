@@ -16,7 +16,8 @@ const whatsappAccessToken = defineSecret("WHATSAPP_ACCESS_TOKEN");
 const whatsappPhoneNumberId = defineSecret("WHATSAPP_PHONE_NUMBER_ID");
 const whatsappWebhookVerifyToken = defineSecret("WHATSAPP_WEBHOOK_VERIFY_TOKEN");
 
-const LENCO_API_BASE = "https://api.lenco.co/access/v2";
+const LENCO_API_BASE =
+  process.env.LENCO_API_BASE || "https://api.lenco.co/access/v2";
 const LENCO_REQUEST_TIMEOUT_MS = 15000;
 const WHATSAPP_API_BASE = "https://graph.facebook.com/v25.0";
 const WHATSAPP_REQUEST_TIMEOUT_MS = 15000;
@@ -26,6 +27,9 @@ const WHATSAPP_CONFIRMATION_TEMPLATE_NAME =
 const WHATSAPP_TEMPLATE_LANGUAGE = "en_US";
 const DEFAULT_CURRENCY = "ZMW";
 const DEFAULT_ADMIN_NOTIFICATION_EMAIL = "clubbzrzm@gmail.com";
+const RECOVERABLE_WITHDRAWAL_REQUEST_MESSAGE =
+  "Withdrawal request could not be confirmed. " +
+  "Sync this withdrawal before retrying.";
 const APP_BASE_URL = process.env.APP_BASE_URL || "https://clubbzr.com";
 const WHATSAPP_CONFIRMATION_HEADER_IMAGE_URL =
   process.env.WHATSAPP_CONFIRMATION_HEADER_IMAGE_URL ||
@@ -38,8 +42,6 @@ const SESSION_PAYMENT_WITHDRAWALS_COLLECTION = "sessionPaymentWithdrawals";
 const MESSAGE_JOBS_COLLECTION = "messageJobs";
 const WHATSAPP_WEBHOOK_EVENTS_COLLECTION = "whatsappWebhookEvents";
 const MAIL_COLLECTION = "mail";
-
-const LENCO_API_V1_BASE = "https://api.lenco.co/access/v1";
 
 type MobileMoneyOperator = "mtn" | "airtel" | "zamtel";
 type PaymentStatus = "pending" | "processing" | "completed" | "failed";
@@ -201,6 +203,13 @@ function formatPhoneNumber(value: string): string {
   );
 }
 
+/**
+ * Formats a Zambian phone number for Lenco transfer requests.
+ */
+function formatLencoTransferPhoneNumber(value: string): string {
+  return `+${formatPhoneNumber(value)}`;
+}
+
 function normalizeWhatsAppPhoneNumber(value: unknown): string | null {
   const phone = normalizeOptionalString(value);
   if (!phone) return null;
@@ -214,18 +223,21 @@ function normalizeWhatsAppPhoneNumber(value: unknown): string | null {
 
 function mapOperator(value: string): MobileMoneyOperator {
   const operator = value.trim().toLowerCase();
+  const operatorMap: Record<string, MobileMoneyOperator> = {
+    "mtn": "mtn",
+    "mtn zm": "mtn",
+    "momo": "mtn",
+    "mtn momo": "mtn",
+    "mtn mobile money": "mtn",
+    "airtel": "airtel",
+    "airtel zm": "airtel",
+    "airtel money": "airtel",
+    "zamtel": "zamtel",
+    "zamtel kwacha": "zamtel",
+  };
+  const mappedOperator = operatorMap[operator];
 
-  if (["mtn", "mtn zm", "momo"].includes(operator)) {
-    return "mtn";
-  }
-
-  if (["airtel", "airtel zm", "airtel money"].includes(operator)) {
-    return "airtel";
-  }
-
-  if (operator === "zamtel") {
-    return "zamtel";
-  }
+  if (mappedOperator) return mappedOperator;
 
   throw new HttpsError(
     "invalid-argument",
@@ -1325,6 +1337,7 @@ async function lencoRequest(
       signal: controller.signal,
       headers: {
         "Content-Type": "application/json",
+        "Accept": "application/json",
         "Authorization": `Bearer ${secret}`,
         ...(init.headers || {}),
       },
@@ -1347,10 +1360,24 @@ async function lencoRequest(
     clearTimeout(timeoutId);
   }
 
-  const parsedResponse = await response.json().catch(() => ({}));
-  const responseData = parsedResponse as Record<string, unknown>;
+  let responseData: Record<string, unknown>;
 
-  if (!response.ok) {
+  try {
+    responseData = await response.json() as Record<string, unknown>;
+  } catch {
+    logger.error("Lenco API returned invalid JSON", {
+      baseUrl,
+      path,
+      status: response.status,
+    });
+
+    throw new HttpsError(
+      "unavailable",
+      `Lenco returned an invalid response with HTTP status ${response.status}.`
+    );
+  }
+
+  if (!response.ok || responseData.status === false) {
     logger.error("Lenco API request failed", {
       baseUrl,
       path,
@@ -1385,9 +1412,7 @@ async function resolveLencoDebitAccountId(
   const responseData = await lencoRequest(
     "/accounts",
     {method: "GET"},
-    secret,
-    LENCO_REQUEST_TIMEOUT_MS,
-    LENCO_API_V1_BASE
+    secret
   );
   const accounts = Array.isArray(responseData.data) ?
     responseData.data as Record<string, unknown>[] :
@@ -2796,11 +2821,13 @@ export const adminCreatePaymentWithdrawal = onCall(
     const phone = formatPhoneNumber(
       requireString(recipientPhone, "Withdrawal phone number is required.")
     );
+    const transferPhone = formatLencoTransferPhoneNumber(phone);
     const reference = normalizePaymentReference(data.reference) ??
       generateReference();
     const reason = normalizeOptionalString(data.reason) ??
       normalizeOptionalString(data.narration) ??
       "Admin withdrawal";
+    const narration = normalizeOptionalString(data.narration) ?? reason;
     const note = normalizeOptionalString(data.note);
     const lencoAccountId = await resolveLencoDebitAccountId(
       lencoSecretKey.value(),
@@ -2813,13 +2840,16 @@ export const adminCreatePaymentWithdrawal = onCall(
 
     if (existingWithdrawalSnapshot.exists) {
       const existingWithdrawal = existingWithdrawalSnapshot.data() || {};
-      const existingStatus = getFallbackPaymentStatus(existingWithdrawal.status);
+      const existingStatus = getFallbackPaymentStatus(
+        existingWithdrawal.status
+      );
       const existingFailureReason =
         normalizeOptionalString(existingWithdrawal.failureReason);
+      const existingWithdrawalId =
+        normalizeOptionalString(existingWithdrawal.withdrawalId) ?? reference;
       return {
         success: existingStatus !== "failed",
-        withdrawalId: normalizeOptionalString(existingWithdrawal.withdrawalId) ??
-          reference,
+        withdrawalId: existingWithdrawalId,
         transferId: normalizeOptionalString(existingWithdrawal.transferId),
         reference,
         status: existingStatus,
@@ -2839,13 +2869,17 @@ export const adminCreatePaymentWithdrawal = onCall(
         method: "mobile_money",
         direction: "transfer",
         recipientUserId: recipientUserId ?? null,
-        recipientDisplayName: normalizeOptionalString(recipientUserData?.displayName),
+        recipientDisplayName: normalizeOptionalString(
+          recipientUserData?.displayName
+        ),
         recipientEmail: normalizeOptionalString(recipientUserData?.email),
         phone,
+        providerPhone: transferPhone,
         operator,
         amount,
         currency,
         reason,
+        narration,
         note,
         gatewayStatus: "request_started",
         status: "pending",
@@ -2866,10 +2900,10 @@ export const adminCreatePaymentWithdrawal = onCall(
           method: "POST",
           body: JSON.stringify({
             accountId: lencoAccountId,
-            amount,
-            narration: reason,
+            amount: amount.toFixed(2),
+            narration,
             reference,
-            phone,
+            phone: transferPhone,
             operator,
             country: "zm",
           }),
@@ -2885,7 +2919,7 @@ export const adminCreatePaymentWithdrawal = onCall(
           status: isRecoverable ? "pending" : "failed",
           gatewayStatus: "request_error",
           message: isRecoverable ?
-            "Withdrawal request could not be confirmed. Sync this withdrawal before retrying." :
+            RECOVERABLE_WITHDRAWAL_REQUEST_MESSAGE :
             getTransferMessage("failed", errorMessage),
           failureReason: isRecoverable ? null : errorMessage,
           transferRequestError: errorMessage,
@@ -2904,15 +2938,22 @@ export const adminCreatePaymentWithdrawal = onCall(
         withdrawalId: reference,
         reference,
         status: "pending",
-        message: "We could not confirm that Lenco received the withdrawal request. Sync this withdrawal before retrying.",
+        message: RECOVERABLE_WITHDRAWAL_REQUEST_MESSAGE,
         failureReason: null,
         recoverable: true,
       };
     }
 
     const transfer = (responseData.data || {}) as Record<string, unknown>;
-    const transferId = normalizeOptionalString(transfer.id) ?? reference;
-    const lencoReference = normalizeOptionalString(transfer.lencoReference);
+    const providerReference = normalizeOptionalString(transfer.reference) ??
+      reference;
+    const transferId = normalizeOptionalString(transfer.id) ??
+      normalizeOptionalString(transfer._id) ??
+      normalizeOptionalString(transfer.transferId) ??
+      providerReference;
+    const lencoReference =
+      normalizeOptionalString(transfer.lencoReference) ??
+      normalizeOptionalString(transfer.lenco_reference);
     const status = mapCollectionStatus(transfer.status);
     const failureReason = getFailureReason(transfer);
 
@@ -2920,7 +2961,9 @@ export const adminCreatePaymentWithdrawal = onCall(
       {
         withdrawalId: transferId,
         transferId,
+        reference: providerReference,
         lencoReference: lencoReference ?? null,
+        providerReference,
         gatewayStatus: normalizeOptionalString(transfer.status),
         status,
         message: getTransferMessage(status, failureReason),
@@ -2938,8 +2981,8 @@ export const adminCreatePaymentWithdrawal = onCall(
       success: status !== "failed",
       withdrawalId: transferId,
       transferId,
-      reference,
-      lencoReference,
+      reference: providerReference,
+      lencoReference: lencoReference ?? null,
       status,
       message: getTransferMessage(status, failureReason),
       failureReason,
@@ -2981,16 +3024,21 @@ export const adminSyncPaymentWithdrawal = onCall(
       withdrawalId;
 
     if (!reference) {
-      throw new HttpsError("failed-precondition", "Withdrawal reference is missing.");
+      throw new HttpsError(
+        "failed-precondition",
+        "Withdrawal reference is missing."
+      );
     }
 
     const responseData = await lencoRequest(
-      `/transfers/status/${reference}`,
+      `/transfers/status/${encodeURIComponent(reference)}`,
       {method: "GET"},
       lencoSecretKey.value()
     );
     const transfer = (responseData.data || {}) as Record<string, unknown>;
     const resolvedTransferId = normalizeOptionalString(transfer.id) ??
+      normalizeOptionalString(transfer._id) ??
+      normalizeOptionalString(transfer.transferId) ??
       transferId ??
       withdrawalRecord.snapshot.id;
     const status = mapCollectionStatus(transfer.status);
@@ -3002,6 +3050,9 @@ export const adminSyncPaymentWithdrawal = onCall(
     );
     const paymentReference = normalizeOptionalString(transfer.reference) ??
       reference;
+    const lencoReference =
+      normalizeOptionalString(transfer.lencoReference) ??
+      normalizeOptionalString(transfer.lenco_reference);
 
     await withdrawalRecord.docRef.set(
       {
@@ -3010,7 +3061,8 @@ export const adminSyncPaymentWithdrawal = onCall(
         reference: paymentReference,
         amount,
         currency,
-        lencoReference: normalizeOptionalString(transfer.lencoReference),
+        lencoReference: lencoReference ?? null,
+        providerReference: paymentReference,
         gatewayStatus: normalizeOptionalString(transfer.status),
         status,
         message: getTransferMessage(status, failureReason),
@@ -3029,6 +3081,7 @@ export const adminSyncPaymentWithdrawal = onCall(
       withdrawalId: resolvedTransferId,
       transferId: resolvedTransferId,
       reference: paymentReference,
+      lencoReference: lencoReference ?? null,
       status,
       message: getTransferMessage(status, failureReason),
       failureReason,
