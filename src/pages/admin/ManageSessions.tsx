@@ -204,7 +204,7 @@ const modalFooterButtonProps = {
 
 const registrationActionButtonProps = {
   h: '42px',
-  minW: { base: 'full', md: '124px' },
+  minW: { base: 'full', sm: '132px' },
   w: { base: 'full', sm: 'auto' },
   px: 4.5,
   borderRadius: 'full',
@@ -1409,10 +1409,10 @@ function RegistrationRow({
       <Flex
         gap={{ base: 4, lg: 6 }}
         justify="space-between"
-        align={{ base: 'stretch', lg: 'flex-start' }}
-        direction={{ base: 'column', lg: 'row' }}
+        align={{ base: 'stretch', xl: 'flex-start' }}
+        direction={{ base: 'column', xl: 'row' }}
       >
-        <HStack gap={3} minW={0} align="flex-start">
+        <HStack gap={3} minW={{ base: 0, sm: '240px' }} flex="1" align="flex-start">
           {registration.photoURL ? (
             <Image src={registration.photoURL} alt={registration.displayName} boxSize="40px" borderRadius="full" objectFit="cover" />
           ) : (
@@ -1420,32 +1420,32 @@ function RegistrationRow({
               <Users size={18} />
             </Flex>
           )}
-          <Box minW={0}>
-            <Text color="white" fontWeight="semibold" lineClamp={1}>{registration.displayName}</Text>
+          <Box minW={0} maxW="full">
+            <Text color="white" fontWeight="semibold" overflow="hidden" textOverflow="ellipsis" whiteSpace="nowrap">{registration.displayName}</Text>
             <HStack gap={2} color="whiteAlpha.600" fontSize="sm" minW={0}>
-              <Mail size={14} />
-              <Text lineClamp={1}>{registration.email || registration.userId}</Text>
+              <Mail size={14} style={{ flexShrink: 0 }} />
+              <Text overflow="hidden" textOverflow="ellipsis" whiteSpace="nowrap">{registration.email || registration.userId}</Text>
             </HStack>
-            <Text color="whiteAlpha.400" fontSize="xs" mt={1}>
+            <Text color="whiteAlpha.400" fontSize="xs" mt={1} overflow="hidden" textOverflow="ellipsis" whiteSpace="nowrap">
               Requested {formatDateTime(registration.requestedAt)}
             </Text>
             {registration.whatsappPhone && (
-              <HStack gap={2} color="whiteAlpha.500" fontSize="xs" mt={1}>
-                <MessageCircle size={13} />
-                <Text lineClamp={1}>{registration.whatsappPhone}</Text>
+              <HStack gap={2} color="whiteAlpha.500" fontSize="xs" mt={1} minW={0}>
+                <MessageCircle size={13} style={{ flexShrink: 0 }} />
+                <Text overflow="hidden" textOverflow="ellipsis" whiteSpace="nowrap">{registration.whatsappPhone}</Text>
               </HStack>
             )}
           </Box>
         </HStack>
 
         <VStack
-          align={{ base: 'stretch', lg: 'flex-end' }}
+          align={{ base: 'stretch', xl: 'flex-end' }}
           gap={3}
-          w={{ base: 'full', lg: 'auto' }}
-          minW={{ lg: '408px' }}
+          w={{ base: 'full', xl: 'auto' }}
+          maxW={{ xl: '560px' }}
           flexShrink={0}
         >
-          <Flex gap={3} flexWrap="wrap" justify={{ base: 'flex-start', lg: 'flex-end' }} w="full">
+          <Flex gap={3} flexWrap="wrap" justify={{ base: 'flex-start', xl: 'flex-end' }} w="full">
             <Badge bg="whiteAlpha.100" color="whiteAlpha.800" borderRadius="full" px={3} py={1}>
               {paymentStatusLabels[registration.paymentStatus]}
             </Badge>
@@ -1483,7 +1483,7 @@ function RegistrationRow({
           <Flex
             gap={3}
             flexWrap="wrap"
-            justify={{ base: 'stretch', lg: 'flex-end' }}
+            justify={{ base: 'stretch', sm: 'flex-start', xl: 'flex-end' }}
             w="full"
           >
             {canRetryWhatsApp && (
@@ -1506,7 +1506,7 @@ function RegistrationRow({
               </Button>
             )}
             {canMarkPaid && (
-              <Button {...registrationActionButtonProps} minW={{ base: 'full', sm: '152px' }} bg="green.500/15" color="green.200" _hover={{ bg: 'green.500/25' }} onClick={() => onConfirm(registration, true)}>
+              <Button {...registrationActionButtonProps} bg="green.500/15" color="green.200" _hover={{ bg: 'green.500/25' }} onClick={() => onConfirm(registration, true)}>
                 <CheckCircle2 size={14} />
                 Paid + Confirm
               </Button>
