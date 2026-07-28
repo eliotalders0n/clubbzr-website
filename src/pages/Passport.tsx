@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useMemo, useState } from 'react';
+import React, { useCallback, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import {
   Box,
@@ -14,8 +14,9 @@ import {
   HStack,
   SimpleGrid,
   Spinner,
+  Textarea,
 } from '@chakra-ui/react';
-import { Award, Bookmark, CalendarDays, CheckCircle2, Eye, Heart, ImageIcon, MessageCircle, Pencil, Settings, UserRound } from 'lucide-react';
+import { Award, Bookmark, CalendarDays, CheckCircle2, Eye, Heart, ImageIcon, MessageCircle, Pencil, Save, Settings, Trash2, UserRound, X } from 'lucide-react';
 import { Header } from '@/components/layout/Header';
 import { Footer } from '@/components/layout/Footer';
 import { Section } from '@/components/layout/Section';
@@ -24,7 +25,7 @@ import { useAuth } from '@/contexts/AuthContext';
 import { useCollection, useDocument } from '@/hooks/useFirestore';
 import { Timestamp } from 'firebase/firestore';
 import { createQuestCompletionBadges, getBadgeVisual } from '../../lib/badges';
-import { createDocumentWithId } from '../../lib/firestore';
+import { createDocumentWithId, deleteDocument, updateDocument } from '../../lib/firestore';
 import {
   buildDiscoveryArtworks,
   formatMedium,
@@ -180,6 +181,11 @@ const ArtworkStrip: React.FC<ArtworkStripProps> = ({ title, icon, items, isLoadi
 const Passport: React.FC = () => {
   const [isCreating, setIsCreating] = useState(false);
   const [activePassportTab, setActivePassportTab] = useState<PassportTab>('posts');
+  const [editingPostId, setEditingPostId] = useState<string | null>(null);
+  const [editingPostContent, setEditingPostContent] = useState('');
+  const [busyPostId, setBusyPostId] = useState<string | null>(null);
+  const [localPostContentById, setLocalPostContentById] = useState<Record<string, string>>({});
+  const [locallyDeletedPostIds, setLocallyDeletedPostIds] = useState<Record<string, true>>({});
 
   // Get current user from auth context
   const { user: authUser, firebaseUser, loading: authLoading, initialized } = useAuth();
@@ -205,6 +211,7 @@ const Passport: React.FC = () => {
   const {
     data: communityPosts,
     loading: communityPostsLoading,
+    refetch: refetchCommunityPosts,
   } = useCollection('communityPosts', {
     where: [{ field: 'userId', operator: '==', value: firebaseUser?.uid || '' }],
     skip: !firebaseUser?.uid,
@@ -361,9 +368,83 @@ const Passport: React.FC = () => {
   }, [artists, authUser?.bookmarkedArtworkKeys, authUser?.lovedArtworkKeys, exhibitions, uploadedArtworks]);
 
   const userCommunityPosts = useMemo(
-    () => [...(communityPosts as CommunityPost[])].sort((a, b) => toMillis(b.createdAt) - toMillis(a.createdAt)),
-    [communityPosts]
+    () => [...(communityPosts as CommunityPost[])]
+      .filter((post) => !locallyDeletedPostIds[post.id])
+      .map((post) => {
+        const localContent = localPostContentById[post.id];
+        return localContent === undefined ? post : { ...post, content: localContent };
+      })
+      .sort((a, b) => toMillis(b.createdAt) - toMillis(a.createdAt)),
+    [communityPosts, localPostContentById, locallyDeletedPostIds]
   );
+
+  const startEditingPost = useCallback((post: CommunityPost) => {
+    setEditingPostId(post.id);
+    setEditingPostContent(post.content);
+  }, []);
+
+  const cancelEditingPost = useCallback(() => {
+    setEditingPostId(null);
+    setEditingPostContent('');
+  }, []);
+
+  const handleSavePost = useCallback(async (post: CommunityPost) => {
+    const content = editingPostContent.trim();
+
+    if (!content) {
+      alert('Post content cannot be empty.');
+      return;
+    }
+
+    if (content === post.content.trim()) {
+      cancelEditingPost();
+      return;
+    }
+
+    setBusyPostId(post.id);
+
+    const result = await updateDocument('communityPosts', post.id, {
+      content,
+    });
+
+    setBusyPostId(null);
+
+    if (result.success) {
+      setLocalPostContentById((current) => ({
+        ...current,
+        [post.id]: content,
+      }));
+      cancelEditingPost();
+      void refetchCommunityPosts();
+      return;
+    }
+
+    console.error('Failed to update post:', result.error);
+    alert('Failed to update post. Please try again.');
+  }, [cancelEditingPost, editingPostContent, refetchCommunityPosts]);
+
+  const handleDeletePost = useCallback(async (postId: string) => {
+    if (!window.confirm('Delete this post? This cannot be undone.')) return;
+
+    setBusyPostId(postId);
+
+    const result = await deleteDocument('communityPosts', postId);
+
+    setBusyPostId(null);
+
+    if (result.success) {
+      setLocallyDeletedPostIds((current) => ({
+        ...current,
+        [postId]: true,
+      }));
+      if (editingPostId === postId) cancelEditingPost();
+      void refetchCommunityPosts();
+      return;
+    }
+
+    console.error('Failed to delete post:', result.error);
+    alert('Failed to delete post. Please try again.');
+  }, [cancelEditingPost, editingPostId, refetchCommunityPosts]);
 
   const savedArtworkLoading = artistsLoading || uploadedArtworksLoading || exhibitionsLoading;
 
@@ -1150,6 +1231,8 @@ const Passport: React.FC = () => {
                     <VStack align="stretch" gap={3}>
                       {userCommunityPosts.map((post) => {
                         const thumbnail = post.mediaType === 'image' ? post.mediaUrls?.[0] : undefined;
+                        const isEditing = editingPostId === post.id;
+                        const isPostBusy = busyPostId === post.id;
 
                         return (
                           <Box key={post.id} p={4} borderRadius="xl" bg="whiteAlpha.50" border="1px solid" borderColor="whiteAlpha.100">
@@ -1160,19 +1243,101 @@ const Passport: React.FC = () => {
                                 </Box>
                               )}
                               <Box flex={1} minW={0}>
-                                <HStack gap={3} color="whiteAlpha.500" fontSize="xs" mb={2} flexWrap="wrap">
-                                  <Text>{formatDate(post.createdAt)}</Text>
-                                  <Text>{post.reactionsCount || 0} reactions</Text>
-                                  <Text>{post.commentsCount || 0} comments</Text>
-                                </HStack>
+                                <Flex justify="space-between" align="flex-start" gap={3} mb={2}>
+                                  <HStack gap={3} color="whiteAlpha.500" fontSize="xs" flexWrap="wrap" pt={1}>
+                                    <Text>{formatDate(post.createdAt)}</Text>
+                                    <Text>{post.reactionsCount || 0} reactions</Text>
+                                    <Text>{post.commentsCount || 0} comments</Text>
+                                  </HStack>
+                                  <HStack gap={2} flexShrink={0}>
+                                    {isEditing ? (
+                                      <>
+                                        <ChakraButton
+                                          size="xs"
+                                          h="34px"
+                                          px={3}
+                                          borderRadius="full"
+                                          bg="whiteAlpha.100"
+                                          color="whiteAlpha.800"
+                                          _hover={{ bg: 'whiteAlpha.200' }}
+                                          onClick={cancelEditingPost}
+                                          disabled={isPostBusy}
+                                        >
+                                          <X size={14} />
+                                          Cancel
+                                        </ChakraButton>
+                                        <ChakraButton
+                                          size="xs"
+                                          h="34px"
+                                          px={3}
+                                          borderRadius="full"
+                                          bg="brand.500"
+                                          color="white"
+                                          _hover={{ bg: 'brand.600' }}
+                                          onClick={() => void handleSavePost(post)}
+                                          disabled={isPostBusy || !editingPostContent.trim()}
+                                        >
+                                          {isPostBusy ? <Spinner size="xs" /> : <Save size={14} />}
+                                          Save
+                                        </ChakraButton>
+                                      </>
+                                    ) : (
+                                      <>
+                                        <ChakraButton
+                                          size="xs"
+                                          h="34px"
+                                          px={3}
+                                          borderRadius="full"
+                                          bg="whiteAlpha.100"
+                                          color="whiteAlpha.800"
+                                          _hover={{ bg: 'whiteAlpha.200' }}
+                                          onClick={() => startEditingPost(post)}
+                                          disabled={!!busyPostId}
+                                        >
+                                          <Pencil size={14} />
+                                          Edit
+                                        </ChakraButton>
+                                        <ChakraButton
+                                          size="xs"
+                                          h="34px"
+                                          px={3}
+                                          borderRadius="full"
+                                          bg="red.500/12"
+                                          color="red.200"
+                                          _hover={{ bg: 'red.500/20' }}
+                                          onClick={() => void handleDeletePost(post.id)}
+                                          disabled={!!busyPostId}
+                                        >
+                                          {isPostBusy ? <Spinner size="xs" /> : <Trash2 size={14} />}
+                                          Delete
+                                        </ChakraButton>
+                                      </>
+                                    )}
+                                  </HStack>
+                                </Flex>
                                 {post.prompt && (
                                   <Text color="brand.300" fontSize="xs" fontWeight="semibold" mb={2} lineClamp={1}>
                                     {post.prompt}
                                   </Text>
                                 )}
-                                <Text color="whiteAlpha.900" fontSize="sm" lineHeight="tall" whiteSpace="pre-wrap">
-                                  {post.content}
-                                </Text>
+                                {isEditing ? (
+                                  <Textarea
+                                    value={editingPostContent}
+                                    onChange={(event) => setEditingPostContent(event.target.value)}
+                                    minH="120px"
+                                    bg="blackAlpha.300"
+                                    borderColor="whiteAlpha.200"
+                                    color="white"
+                                    fontSize="sm"
+                                    lineHeight="tall"
+                                    resize="vertical"
+                                    disabled={isPostBusy}
+                                  />
+                                ) : (
+                                  <Text color="whiteAlpha.900" fontSize="sm" lineHeight="tall" whiteSpace="pre-wrap">
+                                    {post.content}
+                                  </Text>
+                                )}
                                 {post.tags?.length > 0 && (
                                   <HStack gap={2} mt={3} flexWrap="wrap">
                                     {post.tags.slice(0, 8).map((tag) => (

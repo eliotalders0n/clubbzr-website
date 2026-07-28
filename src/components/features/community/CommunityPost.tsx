@@ -467,7 +467,7 @@ const PostMenu: React.FC<{
     <div className="relative">
       <motion.button
         onClick={() => setIsOpen(!isOpen)}
-        className="p-2 rounded-full hover:bg-bzr-gray-800 text-bzr-gray-500 hover:text-bzr-white transition-colors"
+        className="flex h-10 w-10 items-center justify-center rounded-full text-bzr-gray-500 transition-colors hover:bg-bzr-gray-800 hover:text-bzr-white"
         whileHover={{ scale: 1.1 }}
         whileTap={{ scale: 0.9 }}
       >
@@ -495,7 +495,7 @@ const PostMenu: React.FC<{
               initial={{ opacity: 0, scale: 0.9, y: -10 }}
               animate={{ opacity: 1, scale: 1, y: 0 }}
               exit={{ opacity: 0, scale: 0.9, y: -10 }}
-              className="absolute right-0 top-full mt-1 z-20 w-48 bg-bzr-gray-800 rounded-xl border border-bzr-gray-700 overflow-hidden shadow-xl py-2"
+              className="absolute right-0 top-full z-20 mt-2 w-52 overflow-hidden rounded-2xl border border-bzr-gray-700/80 bg-bzr-gray-800/95 py-1.5 pl-3 pr-1.5 shadow-xl backdrop-blur-md"
             >
               {onShare && (
                 <button
@@ -503,17 +503,19 @@ const PostMenu: React.FC<{
                     onShare();
                     setIsOpen(false);
                   }}
-                  className="w-full px-4 py-3 text-left text-sm text-bzr-white hover:bg-bzr-gray-700 transition-colors flex items-center gap-3"
+                  className="flex min-h-10 w-full items-center gap-3 rounded-xl py-2 pl-2 pr-3 text-left text-sm font-medium leading-none text-bzr-gray-200 transition-colors hover:bg-white/5 hover:text-bzr-white"
                 >
-                  <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                    <path
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                      strokeWidth={2}
-                      d="M8.684 13.342C8.886 12.938 9 12.482 9 12c0-.482-.114-.938-.316-1.342m0 2.684a3 3 0 110-2.684m0 2.684l6.632 3.316m-6.632-6l6.632-3.316m0 0a3 3 0 105.367-2.684 3 3 0 00-5.367 2.684zm0 9.316a3 3 0 105.368 2.684 3 3 0 00-5.368-2.684z"
-                    />
-                  </svg>
-                  Share Post
+                  <span className="flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-lg bg-white/5 text-bzr-gray-400">
+                    <svg className="h-4.5 w-4.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <path
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                        strokeWidth={2}
+                        d="M8.684 13.342C8.886 12.938 9 12.482 9 12c0-.482-.114-.938-.316-1.342m0 2.684a3 3 0 110-2.684m0 2.684l6.632 3.316m-6.632-6l6.632-3.316m0 0a3 3 0 105.367-2.684 3 3 0 00-5.367 2.684zm0 9.316a3 3 0 105.368 2.684 3 3 0 00-5.368-2.684z"
+                      />
+                    </svg>
+                  </span>
+                  <span>Share Post</span>
                 </button>
               )}
 
@@ -523,17 +525,19 @@ const PostMenu: React.FC<{
                     onEdit();
                     setIsOpen(false);
                   }}
-                  className="w-full px-4 py-3 text-left text-sm text-bzr-white hover:bg-bzr-gray-700 transition-colors flex items-center gap-3"
+                  className="flex min-h-10 w-full items-center gap-3 rounded-xl py-2 pl-2 pr-3 text-left text-sm font-medium leading-none text-bzr-gray-200 transition-colors hover:bg-white/5 hover:text-bzr-white"
                 >
-                  <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                    <path
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                      strokeWidth={2}
-                      d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"
-                    />
-                  </svg>
-                  Edit Post
+                  <span className="flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-lg bg-blue-500/10 text-blue-200/80">
+                    <svg className="h-4.5 w-4.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <path
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                        strokeWidth={2}
+                        d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"
+                      />
+                    </svg>
+                  </span>
+                  <span>Edit Post</span>
                 </button>
               )}
 
@@ -543,17 +547,19 @@ const PostMenu: React.FC<{
                     onDelete();
                     setIsOpen(false);
                   }}
-                  className="w-full px-4 py-3 text-left text-sm text-red-400 hover:bg-red-500/10 transition-colors flex items-center gap-3"
+                  className="flex min-h-10 w-full items-center gap-3 rounded-xl py-2 pl-2 pr-3 text-left text-sm font-medium leading-none text-red-300/90 transition-colors hover:bg-red-500/10"
                 >
-                  <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                    <path
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                      strokeWidth={2}
-                      d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"
-                    />
-                  </svg>
-                  Delete Post
+                  <span className="flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-lg bg-red-500/10 text-red-300/80">
+                    <svg className="h-4.5 w-4.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <path
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                        strokeWidth={2}
+                        d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"
+                      />
+                    </svg>
+                  </span>
+                  <span>Delete Post</span>
                 </button>
               )}
             </motion.div>
