@@ -13,8 +13,7 @@ interface SessionGalleryProps {
   className?: string;
 }
 
-// Masonry item component
-const MasonryItem: React.FC<{
+const GalleryTile: React.FC<{
   item: GalleryItem;
   index: number;
   onClick: () => void;
@@ -22,13 +21,9 @@ const MasonryItem: React.FC<{
   const [isLoaded, setIsLoaded] = useState(false);
   const [isHovered, setIsHovered] = useState(false);
 
-  // Vary heights for masonry effect
-  const heightVariants = ['h-48', 'h-64', 'h-56', 'h-72', 'h-52'];
-  const heightClass = heightVariants[index % heightVariants.length];
-
   return (
     <motion.div
-      className={cn('relative overflow-hidden rounded-xl cursor-pointer', heightClass)}
+      className="group relative h-[220px] overflow-hidden rounded-xl bg-bzr-gray-800 cursor-pointer sm:h-[248px] md:h-[276px] lg:h-[300px]"
       initial={{ opacity: 0, y: 20 }}
       animate={{ opacity: 1, y: 0 }}
       transition={{ delay: index * 0.05 }}
@@ -45,10 +40,10 @@ const MasonryItem: React.FC<{
       <motion.img
         src={item.thumbnailUrl || item.url}
         alt={item.caption || 'Gallery image'}
-        className="w-full h-full object-cover"
+        className="h-full w-full object-cover"
         onLoad={() => setIsLoaded(true)}
         animate={{
-          scale: isHovered ? 1.1 : 1,
+          scale: isHovered ? 1.06 : 1,
         }}
         transition={{ duration: 0.5, ease: [0.22, 1, 0.36, 1] }}
       />
@@ -63,7 +58,7 @@ const MasonryItem: React.FC<{
 
       {/* Caption and credit overlay */}
       <motion.div
-        className="absolute bottom-0 left-0 right-0 p-4"
+        className="absolute bottom-0 left-0 right-0 p-4 sm:p-5"
         initial={{ y: 20, opacity: 0 }}
         animate={{
           y: isHovered ? 0 : 20,
@@ -81,7 +76,7 @@ const MasonryItem: React.FC<{
 
       {/* Expand icon */}
       <motion.div
-        className="absolute top-4 right-4"
+        className="absolute top-3 right-3 sm:top-4 sm:right-4"
         initial={{ scale: 0, opacity: 0 }}
         animate={{
           scale: isHovered ? 1 : 0,
@@ -89,7 +84,7 @@ const MasonryItem: React.FC<{
         }}
         transition={{ duration: 0.2 }}
       >
-        <div className="w-10 h-10 rounded-full bg-bzr-black/60 backdrop-blur-sm flex items-center justify-center">
+        <div className="w-9 h-9 rounded-full bg-bzr-black/60 backdrop-blur-sm flex items-center justify-center sm:h-10 sm:w-10">
           <svg
             className="w-5 h-5 text-bzr-white"
             fill="none"
@@ -115,7 +110,8 @@ const Lightbox: React.FC<{
   currentIndex: number;
   onClose: () => void;
   onNavigate: (direction: 'prev' | 'next') => void;
-}> = ({ items, currentIndex, onClose, onNavigate }) => {
+  onSelect: (index: number) => void;
+}> = ({ items, currentIndex, onClose, onNavigate, onSelect }) => {
   const item = items[currentIndex];
 
   // Keyboard navigation
@@ -140,7 +136,7 @@ const Lightbox: React.FC<{
     >
       {/* Close button */}
       <motion.button
-        className="absolute top-4 right-4 z-10 w-12 h-12 rounded-full bg-bzr-gray-800/80 text-bzr-white flex items-center justify-center hover:bg-bzr-gray-700 transition-colors"
+        className="absolute right-4 top-4 z-10 flex h-11 w-11 items-center justify-center rounded-full bg-bzr-gray-800/80 text-bzr-white transition-colors hover:bg-bzr-gray-700 sm:h-12 sm:w-12"
         onClick={onClose}
         whileHover={{ scale: 1.1 }}
         whileTap={{ scale: 0.9 }}
@@ -158,7 +154,7 @@ const Lightbox: React.FC<{
       {/* Navigation arrows */}
       {currentIndex > 0 && (
         <motion.button
-          className="absolute left-4 top-1/2 -translate-y-1/2 z-10 w-12 h-12 rounded-full bg-bzr-gray-800/80 text-bzr-white flex items-center justify-center hover:bg-bzr-gray-700 transition-colors"
+          className="absolute left-3 top-1/2 z-10 flex h-10 w-10 -translate-y-1/2 items-center justify-center rounded-full bg-bzr-gray-800/80 text-bzr-white transition-colors hover:bg-bzr-gray-700 sm:left-4 sm:h-12 sm:w-12"
           onClick={(e) => {
             e.stopPropagation();
             onNavigate('prev');
@@ -179,7 +175,7 @@ const Lightbox: React.FC<{
 
       {currentIndex < items.length - 1 && (
         <motion.button
-          className="absolute right-4 top-1/2 -translate-y-1/2 z-10 w-12 h-12 rounded-full bg-bzr-gray-800/80 text-bzr-white flex items-center justify-center hover:bg-bzr-gray-700 transition-colors"
+          className="absolute right-3 top-1/2 z-10 flex h-10 w-10 -translate-y-1/2 items-center justify-center rounded-full bg-bzr-gray-800/80 text-bzr-white transition-colors hover:bg-bzr-gray-700 sm:right-4 sm:h-12 sm:w-12"
           onClick={(e) => {
             e.stopPropagation();
             onNavigate('next');
@@ -202,7 +198,7 @@ const Lightbox: React.FC<{
       <AnimatePresence mode="wait">
         <motion.div
           key={currentIndex}
-          className="relative max-w-[90vw] max-h-[85vh] flex flex-col items-center"
+          className="relative flex max-h-[84vh] max-w-[92vw] flex-col items-center"
           initial={{ opacity: 0, scale: 0.9 }}
           animate={{ opacity: 1, scale: 1 }}
           exit={{ opacity: 0, scale: 0.9 }}
@@ -212,12 +208,12 @@ const Lightbox: React.FC<{
           <img
             src={item.url}
             alt={item.caption || 'Gallery image'}
-            className="max-w-full max-h-[80vh] object-contain rounded-lg"
+            className="max-h-[70vh] max-w-full rounded-lg object-contain sm:max-h-[78vh]"
           />
 
           {/* Photo info panel */}
           <motion.div
-            className="mt-4 text-center"
+            className="mt-3 text-center sm:mt-4"
             initial={{ y: 10, opacity: 0 }}
             animate={{ y: 0, opacity: 1 }}
             transition={{ delay: 0.2 }}
@@ -236,7 +232,7 @@ const Lightbox: React.FC<{
       </AnimatePresence>
 
       {/* Thumbnail strip */}
-      <div className="absolute bottom-4 left-1/2 -translate-x-1/2 flex gap-2 p-2 bg-bzr-gray-900/80 backdrop-blur-sm rounded-xl max-w-[90vw] overflow-x-auto">
+      <div className="absolute bottom-4 left-1/2 flex max-w-[90vw] -translate-x-1/2 gap-2 overflow-x-auto rounded-xl bg-bzr-gray-900/80 p-2 backdrop-blur-sm">
         {items.map((thumbItem, index) => (
           <motion.button
             key={thumbItem.id}
@@ -246,8 +242,7 @@ const Lightbox: React.FC<{
             )}
             onClick={(e) => {
               e.stopPropagation();
-              onNavigate(index > currentIndex ? 'next' : 'prev');
-              // This is a simplified approach - in production you'd set the index directly
+              onSelect(index);
             }}
             whileHover={{ scale: 1.1 }}
             whileTap={{ scale: 0.9 }}
@@ -295,6 +290,10 @@ export const SessionGallery: React.FC<SessionGalleryProps> = ({
     [lightboxIndex, items.length]
   );
 
+  const selectLightboxItem = useCallback((index: number) => {
+    setLightboxIndex(index);
+  }, []);
+
   // Empty state
   if (items.length === 0) {
     return (
@@ -326,15 +325,15 @@ export const SessionGallery: React.FC<SessionGalleryProps> = ({
 
   return (
     <>
-      {/* Masonry grid */}
+      {/* Gallery grid */}
       <div
         className={cn(
-          'columns-1 sm:columns-2 lg:columns-3 xl:columns-4 gap-4 space-y-4',
+          'grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3',
           className
         )}
       >
         {items.map((item, index) => (
-          <MasonryItem
+          <GalleryTile
             key={item.id}
             item={item}
             index={index}
@@ -351,6 +350,7 @@ export const SessionGallery: React.FC<SessionGalleryProps> = ({
             currentIndex={lightboxIndex}
             onClose={closeLightbox}
             onNavigate={navigateLightbox}
+            onSelect={selectLightboxItem}
           />
         )}
       </AnimatePresence>
