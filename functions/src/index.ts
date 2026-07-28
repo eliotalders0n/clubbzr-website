@@ -102,6 +102,8 @@ interface AdminSendSessionConfirmationWhatsAppData {
 interface SessionEmailSummary {
   title: string;
   dateText: string;
+  dateOnlyText: string;
+  timeText: string;
   locationText: string;
 }
 
@@ -425,6 +427,28 @@ function formatSessionDate(value: unknown): string {
   return "Date to be confirmed";
 }
 
+function formatSessionDateOnly(value: unknown): string {
+  if (value instanceof admin.firestore.Timestamp) {
+    return value.toDate().toLocaleDateString("en-ZM", {
+      dateStyle: "medium",
+      timeZone: "Africa/Lusaka",
+    });
+  }
+
+  return "Date to be confirmed";
+}
+
+function formatSessionTimeOnly(value: unknown): string {
+  if (value instanceof admin.firestore.Timestamp) {
+    return value.toDate().toLocaleTimeString("en-ZM", {
+      timeStyle: "short",
+      timeZone: "Africa/Lusaka",
+    });
+  }
+
+  return "Time to be confirmed";
+}
+
 function getRegistrationName(
   registrationData: FirebaseFirestore.DocumentData
 ): string {
@@ -440,6 +464,8 @@ async function getSessionEmailSummary(
     return {
       title: "Club BZR session",
       dateText: "Date to be confirmed",
+      dateOnlyText: "Date to be confirmed",
+      timeText: "Time to be confirmed",
       locationText: "Location to be confirmed",
     };
   }
@@ -455,6 +481,8 @@ async function getSessionEmailSummary(
   return {
     title: normalizeOptionalString(sessionData.title) ?? "Club BZR session",
     dateText: formatSessionDate(sessionData.date),
+    dateOnlyText: formatSessionDateOnly(sessionData.date),
+    timeText: formatSessionTimeOnly(sessionData.date),
     locationText: sessionData.isOnline === true ?
       "Online" :
       normalizeOptionalString(location?.name) ??
@@ -621,6 +649,33 @@ async function sendWhatsAppTemplate(
   );
 }
 
+function getSessionConfirmationWhatsAppBodyParameters(input: {
+  templateName: string;
+  memberName: string;
+  session: SessionEmailSummary;
+  registrationData: FirebaseFirestore.DocumentData;
+}): string[] {
+  if (input.templateName.endsWith("_v2")) {
+    return [
+      input.memberName,
+      input.session.title,
+      input.session.dateOnlyText,
+      input.session.timeText,
+      input.session.locationText,
+      formatMoney(
+        input.registrationData.paymentAmount,
+        input.registrationData.paymentCurrency
+      ),
+    ];
+  }
+
+  return [
+    input.memberName,
+    input.session.title,
+    input.session.dateText,
+  ];
+}
+
 async function getRegistrationWhatsAppRecipient(input: {
   registrationId: string;
   registrationData: FirebaseFirestore.DocumentData;
@@ -735,11 +790,12 @@ async function queueUserConfirmationWhatsApp(input: {
     templateName: WHATSAPP_CONFIRMATION_TEMPLATE_NAME,
     languageCode: WHATSAPP_TEMPLATE_LANGUAGE,
     headerImageUrl: WHATSAPP_CONFIRMATION_HEADER_IMAGE_URL,
-    bodyParameters: [
+    bodyParameters: getSessionConfirmationWhatsAppBodyParameters({
+      templateName: WHATSAPP_CONFIRMATION_TEMPLATE_NAME,
       memberName,
-      session.title,
-      session.dateText,
-    ],
+      session,
+      registrationData: input.registrationData,
+    }),
     tag: "session_confirmation_user",
     metadata,
   };
