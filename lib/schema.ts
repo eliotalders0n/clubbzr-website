@@ -500,6 +500,12 @@ export interface SessionRegistration extends BaseDocument {
   confirmationEmailSentAt?: FirestoreTimestamp;
   confirmationWhatsAppSentAt?: FirestoreTimestamp;
   confirmationWhatsAppMessageId?: string | null;
+  confirmationWhatsAppDeliveryStatus?: string;
+  confirmationWhatsAppProviderSentAt?: FirestoreTimestamp;
+  confirmationWhatsAppDeliveredAt?: FirestoreTimestamp;
+  confirmationWhatsAppReadAt?: FirestoreTimestamp;
+  confirmationWhatsAppDeliveryFailedAt?: FirestoreTimestamp;
+  confirmationWhatsAppDeliveryError?: string;
   confirmationWhatsAppSkippedAt?: FirestoreTimestamp;
   confirmationWhatsAppSkipReason?: string;
   confirmationWhatsAppFailedAt?: FirestoreTimestamp;

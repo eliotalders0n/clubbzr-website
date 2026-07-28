@@ -231,12 +231,24 @@ const filterSelectStyle: React.CSSProperties = {
 }
 
 const getWhatsAppConfirmationState = (registration: SessionRegistration) => {
-  if (registration.confirmationWhatsAppSentAt) {
+  if (registration.confirmationWhatsAppDeliveryFailedAt || registration.confirmationWhatsAppFailedAt) {
+    return { label: 'WhatsApp failed', bg: 'red.500/15', color: 'red.200' }
+  }
+
+  if (registration.confirmationWhatsAppReadAt) {
+    return { label: 'WhatsApp read', bg: 'green.500/15', color: 'green.200' }
+  }
+
+  if (registration.confirmationWhatsAppDeliveredAt) {
+    return { label: 'WhatsApp delivered', bg: 'green.500/15', color: 'green.200' }
+  }
+
+  if (registration.confirmationWhatsAppDeliveryStatus === 'sent') {
     return { label: 'WhatsApp sent', bg: 'green.500/15', color: 'green.200' }
   }
 
-  if (registration.confirmationWhatsAppFailedAt) {
-    return { label: 'WhatsApp failed', bg: 'red.500/15', color: 'red.200' }
+  if (registration.confirmationWhatsAppSentAt) {
+    return { label: 'WhatsApp accepted', bg: 'blue.500/15', color: 'blue.200' }
   }
 
   if (registration.confirmationWhatsAppSkippedAt) {
@@ -1371,8 +1383,20 @@ function RegistrationRow({
   const canMoveToWaitlist = !isTerminal && registration.status !== 'waitlisted' && !isConfirmed
   const canDecline = !isTerminal && !isConfirmed
   const whatsappState = getWhatsAppConfirmationState(registration)
-  const whatsappIssue = registration.confirmationWhatsAppError || registration.confirmationWhatsAppSkipReason || ''
-  const showWhatsAppIssue = Boolean(whatsappIssue) && !registration.confirmationWhatsAppSentAt
+  const whatsappIssue =
+    registration.confirmationWhatsAppDeliveryError ||
+    registration.confirmationWhatsAppError ||
+    registration.confirmationWhatsAppSkipReason ||
+    ''
+  const isWhatsAppError = Boolean(
+    registration.confirmationWhatsAppDeliveryFailedAt ||
+    registration.confirmationWhatsAppDeliveryError ||
+    registration.confirmationWhatsAppFailedAt ||
+    registration.confirmationWhatsAppError
+  )
+  const showWhatsAppIssue = Boolean(whatsappIssue) && (
+    isWhatsAppError || Boolean(registration.confirmationWhatsAppSkippedAt)
+  )
   const canRetryWhatsApp = isConfirmed && !isTerminal
   const whatsappActionLabel = registration.confirmationWhatsAppSentAt
     ? 'Resend WhatsApp'
@@ -1441,13 +1465,13 @@ function RegistrationRow({
               w="full"
               maxW={{ lg: '460px' }}
               p={3}
-              bg={registration.confirmationWhatsAppError ? 'red.500/10' : 'orange.500/10'}
+              bg={isWhatsAppError ? 'red.500/10' : 'orange.500/10'}
               border="1px solid"
-              borderColor={registration.confirmationWhatsAppError ? 'red.500/25' : 'orange.500/25'}
+              borderColor={isWhatsAppError ? 'red.500/25' : 'orange.500/25'}
               borderRadius="lg"
             >
               <Text
-                color={registration.confirmationWhatsAppError ? 'red.100' : 'orange.100'}
+                color={isWhatsAppError ? 'red.100' : 'orange.100'}
                 fontSize="xs"
                 lineHeight="1.45"
                 overflowWrap="anywhere"

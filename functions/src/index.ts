@@ -769,12 +769,16 @@ async function queueUserConfirmationWhatsApp(input: {
   try {
     const responseData = await sendWhatsAppTemplate(message);
     const messageId = getWhatsAppMessageId(responseData);
+    const providerMessageIdsPatch = messageId ? {
+      providerMessageIds: admin.firestore.FieldValue.arrayUnion(messageId),
+    } : {};
 
     await jobRef.set(
       {
         status: "sent",
         provider: "meta_whatsapp_cloud_api",
         providerMessageId: messageId,
+        ...providerMessageIdsPatch,
         providerResponse: serializeForCallable(responseData),
         sentAt: admin.firestore.FieldValue.serverTimestamp(),
         updatedAt: admin.firestore.FieldValue.serverTimestamp(),
@@ -794,10 +798,29 @@ async function queueUserConfirmationWhatsApp(input: {
           confirmationWhatsAppSkipReason: admin.firestore.FieldValue.delete(),
           confirmationWhatsAppFailedAt: admin.firestore.FieldValue.delete(),
           confirmationWhatsAppError: admin.firestore.FieldValue.delete(),
+          confirmationWhatsAppDeliveryStatus:
+            admin.firestore.FieldValue.delete(),
+          confirmationWhatsAppProviderSentAt:
+            admin.firestore.FieldValue.delete(),
+          confirmationWhatsAppDeliveredAt:
+            admin.firestore.FieldValue.delete(),
+          confirmationWhatsAppReadAt:
+            admin.firestore.FieldValue.delete(),
+          confirmationWhatsAppDeliveryFailedAt:
+            admin.firestore.FieldValue.delete(),
+          confirmationWhatsAppDeliveryError:
+            admin.firestore.FieldValue.delete(),
           updatedAt: admin.firestore.FieldValue.serverTimestamp(),
         },
         {merge: true}
       );
+
+    logger.info("Session confirmation WhatsApp accepted by Meta", {
+      registrationId: input.registrationId,
+      sessionId,
+      messageId,
+      recipientLast4: recipient.slice(-4),
+    });
 
     return {status: "sent", messageId};
   } catch (error) {
@@ -1091,6 +1114,65 @@ function extractWhatsAppStatuses(body: unknown): Record<string, unknown>[] {
   return statuses;
 }
 
+function getWhatsAppStatusTimestamp(statusRecord: Record<string, unknown>) {
+  const rawTimestamp = statusRecord.timestamp;
+  const timestamp = typeof rawTimestamp === "number" ?
+    rawTimestamp :
+    Number(normalizeOptionalString(rawTimestamp));
+
+  if (Number.isFinite(timestamp) && timestamp > 0) {
+    return admin.firestore.Timestamp.fromMillis(timestamp * 1000);
+  }
+
+  return admin.firestore.FieldValue.serverTimestamp();
+}
+
+function getWhatsAppStatusError(statusRecord: Record<string, unknown>): string {
+  const errors = Array.isArray(statusRecord.errors) ?
+    statusRecord.errors :
+    [];
+  const firstError = errors.find((entry) =>
+    entry && typeof entry === "object"
+  ) as Record<string, unknown> | undefined;
+
+  if (!firstError) {
+    return "WhatsApp delivery failed.";
+  }
+
+  const rawCode = firstError.code;
+  const code = typeof rawCode === "number" ?
+    String(rawCode) :
+    normalizeOptionalString(rawCode);
+  const title = normalizeOptionalString(firstError.title);
+  const message = normalizeOptionalString(firstError.message);
+  const errorData = firstError.error_data as
+    Record<string, unknown> | undefined;
+  const details = normalizeOptionalString(errorData?.details);
+  const parts = [
+    code ? `(#${code})` : null,
+    title,
+    message && message !== title ? message : null,
+    details && details !== message && details !== title ? details : null,
+  ].filter(Boolean);
+
+  return parts.join(": ") || "WhatsApp delivery failed.";
+}
+
+function getRegistrationIdFromMessageJob(
+  jobSnapshot: FirebaseFirestore.QueryDocumentSnapshot
+): string | null {
+  const jobData = jobSnapshot.data() || {};
+  const metadata = jobData.metadata as Record<string, unknown> | undefined;
+  const metadataRegistrationId =
+    normalizeOptionalString(metadata?.registrationId);
+  if (metadataRegistrationId) return metadataRegistrationId;
+
+  const jobPrefix = "whatsapp_session_confirmation_";
+  return jobSnapshot.id.startsWith(jobPrefix) ?
+    jobSnapshot.id.slice(jobPrefix.length) :
+    null;
+}
+
 function isValidMetaSignature(input: {
   signatureHeader: string | null;
   rawBody: Buffer | undefined;
@@ -1122,44 +1204,99 @@ async function applyWhatsAppStatusUpdates(
     if (!messageId) return;
 
     const status = normalizeOptionalString(statusRecord.status) ?? "unknown";
-    const matchingJobs = await db
+    let matchingJobs = await db
       .collection(MESSAGE_JOBS_COLLECTION)
       .where("providerMessageId", "==", messageId)
       .limit(5)
       .get();
 
+    if (matchingJobs.empty) {
+      matchingJobs = await db
+        .collection(MESSAGE_JOBS_COLLECTION)
+        .where("providerMessageIds", "array-contains", messageId)
+        .limit(5)
+        .get();
+    }
+
+    logger.info("WhatsApp status event received", {
+      messageId,
+      status,
+      matchingJobs: matchingJobs.size,
+    });
+
     await Promise.all(matchingJobs.docs.map((jobSnapshot) => {
+      const eventTimestamp = getWhatsAppStatusTimestamp(statusRecord);
       const timestampPatch: Record<string, unknown> = {};
       if (status === "sent") {
-        timestampPatch.providerSentAt =
-          admin.firestore.FieldValue.serverTimestamp();
+        timestampPatch.providerSentAt = eventTimestamp;
       }
       if (status === "delivered") {
-        timestampPatch.deliveredAt =
-          admin.firestore.FieldValue.serverTimestamp();
+        timestampPatch.deliveredAt = eventTimestamp;
       }
       if (status === "read") {
-        timestampPatch.readAt =
-          admin.firestore.FieldValue.serverTimestamp();
+        timestampPatch.readAt = eventTimestamp;
       }
       if (status === "failed") {
-        timestampPatch.providerFailedAt =
-          admin.firestore.FieldValue.serverTimestamp();
+        timestampPatch.providerFailedAt = eventTimestamp;
       }
 
-      return jobSnapshot.ref.set(
+      const statusEvent = serializeForCallable(statusRecord);
+      const jobUpdate = jobSnapshot.ref.set(
         {
           deliveryStatus: status,
           recipientId: normalizeOptionalString(statusRecord.recipient_id),
-          lastStatusEvent: serializeForCallable(statusRecord),
+          lastStatusEvent: statusEvent,
           statusEvents: admin.firestore.FieldValue.arrayUnion(
-            serializeForCallable(statusRecord)
+            statusEvent
           ),
           updatedAt: admin.firestore.FieldValue.serverTimestamp(),
           ...timestampPatch,
         },
         {merge: true}
       );
+
+      const registrationId = getRegistrationIdFromMessageJob(jobSnapshot);
+      if (!registrationId) return jobUpdate;
+
+      const registrationPatch: Record<string, unknown> = {
+        confirmationWhatsAppDeliveryStatus: status,
+        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      };
+
+      if (status === "sent") {
+        registrationPatch.confirmationWhatsAppProviderSentAt = eventTimestamp;
+        registrationPatch.confirmationWhatsAppDeliveryFailedAt =
+          admin.firestore.FieldValue.delete();
+        registrationPatch.confirmationWhatsAppDeliveryError =
+          admin.firestore.FieldValue.delete();
+      }
+      if (status === "delivered") {
+        registrationPatch.confirmationWhatsAppDeliveredAt = eventTimestamp;
+        registrationPatch.confirmationWhatsAppDeliveryFailedAt =
+          admin.firestore.FieldValue.delete();
+        registrationPatch.confirmationWhatsAppDeliveryError =
+          admin.firestore.FieldValue.delete();
+      }
+      if (status === "read") {
+        registrationPatch.confirmationWhatsAppReadAt = eventTimestamp;
+        registrationPatch.confirmationWhatsAppDeliveryFailedAt =
+          admin.firestore.FieldValue.delete();
+        registrationPatch.confirmationWhatsAppDeliveryError =
+          admin.firestore.FieldValue.delete();
+      }
+      if (status === "failed") {
+        registrationPatch.confirmationWhatsAppDeliveryFailedAt =
+          eventTimestamp;
+        registrationPatch.confirmationWhatsAppDeliveryError =
+          getWhatsAppStatusError(statusRecord);
+      }
+
+      const registrationUpdate = db
+        .collection(SESSION_REGISTRATIONS_COLLECTION)
+        .doc(registrationId)
+        .set(registrationPatch, {merge: true});
+
+      return Promise.all([jobUpdate, registrationUpdate]);
     }));
   }));
 }
