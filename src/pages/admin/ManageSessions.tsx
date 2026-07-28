@@ -1,6 +1,6 @@
 'use client'
 
-import { useMemo, useRef, useState, type ChangeEvent, type FormEvent } from 'react'
+import { useMemo, useRef, useState, type ChangeEvent, type FormEvent, type ReactNode } from 'react'
 import {
   Box,
   Flex,
@@ -260,6 +260,37 @@ const getWhatsAppConfirmationState = (registration: SessionRegistration) => {
   }
 
   return null
+}
+
+function RegistrationDetail({
+  label,
+  value,
+  icon,
+}: {
+  label: string
+  value: string
+  icon: ReactNode
+}) {
+  return (
+    <Box
+      minW={0}
+      p={3}
+      bg="blackAlpha.200"
+      border="1px solid"
+      borderColor="whiteAlpha.100"
+      borderRadius="lg"
+    >
+      <HStack gap={2} color="whiteAlpha.500" fontSize="xs" mb={1} minW={0}>
+        <Box flexShrink={0}>{icon}</Box>
+        <Text textTransform="uppercase" letterSpacing="0.08em" fontWeight="semibold">
+          {label}
+        </Text>
+      </HStack>
+      <Text color="whiteAlpha.800" fontSize="sm" fontWeight="medium" overflow="hidden" textOverflow="ellipsis" whiteSpace="nowrap">
+        {value}
+      </Text>
+    </Box>
+  )
 }
 
 const toDate = (value: unknown): Date | null => {
@@ -1403,55 +1434,41 @@ function RegistrationRow({
     : registration.confirmationWhatsAppFailedAt
       ? 'Retry WhatsApp'
       : 'Send WhatsApp'
+  const paymentAmountText = registration.paymentAmount
+    ? `${registration.paymentCurrency || 'ZMW'} ${registration.paymentAmount.toFixed(2)}`
+    : 'No amount'
+  const whatsappLabel = registration.whatsappPhone || 'No WhatsApp number'
 
   return (
     <Box p={{ base: 4, md: 5 }} bg="whiteAlpha.50" border="1px solid" borderColor="whiteAlpha.100" borderRadius="xl">
-      <Flex
-        gap={{ base: 4, lg: 6 }}
-        justify="space-between"
-        align={{ base: 'stretch', xl: 'flex-start' }}
-        direction={{ base: 'column', xl: 'row' }}
-      >
-        <HStack gap={3} minW={{ base: 0, sm: '240px' }} flex="1" align="flex-start">
-          {registration.photoURL ? (
-            <Image src={registration.photoURL} alt={registration.displayName} boxSize="40px" borderRadius="full" objectFit="cover" />
-          ) : (
-            <Flex boxSize="40px" borderRadius="full" bg="brand.500/20" color="brand.200" align="center" justify="center" flexShrink={0}>
-              <Users size={18} />
-            </Flex>
-          )}
-          <Box minW={0} maxW="full">
-            <Text color="white" fontWeight="semibold" overflow="hidden" textOverflow="ellipsis" whiteSpace="nowrap">{registration.displayName}</Text>
-            <HStack gap={2} color="whiteAlpha.600" fontSize="sm" minW={0}>
-              <Mail size={14} style={{ flexShrink: 0 }} />
-              <Text overflow="hidden" textOverflow="ellipsis" whiteSpace="nowrap">{registration.email || registration.userId}</Text>
-            </HStack>
-            <Text color="whiteAlpha.400" fontSize="xs" mt={1} overflow="hidden" textOverflow="ellipsis" whiteSpace="nowrap">
-              Requested {formatDateTime(registration.requestedAt)}
-            </Text>
-            {registration.whatsappPhone && (
-              <HStack gap={2} color="whiteAlpha.500" fontSize="xs" mt={1} minW={0}>
-                <MessageCircle size={13} style={{ flexShrink: 0 }} />
-                <Text overflow="hidden" textOverflow="ellipsis" whiteSpace="nowrap">{registration.whatsappPhone}</Text>
-              </HStack>
+      <VStack align="stretch" gap={4}>
+        <Flex gap={4} justify="space-between" align={{ base: 'stretch', lg: 'flex-start' }} direction={{ base: 'column', lg: 'row' }}>
+          <HStack gap={3} minW={0} flex="1" align="center">
+            {registration.photoURL ? (
+              <Image src={registration.photoURL} alt={registration.displayName} boxSize={{ base: '44px', md: '52px' }} borderRadius="full" objectFit="cover" flexShrink={0} />
+            ) : (
+              <Flex boxSize={{ base: '44px', md: '52px' }} borderRadius="full" bg="brand.500/20" color="brand.200" align="center" justify="center" flexShrink={0}>
+                <Users size={20} />
+              </Flex>
             )}
-          </Box>
-        </HStack>
+            <Box minW={0} flex="1">
+              <Text color="white" fontWeight="bold" fontSize={{ base: 'md', md: 'lg' }} overflow="hidden" textOverflow="ellipsis" whiteSpace="nowrap">
+                {registration.displayName}
+              </Text>
+              <HStack gap={2} color="whiteAlpha.600" fontSize="sm" minW={0}>
+                <Mail size={14} style={{ flexShrink: 0 }} />
+                <Text overflow="hidden" textOverflow="ellipsis" whiteSpace="nowrap">{registration.email || registration.userId}</Text>
+              </HStack>
+            </Box>
+          </HStack>
 
-        <VStack
-          align={{ base: 'stretch', xl: 'flex-end' }}
-          gap={3}
-          w={{ base: 'full', xl: 'auto' }}
-          maxW={{ xl: '560px' }}
-          flexShrink={0}
-        >
-          <Flex gap={3} flexWrap="wrap" justify={{ base: 'flex-start', xl: 'flex-end' }} w="full">
+          <Flex gap={2.5} flexWrap="wrap" justify={{ base: 'flex-start', lg: 'flex-end' }} align="center">
             <Badge bg="whiteAlpha.100" color="whiteAlpha.800" borderRadius="full" px={3} py={1}>
               {paymentStatusLabels[registration.paymentStatus]}
             </Badge>
             {registration.paymentAmount && (
               <Badge bg="brand.500/20" color="brand.200" borderRadius="full" px={3} py={1}>
-                {registration.paymentCurrency || 'ZMW'} {registration.paymentAmount.toFixed(2)}
+                {paymentAmountText}
               </Badge>
             )}
             {whatsappState && (
@@ -1460,78 +1477,103 @@ function RegistrationRow({
               </Badge>
             )}
           </Flex>
-          {showWhatsAppIssue && (
-            <Box
-              w="full"
-              maxW={{ lg: '460px' }}
-              p={3}
-              bg={isWhatsAppError ? 'red.500/10' : 'orange.500/10'}
-              border="1px solid"
-              borderColor={isWhatsAppError ? 'red.500/25' : 'orange.500/25'}
-              borderRadius="lg"
-            >
-              <Text
-                color={isWhatsAppError ? 'red.100' : 'orange.100'}
-                fontSize="xs"
-                lineHeight="1.45"
-                overflowWrap="anywhere"
-              >
-                {whatsappIssue}
-              </Text>
-            </Box>
-          )}
-          <Flex
-            gap={3}
-            flexWrap="wrap"
-            justify={{ base: 'stretch', sm: 'flex-start', xl: 'flex-end' }}
-            w="full"
+        </Flex>
+
+        <SimpleGrid columns={{ base: 1, sm: 2, xl: 4 }} gap={3}>
+          <RegistrationDetail
+            label="Requested"
+            value={formatDateTime(registration.requestedAt)}
+            icon={<CalendarDays size={14} />}
+          />
+          <RegistrationDetail
+            label="Signup State"
+            value={registrationStatusLabels[registration.status]}
+            icon={<Users size={14} />}
+          />
+          <RegistrationDetail
+            label="Payment"
+            value={`${paymentStatusLabels[registration.paymentStatus]} · ${paymentAmountText}`}
+            icon={<CreditCard size={14} />}
+          />
+          <RegistrationDetail
+            label="WhatsApp"
+            value={whatsappLabel}
+            icon={<MessageCircle size={14} />}
+          />
+        </SimpleGrid>
+
+        {showWhatsAppIssue && (
+          <Box
+            p={3}
+            bg={isWhatsAppError ? 'red.500/10' : 'orange.500/10'}
+            border="1px solid"
+            borderColor={isWhatsAppError ? 'red.500/25' : 'orange.500/25'}
+            borderRadius="lg"
           >
-            {canRetryWhatsApp && (
-              <Button
-                {...registrationActionButtonProps}
-                bg="whiteAlpha.50"
-                color="whiteAlpha.800"
-                _hover={{ bg: 'whiteAlpha.100', color: 'white' }}
-                onClick={() => onRetryWhatsApp(registration)}
-                disabled={isRetryingWhatsApp}
-              >
-                {isRetryingWhatsApp ? <Spinner size="sm" /> : <Send size={14} />}
-                {whatsappActionLabel}
-              </Button>
-            )}
-            {canMarkPaid && (
-              <Button {...registrationActionButtonProps} bg="blue.500/15" color="blue.200" _hover={{ bg: 'blue.500/25' }} onClick={() => onMarkPaid(registration)}>
-                <CreditCard size={14} />
-                Mark Paid
-              </Button>
-            )}
-            {canMarkPaid && (
-              <Button {...registrationActionButtonProps} bg="green.500/15" color="green.200" _hover={{ bg: 'green.500/25' }} onClick={() => onConfirm(registration, true)}>
-                <CheckCircle2 size={14} />
-                Paid + Confirm
-              </Button>
-            )}
-            {canConfirm && !needsPayment && (
-              <Button {...registrationActionButtonProps} bg="green.500/15" color="green.200" _hover={{ bg: 'green.500/25' }} onClick={() => onConfirm(registration)}>
-                <CheckCircle2 size={14} />
-                Confirm
-              </Button>
-            )}
-            {canMoveToWaitlist && (
-              <Button {...registrationActionButtonProps} bg="orange.500/15" color="orange.200" _hover={{ bg: 'orange.500/25' }} onClick={() => onWaitlist(registration)}>
-                <Users size={14} />
-                Waitlist
-              </Button>
-            )}
-            {canDecline && (
-              <Button {...registrationActionButtonProps} bg="red.500/15" color="red.200" _hover={{ bg: 'red.500/25' }} onClick={() => onDecline(registration)}>
-                <UserRoundMinus size={14} />
-                Decline
-              </Button>
-            )}
-          </Flex>
-        </VStack>
-      </Flex>
+            <Text
+              color={isWhatsAppError ? 'red.100' : 'orange.100'}
+              fontSize="xs"
+              lineHeight="1.45"
+              overflowWrap="anywhere"
+            >
+              {whatsappIssue}
+            </Text>
+          </Box>
+        )}
+
+        <Flex
+          pt={4}
+          borderTop="1px solid"
+          borderColor="whiteAlpha.100"
+          gap={3}
+          flexWrap="wrap"
+          justify={{ base: 'stretch', sm: 'flex-start', lg: 'flex-end' }}
+        >
+          {canRetryWhatsApp && (
+            <Button
+              {...registrationActionButtonProps}
+              bg="whiteAlpha.50"
+              color="whiteAlpha.800"
+              _hover={{ bg: 'whiteAlpha.100', color: 'white' }}
+              onClick={() => onRetryWhatsApp(registration)}
+              disabled={isRetryingWhatsApp}
+            >
+              {isRetryingWhatsApp ? <Spinner size="sm" /> : <Send size={14} />}
+              {whatsappActionLabel}
+            </Button>
+          )}
+          {canMarkPaid && (
+            <Button {...registrationActionButtonProps} bg="blue.500/15" color="blue.200" _hover={{ bg: 'blue.500/25' }} onClick={() => onMarkPaid(registration)}>
+              <CreditCard size={14} />
+              Mark Paid
+            </Button>
+          )}
+          {canMarkPaid && (
+            <Button {...registrationActionButtonProps} bg="green.500/15" color="green.200" _hover={{ bg: 'green.500/25' }} onClick={() => onConfirm(registration, true)}>
+              <CheckCircle2 size={14} />
+              Paid + Confirm
+            </Button>
+          )}
+          {canConfirm && !needsPayment && (
+            <Button {...registrationActionButtonProps} bg="green.500/15" color="green.200" _hover={{ bg: 'green.500/25' }} onClick={() => onConfirm(registration)}>
+              <CheckCircle2 size={14} />
+              Confirm
+            </Button>
+          )}
+          {canMoveToWaitlist && (
+            <Button {...registrationActionButtonProps} bg="orange.500/15" color="orange.200" _hover={{ bg: 'orange.500/25' }} onClick={() => onWaitlist(registration)}>
+              <Users size={14} />
+              Waitlist
+            </Button>
+          )}
+          {canDecline && (
+            <Button {...registrationActionButtonProps} bg="red.500/15" color="red.200" _hover={{ bg: 'red.500/25' }} onClick={() => onDecline(registration)}>
+              <UserRoundMinus size={14} />
+              Decline
+            </Button>
+          )}
+        </Flex>
+      </VStack>
     </Box>
   )
 }

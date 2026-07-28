@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { motion, AnimatePresence } from 'framer-motion';
 import { clsx } from 'clsx';
@@ -13,6 +13,7 @@ import { ReactionBar } from './ReactionBar';
 const cn = (...inputs: (string | undefined | null | false)[]) => twMerge(clsx(inputs));
 const getMemberHref = (userId: string) => `/members/${userId}`;
 const isVideoMedia = (mediaType: CommunityPostType['mediaType']): boolean => mediaType === 'video';
+const mobileMediaFrameClass = 'aspect-[9/16] sm:aspect-[9/14] md:aspect-[4/5]';
 
 interface CommunityPostProps {
   post: CommunityPostType;
@@ -583,12 +584,16 @@ export const CommunityPost: React.FC<CommunityPostProps> = ({
   const [imageLoaded, setImageLoaded] = useState(false);
   const [activeMediaIndex, setActiveMediaIndex] = useState(0);
   const [lightboxIndex, setLightboxIndex] = useState<number | null>(null);
+  const swipeStartRef = useRef<{ x: number; y: number } | null>(null);
+  const swipeDeltaRef = useRef({ x: 0, y: 0 });
 
   const isOwner = post.userId === currentUserId;
   const mediaUrls = post.mediaUrls || [];
   const hasMedia = mediaUrls.length > 0;
   const displayCommentsCount = Math.max(post.commentsCount || 0, comments.length);
-  const activeMediaUrl = mediaUrls[activeMediaIndex] || mediaUrls[0];
+  const safeActiveMediaIndex = mediaUrls.length === 0
+    ? 0
+    : Math.min(activeMediaIndex, mediaUrls.length - 1);
 
   const navigateMedia = (direction: 'previous' | 'next') => {
     setActiveMediaIndex((currentIndex) => {
@@ -597,6 +602,32 @@ export const CommunityPost: React.FC<CommunityPostProps> = ({
         ? (currentIndex - 1 + mediaUrls.length) % mediaUrls.length
         : (currentIndex + 1) % mediaUrls.length;
     });
+  };
+
+  const handleMobileCarouselPointerDown = (event: React.PointerEvent<HTMLDivElement>) => {
+    if (mediaUrls.length < 2) return;
+    swipeStartRef.current = { x: event.clientX, y: event.clientY };
+    swipeDeltaRef.current = { x: 0, y: 0 };
+  };
+
+  const handleMobileCarouselPointerMove = (event: React.PointerEvent<HTMLDivElement>) => {
+    if (!swipeStartRef.current) return;
+    swipeDeltaRef.current = {
+      x: event.clientX - swipeStartRef.current.x,
+      y: event.clientY - swipeStartRef.current.y,
+    };
+  };
+
+  const finishMobileCarouselPointer = () => {
+    if (!swipeStartRef.current) return false;
+    const { x, y } = swipeDeltaRef.current;
+    const isHorizontalSwipe = Math.abs(x) > 42 && Math.abs(x) > Math.abs(y) * 1.25;
+    swipeStartRef.current = null;
+    swipeDeltaRef.current = { x: 0, y: 0 };
+
+    if (!isHorizontalSwipe) return false;
+    navigateMedia(x < 0 ? 'next' : 'previous');
+    return true;
   };
 
   const handleCommentsToggle = () => {
@@ -671,9 +702,9 @@ export const CommunityPost: React.FC<CommunityPostProps> = ({
 
       {/* Media */}
       {hasMedia && (
-        <div className="relative">
+        <div className="relative z-0 overflow-hidden bg-black">
           {mediaUrls.length === 1 ? (
-            <div className="relative aspect-video">
+            <div className={cn('relative', mobileMediaFrameClass)}>
               {!imageLoaded && (
                 <div className="absolute inset-0 bg-bzr-gray-800 animate-pulse" />
               )}
@@ -716,33 +747,69 @@ export const CommunityPost: React.FC<CommunityPostProps> = ({
           ) : (
             <>
               <div className="block md:hidden">
-                <div className="relative aspect-[4/5] overflow-hidden bg-black">
-                  {isVideoMedia(post.mediaType) ? (
-                    <MediaPreview
-                      url={activeMediaUrl}
-                      mediaType={post.mediaType}
-                      className="object-contain"
-                      controls
-                    />
-                  ) : (
-                    <button
-                      type="button"
-                      aria-label={`Open image ${activeMediaIndex + 1} fullscreen`}
-                      onClick={() => setLightboxIndex(activeMediaIndex)}
-                      className="block h-full w-full cursor-zoom-in"
-                    >
-                      <MediaPreview
-                        url={activeMediaUrl}
-                        mediaType={post.mediaType}
-                        className="object-contain"
-                      />
-                    </button>
+                <div
+                  role="button"
+                  tabIndex={0}
+                  aria-label={`Open image ${safeActiveMediaIndex + 1} of ${mediaUrls.length} fullscreen`}
+                  className={cn(
+                    'relative cursor-zoom-in overflow-hidden bg-black select-none [touch-action:pan-y]',
+                    mobileMediaFrameClass
                   )}
+                  onPointerDown={handleMobileCarouselPointerDown}
+                  onPointerMove={handleMobileCarouselPointerMove}
+                  onPointerUp={(event) => {
+                    if (event.target instanceof HTMLElement && event.target.closest('button')) {
+                      swipeStartRef.current = null;
+                      swipeDeltaRef.current = { x: 0, y: 0 };
+                      return;
+                    }
+                    const didSwipe = finishMobileCarouselPointer();
+                    if (!didSwipe && !isVideoMedia(post.mediaType)) {
+                      setLightboxIndex(safeActiveMediaIndex);
+                    }
+                  }}
+                  onPointerCancel={() => {
+                    swipeStartRef.current = null;
+                    swipeDeltaRef.current = { x: 0, y: 0 };
+                  }}
+                  onKeyDown={(event) => {
+                    if (event.key === 'Enter' || event.key === ' ') {
+                      event.preventDefault();
+                      setLightboxIndex(safeActiveMediaIndex);
+                    }
+                    if (event.key === 'ArrowLeft') {
+                      event.preventDefault();
+                      navigateMedia('previous');
+                    }
+                    if (event.key === 'ArrowRight') {
+                      event.preventDefault();
+                      navigateMedia('next');
+                    }
+                  }}
+                >
+                  <div
+                    className="flex h-full transition-transform duration-300 ease-out"
+                    style={{ transform: `translateX(-${safeActiveMediaIndex * 100}%)` }}
+                  >
+                    {mediaUrls.map((url, index) => (
+                      <div key={`${url}-${index}`} className="h-full w-full flex-none bg-black">
+                        <MediaPreview
+                          url={url}
+                          mediaType={post.mediaType}
+                          className="object-contain"
+                          controls={isVideoMedia(post.mediaType) && index === safeActiveMediaIndex}
+                        />
+                      </div>
+                    ))}
+                  </div>
 
                   <button
                     type="button"
                     aria-label="Open media fullscreen"
-                    onClick={() => setLightboxIndex(activeMediaIndex)}
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      setLightboxIndex(safeActiveMediaIndex);
+                    }}
                     className="absolute right-3 top-3 z-10 flex h-9 w-9 items-center justify-center rounded-full border border-white/15 bg-black/55 text-white backdrop-blur-md transition hover:bg-black/75"
                   >
                     <Expand size={17} strokeWidth={2.3} />
@@ -758,8 +825,8 @@ export const CommunityPost: React.FC<CommunityPostProps> = ({
                     onClick={() => navigateMedia('next')}
                     className="right-3"
                   />
-                  <MediaCountBadge currentIndex={activeMediaIndex} total={mediaUrls.length} />
-                  <MediaDots currentIndex={activeMediaIndex} total={mediaUrls.length} />
+                  <MediaCountBadge currentIndex={safeActiveMediaIndex} total={mediaUrls.length} />
+                  <MediaDots currentIndex={safeActiveMediaIndex} total={mediaUrls.length} />
                 </div>
               </div>
 
@@ -803,95 +870,103 @@ export const CommunityPost: React.FC<CommunityPostProps> = ({
         )}
       </AnimatePresence>
 
-      {/* Reactions */}
-      <div style={{ padding: '12px 20px', borderTop: '1px solid #262626' }}>
-        <ReactionBar
-          reactions={post.reactions}
-          currentUserId={currentUserId}
-          onReaction={onReaction}
-        />
-      </div>
+      <div
+        style={{
+          position: 'relative',
+          zIndex: 2,
+          backgroundColor: 'rgb(17, 17, 17)',
+          isolation: 'isolate',
+        }}
+      >
+        {/* Reactions */}
+        <div style={{ padding: '12px 20px', borderTop: '1px solid #262626', minHeight: '58px' }}>
+          <ReactionBar
+            reactions={post.reactions}
+            currentUserId={currentUserId}
+            onReaction={onReaction}
+          />
+        </div>
 
-      {/* Actions bar */}
-      <div style={{
-        display: 'flex',
-        alignItems: 'center',
-        gap: '24px',
-        padding: '12px 20px',
-        borderTop: '1px solid #262626',
-      }}>
-        {/* Comment toggle */}
-        <button
-          onClick={handleCommentsToggle}
-          style={{
-            display: 'flex',
-            alignItems: 'center',
-            gap: '8px',
-            color: showComments ? '#fff' : '#9CA3AF',
-            background: 'none',
-            border: 'none',
-            cursor: 'pointer',
-            padding: '8px 12px',
-            borderRadius: '8px',
-            transition: 'all 0.2s',
-          }}
-          onMouseEnter={(e) => e.currentTarget.style.backgroundColor = '#1f2937'}
-          onMouseLeave={(e) => e.currentTarget.style.backgroundColor = 'transparent'}
-        >
-          <svg style={{ width: '20px', height: '20px' }} fill="none" viewBox="0 0 24 24" stroke="currentColor">
-            <path
-              strokeLinecap="round"
-              strokeLinejoin="round"
-              strokeWidth={2}
-              d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z"
-            />
-          </svg>
-          <span style={{ fontSize: '14px', fontWeight: 500 }}>
-            {displayCommentsCount} {displayCommentsCount === 1 ? 'Comment' : 'Comments'}
-          </span>
-        </button>
-
-        {/* Share button */}
-        <button
-          onClick={onShare}
-          style={{
-            display: 'flex',
-            alignItems: 'center',
-            gap: '8px',
-            color: '#9CA3AF',
-            background: 'none',
-            border: 'none',
-            cursor: 'pointer',
-            padding: '8px 12px',
-            borderRadius: '8px',
-            transition: 'all 0.2s',
-          }}
-          onMouseEnter={(e) => e.currentTarget.style.backgroundColor = '#1f2937'}
-          onMouseLeave={(e) => e.currentTarget.style.backgroundColor = 'transparent'}
-        >
-          <svg style={{ width: '20px', height: '20px' }} fill="none" viewBox="0 0 24 24" stroke="currentColor">
-            <path
-              strokeLinecap="round"
-              strokeLinejoin="round"
-              strokeWidth={2}
-              d="M8.684 13.342C8.886 12.938 9 12.482 9 12c0-.482-.114-.938-.316-1.342m0 2.684a3 3 0 110-2.684m0 2.684l6.632 3.316m-6.632-6l6.632-3.316m0 0a3 3 0 105.367-2.684 3 3 0 00-5.367 2.684zm0 9.316a3 3 0 105.368 2.684 3 3 0 00-5.368-2.684z"
-            />
-          </svg>
-          <span style={{ fontSize: '14px', fontWeight: 500 }}>Share</span>
-        </button>
-      </div>
-
-      {/* Comments section */}
-      <AnimatePresence>
-        {showComments && (
-          <motion.div
-            initial={{ height: 0, opacity: 0 }}
-            animate={{ height: 'auto', opacity: 1 }}
-            exit={{ height: 0, opacity: 0 }}
-            transition={{ duration: 0.2 }}
-            style={{ borderTop: '1px solid #262626', overflow: 'hidden' }}
+        {/* Actions bar */}
+        <div style={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: '24px',
+          padding: '12px 20px',
+          borderTop: '1px solid #262626',
+        }}>
+          {/* Comment toggle */}
+          <button
+            onClick={handleCommentsToggle}
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: '8px',
+              color: showComments ? '#fff' : '#9CA3AF',
+              background: 'none',
+              border: 'none',
+              cursor: 'pointer',
+              padding: '8px 12px',
+              borderRadius: '8px',
+              transition: 'all 0.2s',
+            }}
+            onMouseEnter={(e) => e.currentTarget.style.backgroundColor = '#1f2937'}
+            onMouseLeave={(e) => e.currentTarget.style.backgroundColor = 'transparent'}
           >
-            <div style={{ padding: '18px clamp(16px, 4vw, 24px) 20px' }}>
+            <svg style={{ width: '20px', height: '20px' }} fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                strokeWidth={2}
+                d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z"
+              />
+            </svg>
+            <span style={{ fontSize: '14px', fontWeight: 500 }}>
+              {displayCommentsCount} {displayCommentsCount === 1 ? 'Comment' : 'Comments'}
+            </span>
+          </button>
+
+          {/* Share button */}
+          <button
+            onClick={onShare}
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: '8px',
+              color: '#9CA3AF',
+              background: 'none',
+              border: 'none',
+              cursor: 'pointer',
+              padding: '8px 12px',
+              borderRadius: '8px',
+              transition: 'all 0.2s',
+            }}
+            onMouseEnter={(e) => e.currentTarget.style.backgroundColor = '#1f2937'}
+            onMouseLeave={(e) => e.currentTarget.style.backgroundColor = 'transparent'}
+          >
+            <svg style={{ width: '20px', height: '20px' }} fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                strokeWidth={2}
+                d="M8.684 13.342C8.886 12.938 9 12.482 9 12c0-.482-.114-.938-.316-1.342m0 2.684a3 3 0 110-2.684m0 2.684l6.632 3.316m-6.632-6l6.632-3.316m0 0a3 3 0 105.367-2.684 3 3 0 00-5.367 2.684zm0 9.316a3 3 0 105.368 2.684 3 3 0 00-5.368-2.684z"
+              />
+            </svg>
+            <span style={{ fontSize: '14px', fontWeight: 500 }}>Share</span>
+          </button>
+        </div>
+
+        {/* Comments section */}
+        <AnimatePresence>
+          {showComments && (
+            <motion.div
+              initial={{ height: 0, opacity: 0 }}
+              animate={{ height: 'auto', opacity: 1 }}
+              exit={{ height: 0, opacity: 0 }}
+              transition={{ duration: 0.2 }}
+              style={{ borderTop: '1px solid #262626', overflow: 'hidden' }}
+            >
+              <div style={{ padding: '18px clamp(16px, 4vw, 24px) 20px' }}>
               {/* Comment input first */}
               {onComment ? (
                 <div style={{ marginBottom: comments.length > 0 || commentsLoading ? '18px' : 0 }}>
@@ -1011,10 +1086,11 @@ export const CommunityPost: React.FC<CommunityPostProps> = ({
                   No comments yet. Be the first to comment!
                 </p>
               )}
-            </div>
-          </motion.div>
-        )}
-      </AnimatePresence>
+              </div>
+            </motion.div>
+          )}
+        </AnimatePresence>
+      </div>
     </motion.article>
   );
 };

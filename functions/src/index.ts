@@ -39,6 +39,8 @@ const MESSAGE_JOBS_COLLECTION = "messageJobs";
 const WHATSAPP_WEBHOOK_EVENTS_COLLECTION = "whatsappWebhookEvents";
 const MAIL_COLLECTION = "mail";
 
+const LENCO_API_V1_BASE = "https://api.lenco.co/access/v1";
+
 type MobileMoneyOperator = "mtn" | "airtel" | "zamtel";
 type PaymentStatus = "pending" | "processing" | "completed" | "failed";
 
@@ -67,6 +69,22 @@ interface AdminPaymentsDashboardData {
   limit?: number;
 }
 
+interface RevenuePeriodSummary {
+  periodKey: string;
+  label: string;
+  currency: string;
+  onlineCollected: number;
+  externalCollected: number;
+  grossCollected: number;
+  pending: number;
+  failed: number;
+  returned: number;
+  withdrawn: number;
+  netCollected: number;
+  transactionCount: number;
+  registrationCount: number;
+}
+
 interface AdminCollectSessionPaymentData {
   sessionId?: string;
   registrationId?: string;
@@ -77,6 +95,24 @@ interface AdminCollectSessionPaymentData {
   displayName?: string;
   email?: string;
   note?: string;
+  reference?: string;
+}
+
+interface AdminCreatePaymentWithdrawalData {
+  recipientUserId?: string;
+  phone?: string;
+  operator?: string;
+  amount?: number | string;
+  currency?: string;
+  narration?: string;
+  reason?: string;
+  note?: string;
+  reference?: string;
+}
+
+interface AdminSyncPaymentWithdrawalData {
+  withdrawalId?: string;
+  transferId?: string;
   reference?: string;
 }
 
@@ -228,9 +264,13 @@ function mapCollectionStatus(status: unknown): PaymentStatus {
 }
 
 function getFailureReason(data: Record<string, unknown>): string | null {
-  const reasonForFailure = normalizeOptionalString(data.reasonForFailure);
-  const failureReason = normalizeOptionalString(data.failureReason);
-  return reasonForFailure ?? failureReason;
+  return normalizeOptionalString(data.reasonForFailure) ??
+    normalizeOptionalString(data.failureReason) ??
+    normalizeOptionalString(data.reason) ??
+    normalizeOptionalString(data.statusMessage) ??
+    normalizeOptionalString(data.responseMessage) ??
+    normalizeOptionalString(data.error) ??
+    normalizeOptionalString(data.message);
 }
 
 function getMessageForStatus(status: PaymentStatus): string {
@@ -247,6 +287,30 @@ function getMessageForStatus(status: PaymentStatus): string {
   }
 
   return "Charge initiated. Approve the prompt on your phone.";
+}
+
+function getTransferMessageForStatus(status: PaymentStatus): string {
+  if (status === "completed") {
+    return "Withdrawal sent successfully.";
+  }
+
+  if (status === "failed") {
+    return "Withdrawal failed.";
+  }
+
+  if (status === "processing") {
+    return "Withdrawal is processing in Lenco.";
+  }
+
+  return "Withdrawal initiated. Check Lenco status before marking it settled.";
+}
+
+function getTransferMessage(status: PaymentStatus, failureReason: string | null): string {
+  if (status === "failed" && failureReason) {
+    return `Withdrawal failed: ${failureReason}`;
+  }
+
+  return getTransferMessageForStatus(status);
 }
 
 function getErrorMessage(error: unknown): string {
@@ -277,6 +341,24 @@ function isRecoverablePaymentProviderError(error: unknown): boolean {
     "resource-exhausted",
     "unavailable",
   ].includes(error.code);
+}
+
+function getLencoUnauthorizedMessage(path: string): string {
+  if (path === "/accounts") {
+    return [
+      "Lenco rejected the source account lookup.",
+      "Set LENCO_DEBIT_ACCOUNT_ID for the Firebase function, or use a Lenco API key that can read accounts.",
+    ].join(" ");
+  }
+
+  if (path.startsWith("/transfers")) {
+    return [
+      "Lenco rejected the withdrawal request.",
+      "Check that the Lenco API key has transfer permissions and can debit the configured account.",
+    ].join(" ");
+  }
+
+  return "Lenco rejected the request. Check the Lenco API key and account permissions.";
 }
 
 function isRecentFirestoreTimestamp(value: unknown, maxAgeMs: number): boolean {
@@ -318,6 +400,11 @@ function requirePositiveAmount(value: unknown, message: string): number {
 
 function normalizeCurrency(value: unknown): string {
   return (normalizeOptionalString(value) ?? DEFAULT_CURRENCY).toUpperCase();
+}
+
+function getConfiguredLencoAccountId(): string | null {
+  return normalizeOptionalString(process.env.LENCO_DEBIT_ACCOUNT_ID) ??
+    normalizeOptionalString(process.env.LENCO_ACCOUNT_ID);
 }
 
 function normalizeReturnStatus(value: unknown): "pending" | "completed" | "cancelled" {
@@ -378,6 +465,177 @@ function getLocalPaymentKey(record: Record<string, unknown>): string | null {
     normalizeOptionalString(record.transactionId) ??
     normalizeOptionalString(record.paymentTransactionId) ??
     normalizeOptionalString(record.id);
+}
+
+function getRecordDate(
+  record: Record<string, unknown>,
+  fields: string[]
+): Date | null {
+  for (const field of fields) {
+    const value = record[field];
+
+    if (value instanceof admin.firestore.Timestamp) {
+      return value.toDate();
+    }
+
+    if (value instanceof Date && Number.isFinite(value.getTime())) {
+      return value;
+    }
+
+    if (typeof value === "string" || typeof value === "number") {
+      const date = new Date(value);
+      if (Number.isFinite(date.getTime())) return date;
+    }
+  }
+
+  return null;
+}
+
+function getRevenuePeriodKey(date: Date): string {
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Africa/Lusaka",
+    year: "numeric",
+    month: "2-digit",
+  }).formatToParts(date);
+  const year = parts.find((part) => part.type === "year")?.value ??
+    String(date.getUTCFullYear());
+  const month = parts.find((part) => part.type === "month")?.value ??
+    String(date.getUTCMonth() + 1).padStart(2, "0");
+
+  return `${year}-${month}`;
+}
+
+function getRevenuePeriodLabel(date: Date): string {
+  return new Intl.DateTimeFormat("en-ZM", {
+    timeZone: "Africa/Lusaka",
+    month: "short",
+    year: "numeric",
+  }).format(date);
+}
+
+function buildRevenueTimeline(input: {
+  localTransactions: Record<string, unknown>[];
+  registrations: Record<string, unknown>[];
+  returns: Record<string, unknown>[];
+  withdrawals: Record<string, unknown>[];
+}): RevenuePeriodSummary[] {
+  const periods = new Map<string, RevenuePeriodSummary>();
+
+  const getPeriod = (date: Date, currency: string) => {
+    const periodKey = getRevenuePeriodKey(date);
+    const existingPeriod = periods.get(periodKey);
+    if (existingPeriod) return existingPeriod;
+
+    const period: RevenuePeriodSummary = {
+      periodKey,
+      label: getRevenuePeriodLabel(date),
+      currency,
+      onlineCollected: 0,
+      externalCollected: 0,
+      grossCollected: 0,
+      pending: 0,
+      failed: 0,
+      returned: 0,
+      withdrawn: 0,
+      netCollected: 0,
+      transactionCount: 0,
+      registrationCount: 0,
+    };
+
+    periods.set(periodKey, period);
+    return period;
+  };
+
+  input.localTransactions.forEach((transaction) => {
+    const date = getRecordDate(transaction, [
+      "completedAt",
+      "createdAt",
+      "updatedAt",
+    ]);
+    if (!date) return;
+
+    const amount = getFiniteAmount(transaction.amount) ?? 0;
+    const currency = normalizeCurrency(transaction.currency);
+    const period = getPeriod(date, currency);
+    const status = getFallbackPaymentStatus(transaction.status);
+
+    if (status === "completed") {
+      period.onlineCollected += amount;
+      period.transactionCount += 1;
+    } else if (status === "pending" || status === "processing") {
+      period.pending += amount;
+    } else if (status === "failed") {
+      period.failed += amount;
+    }
+  });
+
+  input.registrations.forEach((registration) => {
+    if (registration.paymentStatus !== "paid_external") return;
+
+    const date = getRecordDate(registration, [
+      "paidAt",
+      "confirmedAt",
+      "updatedAt",
+      "createdAt",
+    ]);
+    if (!date) return;
+
+    const amount = getFiniteAmount(registration.paymentAmount) ?? 0;
+    const currency = normalizeCurrency(registration.paymentCurrency);
+    const period = getPeriod(date, currency);
+    period.externalCollected += amount;
+    period.registrationCount += 1;
+  });
+
+  input.returns.forEach((returnRecord) => {
+    if (returnRecord.status !== "completed") return;
+
+    const date = getRecordDate(returnRecord, ["createdAt", "updatedAt"]);
+    if (!date) return;
+
+    const amount = getFiniteAmount(returnRecord.amount) ?? 0;
+    const currency = normalizeCurrency(returnRecord.currency);
+    const period = getPeriod(date, currency);
+    period.returned += amount;
+  });
+
+  input.withdrawals.forEach((withdrawal) => {
+    if (withdrawal.status !== "completed") return;
+
+    const date = getRecordDate(withdrawal, [
+      "completedAt",
+      "createdAt",
+      "updatedAt",
+    ]);
+    if (!date) return;
+
+    const amount = getFiniteAmount(withdrawal.amount) ?? 0;
+    const currency = normalizeCurrency(withdrawal.currency);
+    const period = getPeriod(date, currency);
+    period.withdrawn += amount;
+  });
+
+  return Array.from(periods.values())
+    .map((period) => {
+      const grossCollected = roundCurrency(
+        period.onlineCollected + period.externalCollected
+      );
+
+      return {
+        ...period,
+        onlineCollected: roundCurrency(period.onlineCollected),
+        externalCollected: roundCurrency(period.externalCollected),
+        grossCollected,
+        pending: roundCurrency(period.pending),
+        failed: roundCurrency(period.failed),
+        returned: roundCurrency(period.returned),
+        withdrawn: roundCurrency(period.withdrawn),
+        netCollected: roundCurrency(
+          grossCollected - period.returned - period.withdrawn
+        ),
+      };
+    })
+    .sort((a, b) => b.periodKey.localeCompare(a.periodKey));
 }
 
 function getAdminNotificationEmails(): string[] {
@@ -1047,7 +1305,8 @@ async function lencoRequest(
   path: string,
   init: RequestInit,
   secret: string,
-  timeoutMs = LENCO_REQUEST_TIMEOUT_MS
+  timeoutMs = LENCO_REQUEST_TIMEOUT_MS,
+  baseUrl = LENCO_API_BASE
 ): Promise<Record<string, unknown>> {
   if (!secret) {
     throw new HttpsError(
@@ -1061,7 +1320,7 @@ async function lencoRequest(
   let response: Response;
 
   try {
-    response = await fetch(`${LENCO_API_BASE}${path}`, {
+    response = await fetch(`${baseUrl}${path}`, {
       ...init,
       signal: controller.signal,
       headers: {
@@ -1073,6 +1332,7 @@ async function lencoRequest(
   } catch (error) {
     if (error instanceof Error && error.name === "AbortError") {
       logger.warn("Lenco API request timed out", {
+        baseUrl,
         path,
         timeoutMs,
       });
@@ -1092,13 +1352,17 @@ async function lencoRequest(
 
   if (!response.ok) {
     logger.error("Lenco API request failed", {
+      baseUrl,
       path,
       status: response.status,
       responseData,
     });
 
-    const message = normalizeOptionalString(responseData.message) ??
+    const providerMessage = normalizeOptionalString(responseData.message) ??
       "Lenco request failed.";
+    const message = response.status === 401 ?
+      getLencoUnauthorizedMessage(path) :
+      providerMessage;
 
     const errorCode: "failed-precondition" | "unavailable" =
       response.status === 408 || response.status === 429 || response.status >= 500 ?
@@ -1109,6 +1373,46 @@ async function lencoRequest(
   }
 
   return responseData;
+}
+
+async function resolveLencoDebitAccountId(
+  secret: string,
+  currency: string
+): Promise<string> {
+  const configuredAccountId = getConfiguredLencoAccountId();
+  if (configuredAccountId) return configuredAccountId;
+
+  const responseData = await lencoRequest(
+    "/accounts",
+    {method: "GET"},
+    secret,
+    LENCO_REQUEST_TIMEOUT_MS,
+    LENCO_API_V1_BASE
+  );
+  const accounts = Array.isArray(responseData.data) ?
+    responseData.data as Record<string, unknown>[] :
+    [];
+
+  const normalizedCurrency = normalizeCurrency(currency);
+  const activeAccounts = accounts.filter((account) => {
+    const status = normalizeOptionalString(account.status)?.toLowerCase();
+    return status !== "closed" && status !== "deleted" && status !== "disabled";
+  });
+  const matchingAccount = activeAccounts.find((account) =>
+    normalizeOptionalString(account.currency)?.toUpperCase() ===
+      normalizedCurrency
+  ) ?? activeAccounts[0];
+  const accountId = normalizeOptionalString(matchingAccount?.id) ??
+    normalizeOptionalString(matchingAccount?._id);
+
+  if (!accountId) {
+    throw new HttpsError(
+      "failed-precondition",
+      "Lenco source account was not found. Set LENCO_DEBIT_ACCOUNT_ID for this Firebase function."
+    );
+  }
+
+  return accountId;
 }
 
 async function isAdminUser(uid: string): Promise<boolean> {
@@ -1587,6 +1891,53 @@ async function findSessionPaymentTransaction(input: {
   throw new HttpsError("not-found", "Payment transaction not found.");
 }
 
+async function findSessionPaymentWithdrawal(input: {
+  withdrawalId: string | null;
+  transferId: string | null;
+  reference: string | null;
+}): Promise<{
+  docRef: FirebaseFirestore.DocumentReference;
+  snapshot: FirebaseFirestore.DocumentSnapshot;
+}> {
+  const directId = input.withdrawalId ?? input.transferId ?? input.reference;
+
+  if (directId) {
+    const docRef = db
+      .collection(SESSION_PAYMENT_WITHDRAWALS_COLLECTION)
+      .doc(directId);
+    const snapshot = await docRef.get();
+
+    if (snapshot.exists) {
+      return {docRef, snapshot};
+    }
+  }
+
+  const candidates = [
+    ["withdrawalId", input.withdrawalId],
+    ["transferId", input.transferId],
+    ["reference", input.reference],
+  ] as const;
+
+  for (const [field, value] of candidates) {
+    if (!value) continue;
+
+    const querySnapshot = await db
+      .collection(SESSION_PAYMENT_WITHDRAWALS_COLLECTION)
+      .where(field, "==", value)
+      .limit(1)
+      .get();
+
+    if (!querySnapshot.empty) {
+      return {
+        docRef: querySnapshot.docs[0].ref,
+        snapshot: querySnapshot.docs[0],
+      };
+    }
+  }
+
+  throw new HttpsError("not-found", "Payment withdrawal not found.");
+}
+
 async function markRegistrationPaid(input: {
   transactionId: string;
   reference: string;
@@ -1680,7 +2031,7 @@ export const adminGetPaymentsDashboard = onCall(
 
     const data = (request.data || {}) as AdminPaymentsDashboardData;
     const sessionId = normalizeOptionalString(data.sessionId);
-    const limitCount = Math.min(Math.max(Number(data.limit) || 100, 25), 300);
+    const limitCount = Math.min(Math.max(Number(data.limit) || 500, 25), 1000);
 
     let transactionQuery: FirebaseFirestore.Query = db
       .collection(SESSION_PAYMENT_TRANSACTIONS_COLLECTION);
@@ -1825,8 +2176,21 @@ export const adminGetPaymentsDashboard = onCall(
       if (id) sessionsById.set(id, session);
     });
 
-    const sessionSummaries = sessions.map((session) => {
-      const id = normalizeOptionalString(session.id) ?? "";
+    const ledgerSessionIds = new Set<string>();
+    if (sessionId) ledgerSessionIds.add(sessionId);
+    sessionsById.forEach((_session, id) => ledgerSessionIds.add(id));
+    [
+      ...localTransactions,
+      ...registrations,
+      ...returns,
+      ...withdrawals,
+    ].forEach((record) => {
+      const id = normalizeOptionalString(record.sessionId);
+      if (id) ledgerSessionIds.add(id);
+    });
+
+    const sessionSummaries = Array.from(ledgerSessionIds).map((id) => {
+      const session = sessionsById.get(id);
       const sessionTransactions = localTransactions.filter((transaction) =>
         normalizeOptionalString(transaction.sessionId) === id
       );
@@ -1861,12 +2225,36 @@ export const adminGetPaymentsDashboard = onCall(
       const withdrawn = sessionWithdrawals
         .filter((withdrawal) => withdrawal.status === "completed")
         .reduce((sum, withdrawal) => sum + (getFiniteAmount(withdrawal.amount) ?? 0), 0);
+      const fallbackCurrency = sessionTransactions
+        .map((transaction) => normalizeOptionalString(transaction.currency))
+        .find(Boolean) ??
+        sessionRegistrations
+          .map((registration) =>
+            normalizeOptionalString(registration.paymentCurrency)
+          )
+          .find(Boolean) ??
+        sessionReturns
+          .map((returnRecord) => normalizeOptionalString(returnRecord.currency))
+          .find(Boolean) ??
+        sessionWithdrawals
+          .map((withdrawal) => normalizeOptionalString(withdrawal.currency))
+          .find(Boolean);
+      const fallbackPrice = sessionRegistrations
+        .map((registration) => getFiniteAmount(registration.paymentAmount))
+        .find((amount) => amount !== null) ??
+        sessionTransactions
+          .map((transaction) => getFiniteAmount(transaction.amount))
+          .find((amount) => amount !== null) ??
+        0;
 
       return {
         sessionId: id,
-        title: normalizeOptionalString(session.title) ?? "Untitled session",
-        currency: normalizeCurrency(session.currency),
-        price: getFiniteAmount(session.price) ?? 0,
+        title: session ?
+          normalizeOptionalString(session.title) ?? "Untitled session" :
+          `Deleted session (${id.slice(0, 8)})`,
+        isDeleted: !session,
+        currency: normalizeCurrency(session?.currency ?? fallbackCurrency),
+        price: getFiniteAmount(session?.price) ?? fallbackPrice,
         onlineCollected: roundCurrency(onlineCollected),
         externalCollected: roundCurrency(externalCollected),
         grossCollected: roundCurrency(onlineCollected + externalCollected),
@@ -1889,7 +2277,10 @@ export const adminGetPaymentsDashboard = onCall(
         0
       );
     const pendingWithdrawalTotal = withdrawals
-      .filter((withdrawal) => withdrawal.status === "pending")
+      .filter((withdrawal) => {
+        const status = getFallbackPaymentStatus(withdrawal.status);
+        return status === "pending" || status === "processing";
+      })
       .reduce(
         (sum, withdrawal) => sum + (getFiniteAmount(withdrawal.amount) ?? 0),
         0
@@ -1907,6 +2298,12 @@ export const adminGetPaymentsDashboard = onCall(
     const completedReturnTotal = returns
       .filter((returnRecord) => returnRecord.status === "completed")
       .reduce((sum, returnRecord) => sum + (getFiniteAmount(returnRecord.amount) ?? 0), 0);
+    const revenueTimeline = buildRevenueTimeline({
+      localTransactions,
+      registrations,
+      returns,
+      withdrawals,
+    });
 
     const totals = sessionSummaries.reduce(
       (summary, session) => ({
@@ -1930,6 +2327,12 @@ export const adminGetPaymentsDashboard = onCall(
         netCollected: 0,
       }
     );
+    const grossCollectedTotal = roundCurrency(
+      totals.onlineCollected + totals.externalCollected
+    );
+    const netCollectedTotal = roundCurrency(
+      grossCollectedTotal - completedReturnTotal - recordedWithdrawalTotal
+    );
 
     return {
       generatedAt: new Date().toISOString(),
@@ -1941,6 +2344,7 @@ export const adminGetPaymentsDashboard = onCall(
       registrations,
       returns,
       withdrawals,
+      revenueTimeline,
       reconciliation: {
         transactionStatusIssues,
         registrationPaymentIssues,
@@ -1952,12 +2356,12 @@ export const adminGetPaymentsDashboard = onCall(
       totals: {
         onlineCollected: roundCurrency(totals.onlineCollected),
         externalCollected: roundCurrency(totals.externalCollected),
-        grossCollected: roundCurrency(totals.grossCollected),
+        grossCollected: grossCollectedTotal,
         pending: roundCurrency(totals.pending),
         failed: roundCurrency(totals.failed),
-        returned: roundCurrency(totals.returned),
-        withdrawn: roundCurrency(totals.withdrawn),
-        netCollected: roundCurrency(totals.netCollected),
+        returned: roundCurrency(completedReturnTotal),
+        withdrawn: roundCurrency(recordedWithdrawalTotal),
+        netCollected: netCollectedTotal,
         recordedWithdrawals: roundCurrency(recordedWithdrawalTotal),
         pendingWithdrawals: roundCurrency(pendingWithdrawalTotal),
         cancelledWithdrawals: roundCurrency(cancelledWithdrawalTotal),
@@ -2124,6 +2528,7 @@ export const adminCollectSessionMobileMoney = onCall(
             phone,
             operator,
             reference,
+            country: "zm",
           }),
         },
         lencoSecretKey.value()
@@ -2343,6 +2748,291 @@ export const adminSyncPaymentCollection = onCall(
       message: getMessageForStatus(status),
       failureReason,
       providerCollection: serializeForCallable(collection),
+    };
+  }
+);
+
+export const adminCreatePaymentWithdrawal = onCall(
+  {
+    cors: true,
+    invoker: "public",
+    secrets: [lencoSecretKey],
+  },
+  async (request) => {
+    const adminUid = await requireAdminAuth(request.auth?.uid);
+    const data = (request.data || {}) as AdminCreatePaymentWithdrawalData;
+    const recipientUserId = normalizeOptionalString(data.recipientUserId);
+    const amount = requirePositiveAmount(
+      data.amount,
+      "Withdrawal amount is required."
+    );
+    const currency = normalizeCurrency(data.currency);
+    const operator = mapOperator(
+      requireString(data.operator, "Mobile money operator is required.")
+    );
+
+    let recipientUserData: FirebaseFirestore.DocumentData | null = null;
+    if (recipientUserId) {
+      const recipientSnapshot = await db.collection("users")
+        .doc(recipientUserId)
+        .get();
+
+      if (!recipientSnapshot.exists) {
+        throw new HttpsError("not-found", "Admin recipient not found.");
+      }
+
+      recipientUserData = recipientSnapshot.data() || {};
+      if (recipientUserData.role !== "admin") {
+        throw new HttpsError(
+          "permission-denied",
+          "Withdrawals can only be sent to admin recipients."
+        );
+      }
+    }
+
+    const recipientPhone = normalizeOptionalString(data.phone) ??
+      normalizeOptionalString(recipientUserData?.whatsappPhone) ??
+      normalizeOptionalString(recipientUserData?.phone);
+    const phone = formatPhoneNumber(
+      requireString(recipientPhone, "Withdrawal phone number is required.")
+    );
+    const reference = normalizePaymentReference(data.reference) ??
+      generateReference();
+    const reason = normalizeOptionalString(data.reason) ??
+      normalizeOptionalString(data.narration) ??
+      "Admin withdrawal";
+    const note = normalizeOptionalString(data.note);
+    const lencoAccountId = await resolveLencoDebitAccountId(
+      lencoSecretKey.value(),
+      currency
+    );
+    const withdrawalRef = db
+      .collection(SESSION_PAYMENT_WITHDRAWALS_COLLECTION)
+      .doc(reference);
+    const existingWithdrawalSnapshot = await withdrawalRef.get();
+
+    if (existingWithdrawalSnapshot.exists) {
+      const existingWithdrawal = existingWithdrawalSnapshot.data() || {};
+      const existingStatus = getFallbackPaymentStatus(existingWithdrawal.status);
+      const existingFailureReason =
+        normalizeOptionalString(existingWithdrawal.failureReason);
+      return {
+        success: existingStatus !== "failed",
+        withdrawalId: normalizeOptionalString(existingWithdrawal.withdrawalId) ??
+          reference,
+        transferId: normalizeOptionalString(existingWithdrawal.transferId),
+        reference,
+        status: existingStatus,
+        message: normalizeOptionalString(existingWithdrawal.message) ??
+          getTransferMessage(existingStatus, existingFailureReason),
+        failureReason: existingFailureReason,
+      };
+    }
+
+    await withdrawalRef.set(
+      {
+        withdrawalId: reference,
+        reference,
+        transferId: null,
+        lencoAccountId,
+        provider: "lenco",
+        method: "mobile_money",
+        direction: "transfer",
+        recipientUserId: recipientUserId ?? null,
+        recipientDisplayName: normalizeOptionalString(recipientUserData?.displayName),
+        recipientEmail: normalizeOptionalString(recipientUserData?.email),
+        phone,
+        operator,
+        amount,
+        currency,
+        reason,
+        note,
+        gatewayStatus: "request_started",
+        status: "pending",
+        message: getTransferMessageForStatus("pending"),
+        failureReason: null,
+        initiatedBy: adminUid,
+        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+        createdAt: admin.firestore.FieldValue.serverTimestamp(),
+      },
+      {merge: true}
+    );
+
+    let responseData: Record<string, unknown>;
+    try {
+      responseData = await lencoRequest(
+        "/transfers/mobile-money",
+        {
+          method: "POST",
+          body: JSON.stringify({
+            accountId: lencoAccountId,
+            amount,
+            narration: reason,
+            reference,
+            phone,
+            operator,
+            country: "zm",
+          }),
+        },
+        lencoSecretKey.value()
+      );
+    } catch (transferError) {
+      const errorMessage = getErrorMessage(transferError);
+      const isRecoverable = isRecoverablePaymentProviderError(transferError);
+
+      await withdrawalRef.set(
+        {
+          status: isRecoverable ? "pending" : "failed",
+          gatewayStatus: "request_error",
+          message: isRecoverable ?
+            "Withdrawal request could not be confirmed. Sync this withdrawal before retrying." :
+            getTransferMessage("failed", errorMessage),
+          failureReason: isRecoverable ? null : errorMessage,
+          transferRequestError: errorMessage,
+          lastStatusCheckFailedAt: admin.firestore.FieldValue.serverTimestamp(),
+          updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+        },
+        {merge: true}
+      );
+
+      if (!isRecoverable) {
+        throw transferError;
+      }
+
+      return {
+        success: false,
+        withdrawalId: reference,
+        reference,
+        status: "pending",
+        message: "We could not confirm that Lenco received the withdrawal request. Sync this withdrawal before retrying.",
+        failureReason: null,
+        recoverable: true,
+      };
+    }
+
+    const transfer = (responseData.data || {}) as Record<string, unknown>;
+    const transferId = normalizeOptionalString(transfer.id) ?? reference;
+    const lencoReference = normalizeOptionalString(transfer.lencoReference);
+    const status = mapCollectionStatus(transfer.status);
+    const failureReason = getFailureReason(transfer);
+
+    await withdrawalRef.set(
+      {
+        withdrawalId: transferId,
+        transferId,
+        lencoReference: lencoReference ?? null,
+        gatewayStatus: normalizeOptionalString(transfer.status),
+        status,
+        message: getTransferMessage(status, failureReason),
+        failureReason,
+        providerTransfer: serializeForCallable(transfer),
+        completedAt: status === "completed" ?
+          admin.firestore.FieldValue.serverTimestamp() :
+          null,
+        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      },
+      {merge: true}
+    );
+
+    return {
+      success: status !== "failed",
+      withdrawalId: transferId,
+      transferId,
+      reference,
+      lencoReference,
+      status,
+      message: getTransferMessage(status, failureReason),
+      failureReason,
+    };
+  }
+);
+
+export const adminSyncPaymentWithdrawal = onCall(
+  {
+    cors: true,
+    invoker: "public",
+    secrets: [lencoSecretKey],
+  },
+  async (request) => {
+    await requireAdminAuth(request.auth?.uid);
+
+    const data = (request.data || {}) as AdminSyncPaymentWithdrawalData;
+    const withdrawalId = normalizeOptionalString(data.withdrawalId);
+    const transferId = normalizeOptionalString(data.transferId);
+    const referenceInput = normalizeOptionalString(data.reference);
+
+    if (!withdrawalId && !transferId && !referenceInput) {
+      throw new HttpsError(
+        "invalid-argument",
+        "Withdrawal ID, transfer ID, or reference is required."
+      );
+    }
+
+    const withdrawalRecord = await findSessionPaymentWithdrawal({
+      withdrawalId,
+      transferId,
+      reference: referenceInput,
+    });
+    const existingWithdrawalData = withdrawalRecord.snapshot.data() || {};
+    const reference =
+      normalizeOptionalString(existingWithdrawalData.reference) ??
+      referenceInput ??
+      transferId ??
+      withdrawalId;
+
+    if (!reference) {
+      throw new HttpsError("failed-precondition", "Withdrawal reference is missing.");
+    }
+
+    const responseData = await lencoRequest(
+      `/transfers/status/${reference}`,
+      {method: "GET"},
+      lencoSecretKey.value()
+    );
+    const transfer = (responseData.data || {}) as Record<string, unknown>;
+    const resolvedTransferId = normalizeOptionalString(transfer.id) ??
+      transferId ??
+      withdrawalRecord.snapshot.id;
+    const status = mapCollectionStatus(transfer.status);
+    const failureReason = getFailureReason(transfer);
+    const amount = getFiniteAmount(transfer.amount) ??
+      getFiniteAmount(existingWithdrawalData.amount);
+    const currency = normalizeCurrency(
+      transfer.currency ?? existingWithdrawalData.currency
+    );
+    const paymentReference = normalizeOptionalString(transfer.reference) ??
+      reference;
+
+    await withdrawalRecord.docRef.set(
+      {
+        withdrawalId: resolvedTransferId,
+        transferId: resolvedTransferId,
+        reference: paymentReference,
+        amount,
+        currency,
+        lencoReference: normalizeOptionalString(transfer.lencoReference),
+        gatewayStatus: normalizeOptionalString(transfer.status),
+        status,
+        message: getTransferMessage(status, failureReason),
+        failureReason,
+        providerTransfer: serializeForCallable(transfer),
+        completedAt: status === "completed" ?
+          admin.firestore.FieldValue.serverTimestamp() :
+          null,
+        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      },
+      {merge: true}
+    );
+
+    return {
+      success: status !== "failed",
+      withdrawalId: resolvedTransferId,
+      transferId: resolvedTransferId,
+      reference: paymentReference,
+      status,
+      message: getTransferMessage(status, failureReason),
+      failureReason,
+      providerTransfer: serializeForCallable(transfer),
     };
   }
 );

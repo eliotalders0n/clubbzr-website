@@ -11,8 +11,25 @@ export interface AdminPaymentDashboardFilters {
 export interface AdminPaymentSessionSummary {
   sessionId: string;
   title: string;
+  isDeleted?: boolean;
   currency: string;
   price: number;
+  onlineCollected: number;
+  externalCollected: number;
+  grossCollected: number;
+  pending: number;
+  failed: number;
+  returned: number;
+  withdrawn: number;
+  netCollected: number;
+  transactionCount: number;
+  registrationCount: number;
+}
+
+export interface AdminPaymentRevenuePeriod {
+  periodKey: string;
+  label: string;
+  currency: string;
   onlineCollected: number;
   externalCollected: number;
   grossCollected: number;
@@ -33,6 +50,7 @@ export interface AdminPaymentDashboard {
   registrations: Record<string, unknown>[];
   returns: Record<string, unknown>[];
   withdrawals: Record<string, unknown>[];
+  revenueTimeline: AdminPaymentRevenuePeriod[];
   reconciliation: {
     transactionStatusIssues: Record<string, unknown>[];
     registrationPaymentIssues: Record<string, unknown>[];
@@ -78,6 +96,9 @@ export interface AdminPaymentActionResponse {
   failureReason?: string | null;
   recoverable?: boolean;
   returnId?: string;
+  withdrawalId?: string;
+  transferId?: string;
+  lencoReference?: string | null;
   record?: Record<string, unknown>;
 }
 
@@ -93,6 +114,16 @@ export interface AdminRecordPaymentReturnInput {
   externalReference?: string;
   status: 'pending' | 'completed' | 'cancelled';
   notes?: string;
+}
+
+export interface AdminCreatePaymentWithdrawalInput {
+  recipientUserId?: string;
+  phone: string;
+  operator: MobileMoneyOperator;
+  amount: number;
+  currency?: string;
+  reason?: string;
+  note?: string;
 }
 
 const getAdminPaymentsDashboardFn = httpsCallable<
@@ -115,6 +146,16 @@ const recordPaymentReturnFn = httpsCallable<
   AdminPaymentActionResponse
 >(functions, 'adminRecordPaymentReturn');
 
+const createPaymentWithdrawalFn = httpsCallable<
+  AdminCreatePaymentWithdrawalInput,
+  AdminPaymentActionResponse
+>(functions, 'adminCreatePaymentWithdrawal');
+
+const syncPaymentWithdrawalFn = httpsCallable<
+  { withdrawalId?: string; transferId?: string; reference?: string },
+  AdminPaymentActionResponse
+>(functions, 'adminSyncPaymentWithdrawal');
+
 export async function getAdminPaymentsDashboard(filters: AdminPaymentDashboardFilters = {}) {
   const result = await getAdminPaymentsDashboardFn(filters);
   return result.data;
@@ -132,5 +173,15 @@ export async function syncPaymentCollection(input: { transactionId?: string; ref
 
 export async function recordPaymentReturn(input: AdminRecordPaymentReturnInput) {
   const result = await recordPaymentReturnFn(input);
+  return result.data;
+}
+
+export async function createPaymentWithdrawal(input: AdminCreatePaymentWithdrawalInput) {
+  const result = await createPaymentWithdrawalFn(input);
+  return result.data;
+}
+
+export async function syncPaymentWithdrawal(input: { withdrawalId?: string; transferId?: string; reference?: string }) {
+  const result = await syncPaymentWithdrawalFn(input);
   return result.data;
 }

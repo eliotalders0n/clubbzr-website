@@ -21,6 +21,7 @@ import {
   RefreshCw,
   RotateCcw,
   Send,
+  TrendingUp,
   Wallet,
 } from 'lucide-react'
 
@@ -28,13 +29,15 @@ import { AdminLayout } from '@/components/layout/AdminLayout'
 import { useCollection } from '@/hooks'
 import {
   collectSessionPayment,
+  createPaymentWithdrawal,
   getAdminPaymentsDashboard,
   recordPaymentReturn,
   syncPaymentCollection,
+  syncPaymentWithdrawal,
   type AdminPaymentDashboard,
 } from '../../../lib/adminPayments'
 import type { MobileMoneyOperator } from '../../../lib/lenco'
-import type { Session, SessionRegistration } from '../../../lib/schema'
+import type { Session, SessionRegistration, User as FirestoreUser } from '../../../lib/schema'
 
 type PaymentsTab = 'overview' | 'collections' | 'reconciliation' | 'withdrawals' | 'returns'
 
@@ -45,6 +48,16 @@ interface CollectionForm {
   operator: MobileMoneyOperator
   amount: string
   currency: string
+  note: string
+}
+
+interface WithdrawalForm {
+  recipientUserId: string
+  phone: string
+  operator: MobileMoneyOperator
+  amount: string
+  currency: string
+  reason: string
   note: string
 }
 
@@ -91,6 +104,16 @@ const emptyCollectionForm: CollectionForm = {
   note: '',
 }
 
+const emptyWithdrawalForm: WithdrawalForm = {
+  recipientUserId: '',
+  phone: '',
+  operator: 'airtel',
+  amount: '',
+  currency: 'ZMW',
+  reason: 'Admin withdrawal',
+  note: '',
+}
+
 const emptyReturnForm: ReturnForm = {
   transactionKey: '',
   sessionId: '',
@@ -107,6 +130,15 @@ const asString = (value: unknown): string => (typeof value === 'string' ? value 
 const asNumber = (value: unknown): number => {
   const numeric = Number(value)
   return Number.isFinite(numeric) ? numeric : 0
+}
+const asRecord = (value: unknown): Record<string, unknown> =>
+  value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {}
+const getUserPaymentPhone = (user: FirestoreUser): string =>
+  asString(user.whatsappPhone) || asString(user.phone)
+const getUserPaymentLabel = (user: FirestoreUser): string => {
+  const name = asString(user.displayName) || asString(user.email) || user.uid || user.id
+  const phone = getUserPaymentPhone(user)
+  return phone ? `${name} - ${phone}` : name
 }
 
 const formatMoney = (amount: unknown, currency = 'ZMW'): string =>
@@ -191,7 +223,7 @@ function MetricCard({
           <Text color="whiteAlpha.500" fontSize="xs" textTransform="uppercase" letterSpacing="0.12em">
             {label}
           </Text>
-          <Text color="white" fontSize="2xl" fontWeight="bold" mt={2}>
+          <Text color="white" fontSize={{ base: '2xl', xl: 'xl', '2xl': '2xl' }} fontWeight="bold" mt={2} lineHeight="1.15">
             {value}
           </Text>
           <Text color="whiteAlpha.500" fontSize="sm" mt={1}>
@@ -202,6 +234,27 @@ function MetricCard({
           {icon}
         </Flex>
       </Flex>
+    </Box>
+  )
+}
+
+function AmountCell({
+  label,
+  value,
+  tone = 'white',
+}: {
+  label: string
+  value: string
+  tone?: string
+}) {
+  return (
+    <Box minW={0}>
+      <Text color="whiteAlpha.500" fontSize="xs" textTransform="uppercase" letterSpacing="0.08em">
+        {label}
+      </Text>
+      <Text color={tone} fontSize="sm" fontWeight="semibold" mt={1} overflowWrap="anywhere">
+        {value}
+      </Text>
     </Box>
   )
 }
@@ -297,6 +350,10 @@ export default function Payments() {
     orderBy: 'createdAt',
     orderDirection: 'desc',
   })
+  const { data: userDocs, loading: usersLoading } = useCollection('users', {
+    orderBy: 'displayName',
+    orderDirection: 'asc',
+  })
 
   const [activeTab, setActiveTab] = useState<PaymentsTab>('overview')
   const [sessionFilter, setSessionFilter] = useState('all')
@@ -307,6 +364,7 @@ export default function Payments() {
   const [message, setMessage] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [collectionForm, setCollectionForm] = useState<CollectionForm>(emptyCollectionForm)
+  const [withdrawalForm, setWithdrawalForm] = useState<WithdrawalForm>(emptyWithdrawalForm)
   const [returnForm, setReturnForm] = useState<ReturnForm>(emptyReturnForm)
 
   const sessions = useMemo(
@@ -315,6 +373,12 @@ export default function Payments() {
   )
   const selectedCollectionSession = sessions.find((session) => session.id === collectionForm.sessionId)
   const filteredRegistrations = registrations.filter((registration) => registration.sessionId === collectionForm.sessionId)
+  const adminRecipients = useMemo(
+    () => userDocs
+      .filter((user: FirestoreUser) => user.role === 'admin' && getUserPaymentPhone(user))
+      .sort((a: FirestoreUser, b: FirestoreUser) => getUserPaymentLabel(a).localeCompare(getUserPaymentLabel(b))),
+    [userDocs]
+  )
   const completedTransactions = (dashboard?.localTransactions || []).filter((transaction) =>
     String(transaction.status || '').toLowerCase() === 'completed'
   )
@@ -326,7 +390,7 @@ export default function Payments() {
       const data = await withTimeout(
         getAdminPaymentsDashboard({
           sessionId: sessionFilter === 'all' ? undefined : sessionFilter,
-          limit: 150,
+          limit: 1000,
         }),
         DASHBOARD_LOAD_TIMEOUT_MS,
         'Payments dashboard is taking too long to respond. Try refresh again after the functions deploy finishes.'
@@ -365,6 +429,15 @@ export default function Payments() {
       registrationId,
       amount: registration?.paymentAmount ? String(registration.paymentAmount) : previous.amount,
       currency: registration?.paymentCurrency || previous.currency,
+    }))
+  }
+
+  const handleWithdrawalRecipientChange = (recipientUserId: string) => {
+    const recipient = adminRecipients.find((entry) => entry.id === recipientUserId)
+    setWithdrawalForm((previous) => ({
+      ...previous,
+      recipientUserId,
+      phone: recipient ? getUserPaymentPhone(recipient) : previous.phone,
     }))
   }
 
@@ -408,6 +481,38 @@ export default function Payments() {
     }
   }
 
+  const handleWithdraw = async (event: FormEvent) => {
+    event.preventDefault()
+    setMessage(null)
+    setError(null)
+
+    const amount = Number(withdrawalForm.amount)
+    if (!withdrawalForm.phone || !Number.isFinite(amount) || amount <= 0) {
+      setError('Admin mobile money number and amount are required.')
+      return
+    }
+
+    setBusy(true)
+    try {
+      const result = await createPaymentWithdrawal({
+        recipientUserId: withdrawalForm.recipientUserId || undefined,
+        phone: withdrawalForm.phone,
+        operator: withdrawalForm.operator,
+        amount,
+        currency: withdrawalForm.currency,
+        reason: withdrawalForm.reason || undefined,
+        note: withdrawalForm.note || undefined,
+      })
+      setMessage(result.message || `Withdrawal ${result.status || 'started'}.`)
+      setWithdrawalForm(emptyWithdrawalForm)
+      await loadDashboard()
+    } catch (withdrawError) {
+      setError(withdrawError instanceof Error ? withdrawError.message : 'Unable to start withdrawal.')
+    } finally {
+      setBusy(false)
+    }
+  }
+
   const handleSync = async (record: Record<string, unknown>) => {
     const reference = asString(record.reference)
     const transactionId = asString(record.transactionId)
@@ -423,6 +528,27 @@ export default function Payments() {
       await loadDashboard()
     } catch (syncError) {
       setError(syncError instanceof Error ? syncError.message : 'Unable to sync payment.')
+    } finally {
+      setSyncingKey('')
+    }
+  }
+
+  const handleWithdrawalSync = async (record: Record<string, unknown>) => {
+    const reference = asString(record.reference)
+    const transferId = asString(record.transferId) || asString(record.withdrawalId)
+    const withdrawalId = asString(record.id)
+    const key = `withdrawal-${reference || transferId || withdrawalId}`
+    if (!reference && !transferId && !withdrawalId) return
+
+    setSyncingKey(key)
+    setMessage(null)
+    setError(null)
+    try {
+      const result = await syncPaymentWithdrawal({ reference, transferId, withdrawalId })
+      setMessage(result.message || `Withdrawal ${result.status || 'synced'}.`)
+      await loadDashboard()
+    } catch (syncError) {
+      setError(syncError instanceof Error ? syncError.message : 'Unable to sync withdrawal.')
     } finally {
       setSyncingKey('')
     }
@@ -519,8 +645,9 @@ export default function Payments() {
           </Box>
         )}
 
-        <SimpleGrid columns={{ base: 1, md: 2, xl: 4 }} gap={4} mb={6}>
-          <MetricCard label="Net collected" value={formatMoney(totals?.netCollected)} helper="Online and external minus returns" icon={<Wallet size={20} />} />
+        <SimpleGrid columns={{ base: 1, md: 2, xl: 5 }} gap={4} mb={6}>
+          <MetricCard label="Total revenue" value={formatMoney(totals?.grossCollected)} helper="Gross paid online and external" icon={<TrendingUp size={20} />} />
+          <MetricCard label="Current balance" value={formatMoney(totals?.netCollected)} helper="After returns and withdrawals" icon={<Wallet size={20} />} />
           <MetricCard label="Pending" value={formatMoney(totals?.pending)} helper="Collections awaiting confirmation" icon={<RefreshCw size={20} />} />
           <MetricCard label="Withdrawals" value={formatMoney(totals?.recordedWithdrawals)} helper="Recorded withdrawal records" icon={<Banknote size={20} />} />
           <MetricCard label="Returns" value={formatMoney(totals?.completedReturns)} helper="Completed return records" icon={<RotateCcw size={20} />} />
@@ -559,12 +686,53 @@ export default function Payments() {
 
             {dashboard && activeTab === 'overview' && (
               <>
+                <Panel title="Revenue Over Time">
+                  <VStack align="stretch" gap={0}>
+                    {(dashboard.revenueTimeline || []).map((period) => (
+                      <Flex
+                        key={period.periodKey}
+                        py={4}
+                        gap={5}
+                        justify="space-between"
+                        align={{ base: 'stretch', xl: 'center' }}
+                        direction={{ base: 'column', xl: 'row' }}
+                        borderBottom="1px solid"
+                        borderColor="whiteAlpha.100"
+                      >
+                        <Box minW={0}>
+                          <Text color="white" fontWeight="semibold">{period.label}</Text>
+                          <Text color="whiteAlpha.500" fontSize="sm" mt={1}>
+                            {period.transactionCount + period.registrationCount} paid records
+                          </Text>
+                        </Box>
+                        <SimpleGrid columns={{ base: 2, md: 3, xl: 5 }} gap={4} flex="1" maxW={{ xl: '920px' }}>
+                          <AmountCell label="Total revenue" value={formatMoney(period.grossCollected, period.currency)} tone="green.200" />
+                          <AmountCell label="Current net" value={formatMoney(period.netCollected, period.currency)} />
+                          <AmountCell label="Pending" value={formatMoney(period.pending, period.currency)} tone="orange.200" />
+                          <AmountCell label="Returns" value={formatMoney(period.returned, period.currency)} tone="red.200" />
+                          <AmountCell label="Withdrawals" value={formatMoney(period.withdrawn, period.currency)} tone="brand.200" />
+                        </SimpleGrid>
+                      </Flex>
+                    ))}
+                    {(dashboard.revenueTimeline || []).length === 0 && (
+                      <Text color="whiteAlpha.500">No revenue history in the loaded ledger window.</Text>
+                    )}
+                  </VStack>
+                </Panel>
+
                 <Panel title="Session Totals">
                   <VStack align="stretch" gap={0}>
                     {(dashboard?.sessions || []).map((session) => (
                       <Flex key={session.sessionId} py={4} gap={4} justify="space-between" align={{ base: 'stretch', lg: 'center' }} direction={{ base: 'column', lg: 'row' }} borderBottom="1px solid" borderColor="whiteAlpha.100">
                         <Box minW={0}>
-                          <Text color="white" fontWeight="semibold" lineClamp={1}>{session.title}</Text>
+                          <HStack gap={2} minW={0}>
+                            <Text color="white" fontWeight="semibold" lineClamp={1}>{session.title}</Text>
+                            {session.isDeleted && (
+                              <Badge bg="orange.500/15" color="orange.200" borderRadius="full" px={2} py={0.5}>
+                                Deleted
+                              </Badge>
+                            )}
+                          </HStack>
                           <Text color="whiteAlpha.500" fontSize="sm">{session.registrationCount} registrations · {session.transactionCount} collections</Text>
                         </Box>
                         <HStack gap={4} flexWrap="wrap" justify={{ base: 'space-between', lg: 'flex-end' }}>
@@ -580,7 +748,7 @@ export default function Payments() {
 
                 <Panel title="Ledger Source">
                   <Text color="whiteAlpha.600">
-                    These totals are built from Firestore records only. Lenco is contacted only when collecting or manually syncing a specific payment.
+                    These totals are built from Firestore records only. Lenco is contacted only when collecting, withdrawing, or manually syncing a specific payment.
                   </Text>
                 </Panel>
               </>
@@ -588,7 +756,10 @@ export default function Payments() {
 
             {dashboard && activeTab === 'collections' && (
               <>
-                <Panel title="Collect Session Payment">
+                <Panel title="Charge Attendee Mobile Money">
+                  <Text color="whiteAlpha.600" mb={4}>
+                    Collections request money from a member phone. The member must approve the mobile-money prompt before it becomes paid.
+                  </Text>
                   <form onSubmit={handleCollect}>
                     <SimpleGrid columns={{ base: 1, lg: 3 }} gap={3}>
                       <select value={collectionForm.sessionId} onChange={(event) => handleCollectionSessionChange(event.target.value)} style={selectStyle} disabled={sessionsLoading || busy}>
@@ -617,7 +788,7 @@ export default function Payments() {
                     <Textarea value={collectionForm.note} onChange={(event) => setCollectionForm((previous) => ({ ...previous, note: event.target.value }))} placeholder="Admin note" mt={3} bg="whiteAlpha.50" borderColor="whiteAlpha.200" color="white" disabled={busy} />
                     <Button type="submit" mt={4} h="46px" px={5} borderRadius="xl" bg="brand.500" color="white" _hover={{ bg: 'brand.600' }} disabled={busy}>
                       {busy ? <Spinner size="sm" /> : <Send size={16} />}
-                      Collect Payment
+                      Send Payment Prompt
                     </Button>
                   </form>
                 </Panel>
@@ -670,23 +841,111 @@ export default function Payments() {
             )}
 
             {dashboard && activeTab === 'withdrawals' && (
-              <Panel title="Recorded Withdrawals">
-                <VStack align="stretch" gap={3}>
-                  {(dashboard?.withdrawals || []).map((record) => (
-                    <Flex key={asString(record.id)} justify="space-between" gap={4} p={4} bg="blackAlpha.200" borderRadius="xl">
-                      <Box minW={0}>
-                        <HStack gap={2} flexWrap="wrap">
-                          <Text color="white" fontWeight="semibold">{recordLabel(record, ['reason', 'reference', 'id'])}</Text>
-                          <StatusBadge status={record.status} />
-                        </HStack>
-                        <Text color="whiteAlpha.500" fontSize="sm" mt={1}>{formatDate(record.createdAt)}</Text>
-                      </Box>
-                      <Text color="orange.200" fontWeight="bold">{formatMoney(record.amount, asString(record.currency) || 'ZMW')}</Text>
-                    </Flex>
-                  ))}
-                  {dashboard?.withdrawals.length === 0 && <Text color="whiteAlpha.500">No Firestore withdrawal records yet.</Text>}
-                </VStack>
-              </Panel>
+              <>
+                <Panel title="Withdraw to Admin">
+                  <Text color="whiteAlpha.600" mb={4}>
+                    Withdrawals send money out from the Lenco balance to an admin mobile-money number. This does not ask the phone owner to approve a charge.
+                  </Text>
+                  <form onSubmit={handleWithdraw}>
+                    <SimpleGrid columns={{ base: 1, lg: 3 }} gap={3}>
+                      <select value={withdrawalForm.recipientUserId} onChange={(event) => handleWithdrawalRecipientChange(event.target.value)} style={selectStyle} disabled={usersLoading || busy}>
+                        <option value="">{usersLoading ? 'Loading admins...' : 'Manual number'}</option>
+                        {adminRecipients.map((user: FirestoreUser) => (
+                          <option key={user.id} value={user.id}>{getUserPaymentLabel(user)}</option>
+                        ))}
+                      </select>
+                      <select value={withdrawalForm.operator} onChange={(event) => setWithdrawalForm((previous) => ({ ...previous, operator: event.target.value as MobileMoneyOperator }))} style={selectStyle} disabled={busy}>
+                        <option value="airtel">Airtel Money</option>
+                        <option value="mtn">MTN MoMo</option>
+                        <option value="zamtel">Zamtel</option>
+                      </select>
+                      <Input value={withdrawalForm.phone} onChange={(event) => setWithdrawalForm((previous) => ({ ...previous, phone: event.target.value }))} placeholder="Admin mobile money number" h="46px" bg="whiteAlpha.50" borderColor="whiteAlpha.200" color="white" disabled={busy} />
+                      <Input value={withdrawalForm.amount} onChange={(event) => setWithdrawalForm((previous) => ({ ...previous, amount: event.target.value }))} placeholder="Amount" h="46px" bg="whiteAlpha.50" borderColor="whiteAlpha.200" color="white" disabled={busy} />
+                      <Input value={withdrawalForm.currency} onChange={(event) => setWithdrawalForm((previous) => ({ ...previous, currency: event.target.value.toUpperCase() }))} placeholder="Currency" h="46px" bg="whiteAlpha.50" borderColor="whiteAlpha.200" color="white" disabled={busy} />
+                      <Input value={withdrawalForm.reason} onChange={(event) => setWithdrawalForm((previous) => ({ ...previous, reason: event.target.value }))} placeholder="Reason" h="46px" bg="whiteAlpha.50" borderColor="whiteAlpha.200" color="white" disabled={busy} />
+                    </SimpleGrid>
+                    <Textarea value={withdrawalForm.note} onChange={(event) => setWithdrawalForm((previous) => ({ ...previous, note: event.target.value }))} placeholder="Admin note" mt={3} bg="whiteAlpha.50" borderColor="whiteAlpha.200" color="white" disabled={busy} />
+                    {adminRecipients.length === 0 && !usersLoading && (
+                      <Text color="orange.200" fontSize="sm" mt={3}>
+                        No admin accounts with saved phone numbers were found. Use a manual number or update an admin profile first.
+                      </Text>
+                    )}
+                    <Button type="submit" mt={4} h="46px" px={5} borderRadius="xl" bg="brand.500" color="white" _hover={{ bg: 'brand.600' }} disabled={busy}>
+                      {busy ? <Spinner size="sm" /> : <Send size={16} />}
+                      Send Withdrawal
+                    </Button>
+                  </form>
+                </Panel>
+
+                <Panel title="Withdrawal Records">
+                  <VStack align="stretch" gap={3}>
+                    {(dashboard?.withdrawals || []).map((record) => {
+                      const key = asString(record.reference) || asString(record.transferId) || asString(record.withdrawalId) || asString(record.id)
+                      const providerTransfer = asRecord(record.providerTransfer)
+                      const failureDetail =
+                        asString(record.failureReason) ||
+                        asString(record.transferRequestError) ||
+                        asString(providerTransfer.reasonForFailure) ||
+                        asString(providerTransfer.failureReason) ||
+                        asString(providerTransfer.reason) ||
+                        asString(providerTransfer.statusMessage) ||
+                        asString(providerTransfer.message)
+                      const statusMessage = asString(record.message)
+                      const providerReference = asString(record.lencoReference) || asString(record.reference)
+                      return (
+                        <Flex key={asString(record.id) || key} justify="space-between" align={{ base: 'stretch', lg: 'center' }} direction={{ base: 'column', lg: 'row' }} gap={4} p={4} bg="blackAlpha.200" borderRadius="xl">
+                          <Box minW={0}>
+                            <HStack gap={2} flexWrap="wrap">
+                              <Text color="white" fontWeight="semibold">{recordLabel(record, ['recipientDisplayName', 'reason', 'reference', 'id'])}</Text>
+                              <StatusBadge status={record.status} />
+                            </HStack>
+                            <Text color="whiteAlpha.500" fontSize="sm" mt={1}>
+                              {asString(record.phone) || 'No phone'} · {asString(record.operator) || 'No operator'} · {formatDate(record.createdAt || record.updatedAt)}
+                            </Text>
+                            {(failureDetail || statusMessage || providerReference) && (
+                              <VStack align="stretch" gap={1} mt={2}>
+                                {failureDetail && (
+                                  <Text color="red.200" fontSize="sm" overflowWrap="anywhere">
+                                    {failureDetail}
+                                  </Text>
+                                )}
+                                {!failureDetail && statusMessage && (
+                                  <Text color="whiteAlpha.500" fontSize="sm" overflowWrap="anywhere">
+                                    {statusMessage}
+                                  </Text>
+                                )}
+                                {providerReference && (
+                                  <Text color="whiteAlpha.400" fontSize="xs" overflowWrap="anywhere">
+                                    Ref: {providerReference}
+                                  </Text>
+                                )}
+                              </VStack>
+                            )}
+                          </Box>
+                          <HStack gap={3} justify={{ base: 'space-between', lg: 'flex-end' }} flexWrap="wrap">
+                            <Text color="orange.200" fontWeight="bold">{formatMoney(record.amount, asString(record.currency) || 'ZMW')}</Text>
+                            <Button
+                              h="38px"
+                              minW="112px"
+                              px={4}
+                              borderRadius="full"
+                              bg="whiteAlpha.100"
+                              color="white"
+                              _hover={{ bg: 'whiteAlpha.200' }}
+                              onClick={() => void handleWithdrawalSync(record)}
+                              disabled={syncingKey === `withdrawal-${key}` || !key}
+                            >
+                              {syncingKey === `withdrawal-${key}` ? <Spinner size="sm" /> : <RefreshCw size={14} />}
+                              Sync
+                            </Button>
+                          </HStack>
+                        </Flex>
+                      )
+                    })}
+                    {dashboard?.withdrawals.length === 0 && <Text color="whiteAlpha.500">No withdrawal records yet.</Text>}
+                  </VStack>
+                </Panel>
+              </>
             )}
 
             {dashboard && activeTab === 'returns' && (
