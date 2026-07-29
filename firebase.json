@@ -14,9 +14,7 @@
       "firebase-debug.log",
       "firebase-debug.*.log"
     ],
-    "predeploy": [
-      "npm --prefix \"$RESOURCE_DIR\" run build"
-    ]
+    "predeploy": ["npm --prefix \"$RESOURCE_DIR\" run build"]
   },
   "storage": {
     "rules": "storage.rules"
@@ -40,11 +38,7 @@
   "hosting": {
     "site": "club-bzr",
     "public": "dist",
-    "ignore": [
-      "firebase.json",
-      "**/.*",
-      "**/node_modules/**"
-    ],
+    "ignore": ["firebase.json", "**/.*", "**/node_modules/**"],
     "rewrites": [
       {
         "source": "**",

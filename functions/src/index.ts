@@ -2798,13 +2798,13 @@ export const adminResolvePaymentReconciliationIssue = onCall(
 
     const metadata = transactionData.metadata as
       Partial<SessionPaymentMetadata> | undefined;
-    const sessionId = normalizeOptionalString(metadata?.sessionId) ??
+    const transactionSessionId = normalizeOptionalString(metadata?.sessionId) ??
       normalizeOptionalString(transactionData.sessionId);
     const registrationId = normalizeOptionalString(data.registrationId) ??
       normalizeOptionalString(metadata?.registrationId) ??
       normalizeOptionalString(transactionData.registrationId);
 
-    if (!sessionId || !registrationId) {
+    if (!registrationId) {
       throw new HttpsError(
         "failed-precondition",
         "Payment is missing the linked signup information."
@@ -2829,17 +2829,73 @@ export const adminResolvePaymentReconciliationIssue = onCall(
       resolvedTransactionId;
     const amount = getFiniteAmount(transactionData.amount);
     const currency = normalizeCurrency(transactionData.currency);
+    const beforeRegistration = beforeSnapshot.data() || {};
+    const registrationSessionId =
+      normalizeOptionalString(beforeRegistration.sessionId);
+    const sessionId = registrationSessionId ?? transactionSessionId;
+    const sessionRef = sessionId ?
+      db.collection(SESSIONS_COLLECTION).doc(sessionId) :
+      null;
 
-    await markRegistrationPaid({
-      transactionId: resolvedTransactionId,
-      reference,
-      metadata: {
-        source: "club-bzr-admin",
-        sessionId,
-        registrationId,
-      },
-      amount,
-      currency,
+    await db.runTransaction(async (transaction) => {
+      const registrationSnapshot = await transaction.get(registrationRef);
+      const sessionSnapshot = sessionRef ?
+        await transaction.get(sessionRef) :
+        null;
+
+      if (!registrationSnapshot.exists) {
+        throw new HttpsError("not-found", "Linked signup was not found.");
+      }
+
+      const registrationData = registrationSnapshot.data() || {};
+      const sessionData = sessionSnapshot?.exists ?
+        sessionSnapshot.data() || {} :
+        {};
+      const userId = normalizeOptionalString(registrationData.userId);
+      const attendees = Array.isArray(sessionData.attendees) ?
+        sessionData.attendees :
+        [];
+      const alreadyConfirmed = registrationData.status === "confirmed";
+      const alreadyAttending = userId ? attendees.includes(userId) : false;
+      const capacity = Number(sessionData.capacity);
+      const hasCapacity = alreadyAttending ||
+        (Number.isFinite(capacity) && capacity > attendees.length);
+      const shouldConfirm = alreadyConfirmed ||
+        (sessionSnapshot?.exists === true &&
+          canAutoConfirmPaidRegistration(sessionData) &&
+          hasCapacity);
+
+      const registrationPatch: FirebaseFirestore.DocumentData = {
+        status: shouldConfirm ? "confirmed" : "paid_pending_confirmation",
+        paymentStatus: "paid_online",
+        paymentMethod: "mobile_money",
+        paymentTransactionId: resolvedTransactionId,
+        paymentReference: reference,
+        paymentAmount: amount,
+        paymentCurrency: currency,
+        paidAt: admin.firestore.FieldValue.serverTimestamp(),
+        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      };
+
+      if (shouldConfirm && !registrationData.confirmedAt) {
+        registrationPatch.confirmedAt =
+          admin.firestore.FieldValue.serverTimestamp();
+        registrationPatch.confirmedBy = "admin_reconciliation";
+      }
+
+      transaction.set(registrationRef, registrationPatch, {merge: true});
+
+      if (sessionRef && shouldConfirm && userId) {
+        transaction.set(
+          sessionRef,
+          {
+            attendees: admin.firestore.FieldValue.arrayUnion(userId),
+            waitlist: admin.firestore.FieldValue.arrayRemove(userId),
+            updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+          },
+          {merge: true}
+        );
+      }
     });
 
     const afterSnapshot = await registrationRef.get();
@@ -2850,6 +2906,7 @@ export const adminResolvePaymentReconciliationIssue = onCall(
       entityId: registrationId,
       relatedTransactionId: resolvedTransactionId,
       reference,
+      sessionId: sessionId ?? null,
       before: serializeForCallable(beforeSnapshot.data() || {}),
       after: serializeForCallable(afterSnapshot.data() || {}),
       createdAt: admin.firestore.FieldValue.serverTimestamp(),
