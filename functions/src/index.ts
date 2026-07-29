@@ -24,6 +24,9 @@ const WHATSAPP_REQUEST_TIMEOUT_MS = 15000;
 const CLUB_BZR_WHATSAPP_BUSINESS_NUMBER = "260960912464";
 const WHATSAPP_CONFIRMATION_TEMPLATE_NAME =
   process.env.WHATSAPP_CONFIRMATION_TEMPLATE_NAME || "session_confirmation_v1";
+const WHATSAPP_PAYMENT_SUCCESS_ADMIN_TEMPLATE_NAME =
+  process.env.WHATSAPP_PAYMENT_SUCCESS_ADMIN_TEMPLATE_NAME ||
+  "session_payment_success_admin_v1";
 const WHATSAPP_TEMPLATE_LANGUAGE = "en_US";
 const DEFAULT_CURRENCY = "ZMW";
 const DEFAULT_ADMIN_NOTIFICATION_EMAIL = "clubbzrzm@gmail.com";
@@ -747,6 +750,20 @@ function getAdminNotificationEmails(): string[] {
     .filter((email) => email.includes("@"));
 }
 
+function getAdminPaymentSuccessWhatsAppRecipients(): string[] {
+  const configured =
+    process.env.ADMIN_PAYMENT_SUCCESS_WHATSAPP_NUMBERS ||
+    process.env.ADMIN_NOTIFICATION_WHATSAPP_NUMBERS ||
+    "";
+
+  const recipients = configured
+    .split(/[,\s]+/)
+    .map((phone) => normalizeWhatsAppPhoneNumber(phone))
+    .filter((phone): phone is string => Boolean(phone));
+
+  return Array.from(new Set(recipients)).slice(0, 2);
+}
+
 function escapeHtml(value: string): string {
   return value
     .replace(/&/g, "&amp;")
@@ -1266,6 +1283,155 @@ async function queueUserConfirmationWhatsApp(input: {
     });
 
     return {status: "failed", reason: errorMessage};
+  }
+}
+
+async function queueAdminPaymentSuccessWhatsApp(input: {
+  transactionId: string;
+  transactionData: FirebaseFirestore.DocumentData;
+}): Promise<void> {
+  const recipients = getAdminPaymentSuccessWhatsAppRecipients();
+  if (recipients.length === 0) {
+    logger.warn("Admin payment WhatsApp skipped: no recipients configured", {
+      transactionId: input.transactionId,
+    });
+    return;
+  }
+
+  const transactionStatus = getFallbackPaymentStatus(
+    input.transactionData.status
+  );
+  if (transactionStatus !== "completed") return;
+
+  try {
+    const metadata = input.transactionData.metadata as
+      Partial<SessionPaymentMetadata> | undefined;
+    const registrationId = normalizeOptionalString(metadata?.registrationId) ??
+      normalizeOptionalString(input.transactionData.registrationId);
+    let registrationData: FirebaseFirestore.DocumentData | null = null;
+
+    if (registrationId) {
+      const registrationSnapshot = await db
+        .collection(SESSION_REGISTRATIONS_COLLECTION)
+        .doc(registrationId)
+        .get();
+      registrationData = registrationSnapshot.exists ?
+        registrationSnapshot.data() || {} :
+        null;
+    }
+
+    const sessionId = normalizeOptionalString(metadata?.sessionId) ??
+      normalizeOptionalString(input.transactionData.sessionId) ??
+      normalizeOptionalString(registrationData?.sessionId);
+    const session = await getSessionEmailSummary(sessionId);
+    const memberName =
+      normalizeOptionalString(input.transactionData.displayName) ??
+      (registrationData ? getRegistrationName(registrationData) : null) ??
+      normalizeOptionalString(input.transactionData.email) ??
+      "Club BZR member";
+    const amount = formatMoney(
+      getFiniteAmount(input.transactionData.amount) ??
+        registrationData?.paymentAmount,
+      input.transactionData.currency ?? registrationData?.paymentCurrency
+    );
+    const reference =
+      normalizeOptionalString(input.transactionData.reference) ??
+      normalizeOptionalString(input.transactionData.paymentReference) ??
+      input.transactionId;
+    const bodyParameters = [
+      memberName,
+      amount,
+      session.title,
+      reference,
+      `${APP_BASE_URL}/admin/payments`,
+    ];
+
+    await Promise.all(recipients.map(async (recipient) => {
+      const jobRef = db
+        .collection(MESSAGE_JOBS_COLLECTION)
+        .doc(`whatsapp_payment_success_admin_${input.transactionId}_${recipient}`);
+      const existingJobSnapshot = await jobRef.get();
+      const existingJob = existingJobSnapshot.data() || {};
+
+      if (existingJob.status === "sent") return;
+
+      const message: QueuedWhatsAppTemplate = {
+        to: recipient,
+        templateName: WHATSAPP_PAYMENT_SUCCESS_ADMIN_TEMPLATE_NAME,
+        languageCode: WHATSAPP_TEMPLATE_LANGUAGE,
+        bodyParameters,
+        tag: "payment_success_admin",
+        metadata: {
+          sessionId,
+          registrationId,
+          transactionId: input.transactionId,
+          reference,
+        },
+      };
+
+      await jobRef.set(
+        {
+          channel: "whatsapp",
+          type: "payment_success_admin",
+          tag: message.tag,
+          status: "sending",
+          from: CLUB_BZR_WHATSAPP_BUSINESS_NUMBER,
+          to: recipient,
+          templateName: message.templateName,
+          languageCode: message.languageCode,
+          bodyParameters: message.bodyParameters,
+          metadata: message.metadata,
+          attempts: admin.firestore.FieldValue.increment(1),
+          updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+          createdAt: existingJobSnapshot.exists && existingJob.createdAt ?
+            existingJob.createdAt :
+            admin.firestore.FieldValue.serverTimestamp(),
+        },
+        {merge: true}
+      );
+
+      try {
+        const responseData = await sendWhatsAppTemplate(message);
+        const messageId = getWhatsAppMessageId(responseData);
+        const providerMessageIdsPatch = messageId ? {
+          providerMessageIds: admin.firestore.FieldValue.arrayUnion(messageId),
+        } : {};
+
+        await jobRef.set(
+          {
+            status: "sent",
+            provider: "meta_whatsapp_cloud_api",
+            providerMessageId: messageId,
+            ...providerMessageIdsPatch,
+            providerResponse: serializeForCallable(responseData),
+            sentAt: admin.firestore.FieldValue.serverTimestamp(),
+            updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+          },
+          {merge: true}
+        );
+      } catch (error) {
+        const errorMessage = getErrorMessage(error);
+        await jobRef.set(
+          {
+            status: "failed",
+            lastError: errorMessage,
+            failedAt: admin.firestore.FieldValue.serverTimestamp(),
+            updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+          },
+          {merge: true}
+        );
+        logger.error("Admin payment WhatsApp failed", {
+          transactionId: input.transactionId,
+          recipientLast4: recipient.slice(-4),
+          errorMessage,
+        });
+      }
+    }));
+  } catch (error) {
+    logger.error("Admin payment WhatsApp notification failed", {
+      transactionId: input.transactionId,
+      errorMessage: getErrorMessage(error),
+    });
   }
 }
 
@@ -1917,6 +2083,64 @@ export const adminSendSessionConfirmationWhatsApp = onCall(
       registrationId,
       registrationData,
       force: data.force === true,
+    });
+  }
+);
+
+export const notifyAdminsOnSessionPaymentCreated = onDocumentCreated(
+  {
+    document: `${SESSION_PAYMENT_TRANSACTIONS_COLLECTION}/{transactionId}`,
+    secrets: [whatsappAccessToken, whatsappPhoneNumberId],
+  },
+  async (event) => {
+    const transactionData = event.data?.data();
+    const transactionId = event.params.transactionId;
+
+    if (!transactionData) {
+      logger.warn("Payment success notification skipped: missing data", {
+        transactionId,
+      });
+      return;
+    }
+
+    if (getFallbackPaymentStatus(transactionData.status) !== "completed") {
+      return;
+    }
+
+    await queueAdminPaymentSuccessWhatsApp({
+      transactionId,
+      transactionData,
+    });
+  }
+);
+
+export const notifyAdminsOnSessionPaymentSuccess = onDocumentUpdated(
+  {
+    document: `${SESSION_PAYMENT_TRANSACTIONS_COLLECTION}/{transactionId}`,
+    secrets: [whatsappAccessToken, whatsappPhoneNumberId],
+  },
+  async (event) => {
+    const beforeData = event.data?.before.data();
+    const afterData = event.data?.after.data();
+    const transactionId = event.params.transactionId;
+
+    if (!beforeData || !afterData) {
+      logger.warn("Payment success notification skipped: missing update data", {
+        transactionId,
+      });
+      return;
+    }
+
+    const beforeStatus = getFallbackPaymentStatus(beforeData.status);
+    const afterStatus = getFallbackPaymentStatus(afterData.status);
+
+    if (beforeStatus === "completed" || afterStatus !== "completed") {
+      return;
+    }
+
+    await queueAdminPaymentSuccessWhatsApp({
+      transactionId,
+      transactionData: afterData,
     });
   }
 );
