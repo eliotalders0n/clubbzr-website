@@ -18,7 +18,7 @@ import {
   VStack,
 } from '@chakra-ui/react'
 import { motion } from 'framer-motion'
-import { Eye, Pencil, Search, SlidersHorizontal, UserRound, X } from 'lucide-react'
+import { Eye, Pencil, Search, Shuffle, SlidersHorizontal, UserRound, X } from 'lucide-react'
 
 import { Header } from '@/components/layout/Header'
 import { Footer } from '@/components/layout/Footer'
@@ -38,6 +38,8 @@ const MotionBox = motion.create(Box)
 
 const CARD_RATIOS = ['4 / 5', '1 / 1', '3 / 4', '5 / 4', '2 / 3', '4 / 3']
 const MOBILE_DISCOVERY_MEDIUMS: ArtMedium[] = ['painting', 'photography', 'digital', 'illustration']
+const createDiscoverySeed = () =>
+  `${DISCOVERY_SHUFFLE_SEED}:${Date.now()}:${Math.random().toString(36).slice(2)}`
 
 function ArtworkCard({ artwork, index }: { artwork: DiscoveryArtwork; index: number }) {
   return (
@@ -155,6 +157,7 @@ export default function Artists() {
   const [genreFilter, setGenreFilter] = useState('')
   const [locationFilter, setLocationFilter] = useState('')
   const [dateFilter, setDateFilter] = useState('')
+  const [discoverySeed, setDiscoverySeed] = useState(createDiscoverySeed)
   const { firebaseUser, initialized } = useAuth()
 
   const {
@@ -226,11 +229,10 @@ export default function Artists() {
     })
 
     return [...filtered].sort((a, b) =>
-      hasFilters
-        ? b.createdAtMs - a.createdAtMs
-        : stableScore(a.id, DISCOVERY_SHUFFLE_SEED) - stableScore(b.id, DISCOVERY_SHUFFLE_SEED)
+      stableScore(a.id, discoverySeed) - stableScore(b.id, discoverySeed) ||
+      b.createdAtMs - a.createdAtMs
     )
-  }, [allArtworks, dateFilter, genreFilter, hasFilters, locationFilter, search, selectedMediums])
+  }, [allArtworks, dateFilter, discoverySeed, genreFilter, locationFilter, search, selectedMediums])
 
   const hasCurrentArtistProfile = !!currentArtist
   const artistProfileHref = hasCurrentArtistProfile && firebaseUser?.uid ? `/artists/${firebaseUser.uid}` : '/artists/create'
@@ -489,6 +491,21 @@ export default function Artists() {
                       {visibleArtworks.length} work{visibleArtworks.length === 1 ? '' : 's'}
                     </Text>
                   </HStack>
+                  <Button
+                    onClick={() => setDiscoverySeed(createDiscoverySeed())}
+                    size="sm"
+                    h="38px"
+                    px={4}
+                    bg="whiteAlpha.50"
+                    color="whiteAlpha.800"
+                    border="1px solid"
+                    borderColor="whiteAlpha.200"
+                    borderRadius="full"
+                    _hover={{ bg: 'whiteAlpha.100', color: 'white' }}
+                  >
+                    <Shuffle size={16} />
+                    Shuffle
+                  </Button>
                   {hasFilters && (
                     <Button
                       onClick={clearFilters}
