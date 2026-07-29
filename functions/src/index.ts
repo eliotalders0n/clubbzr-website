@@ -423,6 +423,82 @@ function getConfiguredLencoAccountId(): string | null {
     normalizeOptionalString(process.env.LENCO_ACCOUNT_ID);
 }
 
+function getConfiguredLencoAccountNumber(): string | null {
+  return normalizeOptionalString(process.env.LENCO_DEBIT_ACCOUNT_NUMBER) ??
+    normalizeOptionalString(process.env.LENCO_ACCOUNT_NUMBER) ??
+    normalizeOptionalString(process.env.LENCO_DEBIT_TILL_NUMBER) ??
+    normalizeOptionalString(process.env.LENCO_TILL_NUMBER);
+}
+
+function getConfiguredLencoAccountName(): string | null {
+  return normalizeOptionalString(process.env.LENCO_DEBIT_ACCOUNT_NAME) ??
+    normalizeOptionalString(process.env.LENCO_ACCOUNT_NAME);
+}
+
+function getRecord(value: unknown): Record<string, unknown> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return {};
+  }
+
+  return value as Record<string, unknown>;
+}
+
+function getLencoAccountDetails(
+  account: Record<string, unknown>
+): Record<string, unknown> {
+  return getRecord(account.details);
+}
+
+function getLencoAccountId(account: Record<string, unknown>): string | null {
+  return normalizeOptionalString(account.id) ??
+    normalizeOptionalString(account._id);
+}
+
+function getLencoAccountDisplayName(
+  account: Record<string, unknown>
+): string | null {
+  const details = getLencoAccountDetails(account);
+  return normalizeOptionalString(details.accountName) ??
+    normalizeOptionalString(account.accountName) ??
+    normalizeOptionalString(account.name);
+}
+
+function getLencoAccountNumber(
+  account: Record<string, unknown>
+): string | null {
+  const details = getLencoAccountDetails(account);
+  return normalizeOptionalString(details.tillNumber) ??
+    normalizeOptionalString(details.accountNumber) ??
+    normalizeOptionalString(account.tillNumber) ??
+    normalizeOptionalString(account.accountNumber) ??
+    normalizeOptionalString(account.number) ??
+    normalizeOptionalString(account.accountNo);
+}
+
+function getLencoAccountCurrency(
+  account: Record<string, unknown>
+): string | null {
+  const details = getLencoAccountDetails(account);
+  return normalizeOptionalString(account.currency) ??
+    normalizeOptionalString(details.currency);
+}
+
+function isLencoAccountActive(account: Record<string, unknown>): boolean {
+  const status = normalizeOptionalString(account.status)?.toLowerCase();
+  return status !== "closed" && status !== "deleted" &&
+    status !== "disabled";
+}
+
+function summarizeLencoAccounts(accounts: Record<string, unknown>[]): string {
+  return accounts.map((account) => {
+    const id = getLencoAccountId(account) ?? "no-id";
+    const name = getLencoAccountDisplayName(account) ?? "Unnamed account";
+    const number = getLencoAccountNumber(account) ?? "no-number";
+    const currency = getLencoAccountCurrency(account) ?? "no-currency";
+    return `${name} / ${number} / ${currency} / ${id}`;
+  }).join("; ");
+}
+
 function normalizeReturnStatus(value: unknown): "pending" | "completed" | "cancelled" {
   const status = String(value ?? "pending").trim().toLowerCase();
   if (status === "completed" || status === "cancelled") return status;
@@ -1411,8 +1487,15 @@ async function resolveLencoDebitAccountId(
   secret: string,
   currency: string
 ): Promise<string> {
-  const configuredAccountId = getConfiguredLencoAccountId();
-  if (configuredAccountId) return configuredAccountId;
+  const configuredAccountNumber = getConfiguredLencoAccountNumber();
+  const configuredAccountName = getConfiguredLencoAccountName();
+  const shouldResolveFromAccounts =
+    Boolean(configuredAccountNumber || configuredAccountName);
+
+  if (!shouldResolveFromAccounts) {
+    const configuredAccountId = getConfiguredLencoAccountId();
+    if (configuredAccountId) return configuredAccountId;
+  }
 
   const responseData = await lencoRequest(
     "/accounts",
@@ -1424,16 +1507,48 @@ async function resolveLencoDebitAccountId(
     [];
 
   const normalizedCurrency = normalizeCurrency(currency);
-  const activeAccounts = accounts.filter((account) => {
-    const status = normalizeOptionalString(account.status)?.toLowerCase();
-    return status !== "closed" && status !== "deleted" && status !== "disabled";
-  });
-  const matchingAccount = activeAccounts.find((account) =>
-    normalizeOptionalString(account.currency)?.toUpperCase() ===
-      normalizedCurrency
-  ) ?? activeAccounts[0];
-  const accountId = normalizeOptionalString(matchingAccount?.id) ??
-    normalizeOptionalString(matchingAccount?._id);
+  const activeAccounts = accounts.filter(isLencoAccountActive);
+  const matchesCurrency = (account: Record<string, unknown>) => {
+    const accountCurrency = getLencoAccountCurrency(account);
+    return !accountCurrency || accountCurrency.toUpperCase() ===
+      normalizedCurrency;
+  };
+  const accountNumber = configuredAccountNumber?.replace(/\s/g, "");
+  const accountName = configuredAccountName?.toLowerCase();
+  const matchingConfiguredAccount = accountNumber ?
+    activeAccounts.find((account) =>
+      getLencoAccountNumber(account)?.replace(/\s/g, "") === accountNumber &&
+      matchesCurrency(account)
+    ) ??
+    activeAccounts.find((account) =>
+      getLencoAccountNumber(account)?.replace(/\s/g, "") === accountNumber
+    ) :
+    accountName ?
+      activeAccounts.find((account) =>
+        getLencoAccountDisplayName(account)?.toLowerCase() === accountName &&
+        matchesCurrency(account)
+      ) ??
+      activeAccounts.find((account) =>
+        getLencoAccountDisplayName(account)?.toLowerCase().includes(accountName)
+      ) :
+      null;
+  const matchingAccount = matchingConfiguredAccount ??
+    activeAccounts.find(matchesCurrency) ??
+    activeAccounts[0];
+  const accountId = getLencoAccountId(matchingAccount ?? {});
+
+  if (shouldResolveFromAccounts && !matchingConfiguredAccount) {
+    throw new HttpsError(
+      "failed-precondition",
+      [
+        "Configured Lenco debit account was not returned by /accounts.",
+        configuredAccountNumber ?
+          `Expected account number ${configuredAccountNumber}.` :
+          `Expected account name ${configuredAccountName}.`,
+        `Returned accounts: ${summarizeLencoAccounts(activeAccounts)}`,
+      ].join(" ")
+    );
+  }
 
   if (!accountId) {
     throw new HttpsError(

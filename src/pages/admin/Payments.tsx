@@ -17,12 +17,14 @@ import {
 } from '@chakra-ui/react'
 import {
   AlertTriangle,
-  Banknote,
+  ChevronLeft,
+  ChevronRight,
+  Plus,
   RefreshCw,
   RotateCcw,
+  Search,
   Send,
-  TrendingUp,
-  Wallet,
+  X,
 } from 'lucide-react'
 
 import { AdminLayout } from '@/components/layout/AdminLayout'
@@ -40,6 +42,15 @@ import type { MobileMoneyOperator } from '../../../lib/lenco'
 import type { Session, SessionRegistration, User as FirestoreUser } from '../../../lib/schema'
 
 type PaymentsTab = 'overview' | 'collections' | 'reconciliation' | 'withdrawals' | 'returns'
+type PaymentActionModal = 'collection' | 'withdrawal' | 'return' | null
+
+interface ReconciliationListItem {
+  id: string
+  title: string
+  subtitle: string
+  tone: 'orange' | 'red'
+  issue: Record<string, unknown>
+}
 
 interface CollectionForm {
   sessionId: string
@@ -84,6 +95,13 @@ const selectStyle: CSSProperties = {
   outline: 'none',
 }
 
+const compactSelectStyle: CSSProperties = {
+  ...selectStyle,
+  width: 'auto',
+  height: '42px',
+  minWidth: '108px',
+}
+
 const tabs: { value: PaymentsTab; label: string }[] = [
   { value: 'overview', label: 'Overview' },
   { value: 'collections', label: 'Collections' },
@@ -93,6 +111,21 @@ const tabs: { value: PaymentsTab; label: string }[] = [
 ]
 
 const DASHBOARD_LOAD_TIMEOUT_MS = 18000
+const PAGE_SIZE_OPTIONS = [10, 25, 50]
+const initialTabText: Record<PaymentsTab, string> = {
+  overview: '',
+  collections: '',
+  reconciliation: '',
+  withdrawals: '',
+  returns: '',
+}
+const initialTabPage: Record<PaymentsTab, number> = {
+  overview: 1,
+  collections: 1,
+  reconciliation: 1,
+  withdrawals: 1,
+  returns: 1,
+}
 
 const emptyCollectionForm: CollectionForm = {
   sessionId: '',
@@ -143,6 +176,46 @@ const getUserPaymentLabel = (user: FirestoreUser): string => {
 
 const formatMoney = (amount: unknown, currency = 'ZMW'): string =>
   `${currency} ${asNumber(amount).toFixed(2)}`
+
+const formatCount = (value: unknown): string =>
+  new Intl.NumberFormat('en-ZM').format(asNumber(value))
+
+const normalizeSearch = (value: string): string =>
+  value.trim().toLowerCase()
+
+const flattenSearchValue = (value: unknown): string => {
+  if (value === null || value === undefined) return ''
+  if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') {
+    return String(value)
+  }
+  if (Array.isArray(value)) {
+    return value.map((entry) => flattenSearchValue(entry)).join(' ')
+  }
+  if (typeof value === 'object') {
+    return Object.values(value as Record<string, unknown>).map((entry) => flattenSearchValue(entry)).join(' ')
+  }
+  return ''
+}
+
+const recordMatchesSearch = (
+  record: Record<string, unknown>,
+  query: string,
+  fields?: string[]
+): boolean => {
+  const normalizedQuery = normalizeSearch(query)
+  if (!normalizedQuery) return true
+
+  const haystack = fields?.length
+    ? fields.map((field) => flattenSearchValue(record[field])).join(' ')
+    : flattenSearchValue(record)
+
+  return haystack.toLowerCase().includes(normalizedQuery)
+}
+
+const pageItems = <T,>(items: T[], page: number, pageSize: number): T[] => {
+  const start = (Math.max(page, 1) - 1) * pageSize
+  return items.slice(start, start + pageSize)
+}
 
 const withTimeout = <T,>(promise: Promise<T>, timeoutMs: number, message: string): Promise<T> =>
   new Promise((resolve, reject) => {
@@ -205,39 +278,6 @@ function StatusBadge({ status }: { status: unknown }) {
   )
 }
 
-function MetricCard({
-  label,
-  value,
-  helper,
-  icon,
-}: {
-  label: string
-  value: string
-  helper: string
-  icon: React.ReactNode
-}) {
-  return (
-    <Box p={5} bg="whiteAlpha.50" border="1px solid" borderColor="whiteAlpha.100" borderRadius="xl">
-      <Flex justify="space-between" gap={4} align="flex-start">
-        <Box minW={0}>
-          <Text color="whiteAlpha.500" fontSize="xs" textTransform="uppercase" letterSpacing="0.12em">
-            {label}
-          </Text>
-          <Text color="white" fontSize={{ base: '2xl', xl: 'xl', '2xl': '2xl' }} fontWeight="bold" mt={2} lineHeight="1.15">
-            {value}
-          </Text>
-          <Text color="whiteAlpha.500" fontSize="sm" mt={1}>
-            {helper}
-          </Text>
-        </Box>
-        <Flex boxSize="42px" borderRadius="full" bg="brand.500/16" color="brand.200" align="center" justify="center" flexShrink={0}>
-          {icon}
-        </Flex>
-      </Flex>
-    </Box>
-  )
-}
-
 function AmountCell({
   label,
   value,
@@ -259,6 +299,32 @@ function AmountCell({
   )
 }
 
+function getReconciliationItems(dashboard: AdminPaymentDashboard): ReconciliationListItem[] {
+  return [
+    ...dashboard.reconciliation.transactionStatusIssues.map((issue, index) => ({
+      id: `transaction-${index}`,
+      title: 'Paid transaction needs signup update',
+      subtitle: asString(issue.reference),
+      tone: 'orange' as const,
+      issue,
+    })),
+    ...dashboard.reconciliation.registrationPaymentIssues.map((issue, index) => ({
+      id: `registration-${index}`,
+      title: 'Paid signup missing completed transaction',
+      subtitle: asString(issue.reference) || 'No payment reference',
+      tone: 'red' as const,
+      issue,
+    })),
+    ...dashboard.reconciliation.returnIssues.map((issue, index) => ({
+      id: `return-${index}`,
+      title: 'Return needs transaction review',
+      subtitle: asString(issue.reference) || 'No payment reference',
+      tone: 'red' as const,
+      issue,
+    })),
+  ]
+}
+
 function Panel({
   title,
   action,
@@ -277,6 +343,243 @@ function Panel({
         {action}
       </Flex>
       <Box p={5}>{children}</Box>
+    </Box>
+  )
+}
+
+function TabActionHeader({
+  title,
+  description,
+  actionLabel,
+  icon,
+  onAction,
+}: {
+  title: string
+  description: string
+  actionLabel?: string
+  icon?: React.ReactNode
+  onAction?: () => void
+}) {
+  return (
+    <Flex
+      justify="space-between"
+      align={{ base: 'stretch', md: 'center' }}
+      gap={4}
+      direction={{ base: 'column', md: 'row' }}
+    >
+      <Box minW={0}>
+        <Heading as="h2" size="md" color="white">
+          {title}
+        </Heading>
+        <Text color="whiteAlpha.600" mt={1}>
+          {description}
+        </Text>
+      </Box>
+      {actionLabel && onAction && (
+        <Button
+          h="42px"
+          px={5}
+          borderRadius="full"
+          bg="brand.500"
+          color="white"
+          _hover={{ bg: 'brand.600' }}
+          onClick={onAction}
+          flexShrink={0}
+        >
+          {icon || <Plus size={16} />}
+          {actionLabel}
+        </Button>
+      )}
+    </Flex>
+  )
+}
+
+function ListControls({
+  searchValue,
+  onSearchChange,
+  pageSize,
+  onPageSizeChange,
+  total,
+  placeholder,
+}: {
+  searchValue: string
+  onSearchChange: (value: string) => void
+  pageSize: number
+  onPageSizeChange: (value: number) => void
+  total: number
+  placeholder: string
+}) {
+  return (
+    <Flex
+      justify="space-between"
+      align={{ base: 'stretch', md: 'center' }}
+      gap={3}
+      direction={{ base: 'column', md: 'row' }}
+      mb={4}
+    >
+      <Box position="relative" flex="1" maxW={{ md: '520px' }}>
+        <Box position="absolute" left="14px" top="50%" transform="translateY(-50%)" color="whiteAlpha.500" pointerEvents="none">
+          <Search size={16} />
+        </Box>
+        <Input
+          value={searchValue}
+          onChange={(event) => onSearchChange(event.target.value)}
+          placeholder={placeholder}
+          h="42px"
+          pl="42px"
+          bg="whiteAlpha.50"
+          borderColor="whiteAlpha.200"
+          color="white"
+        />
+      </Box>
+      <HStack gap={3} justify={{ base: 'space-between', md: 'flex-end' }}>
+        <Text color="whiteAlpha.500" fontSize="sm" whiteSpace="nowrap">
+          {formatCount(total)} records
+        </Text>
+        <select
+          value={pageSize}
+          onChange={(event) => onPageSizeChange(Number(event.target.value))}
+          style={compactSelectStyle}
+        >
+          {PAGE_SIZE_OPTIONS.map((option) => (
+            <option key={option} value={option}>
+              {option} / page
+            </option>
+          ))}
+        </select>
+      </HStack>
+    </Flex>
+  )
+}
+
+function PaginationFooter({
+  page,
+  pageSize,
+  total,
+  onPageChange,
+}: {
+  page: number
+  pageSize: number
+  total: number
+  onPageChange: (page: number) => void
+}) {
+  const totalPages = Math.max(Math.ceil(total / pageSize), 1)
+  const currentPage = Math.min(Math.max(page, 1), totalPages)
+  const start = total === 0 ? 0 : (currentPage - 1) * pageSize + 1
+  const end = Math.min(currentPage * pageSize, total)
+
+  return (
+    <Flex
+      justify="space-between"
+      align={{ base: 'stretch', md: 'center' }}
+      gap={3}
+      direction={{ base: 'column', md: 'row' }}
+      pt={4}
+      mt={4}
+      borderTop="1px solid"
+      borderColor="whiteAlpha.100"
+    >
+      <Text color="whiteAlpha.500" fontSize="sm">
+        Showing {formatCount(start)}-{formatCount(end)} of {formatCount(total)}
+      </Text>
+      <HStack gap={2} justify={{ base: 'space-between', md: 'flex-end' }}>
+        <Button
+          h="36px"
+          px={3}
+          borderRadius="full"
+          bg="whiteAlpha.100"
+          color="white"
+          _hover={{ bg: 'whiteAlpha.200' }}
+          disabled={currentPage <= 1}
+          onClick={() => onPageChange(currentPage - 1)}
+        >
+          <ChevronLeft size={16} />
+          Previous
+        </Button>
+        <Text color="whiteAlpha.600" fontSize="sm" minW="78px" textAlign="center">
+          {currentPage} / {totalPages}
+        </Text>
+        <Button
+          h="36px"
+          px={3}
+          borderRadius="full"
+          bg="whiteAlpha.100"
+          color="white"
+          _hover={{ bg: 'whiteAlpha.200' }}
+          disabled={currentPage >= totalPages}
+          onClick={() => onPageChange(currentPage + 1)}
+        >
+          Next
+          <ChevronRight size={16} />
+        </Button>
+      </HStack>
+    </Flex>
+  )
+}
+
+function PaymentModal({
+  title,
+  description,
+  onClose,
+  children,
+}: {
+  title: string
+  description?: string
+  onClose: () => void
+  children: React.ReactNode
+}) {
+  return (
+    <Box
+      position="fixed"
+      inset={0}
+      zIndex={1000}
+      bg="blackAlpha.700"
+      backdropFilter="blur(10px)"
+      display="flex"
+      alignItems="center"
+      justifyContent="center"
+      p={4}
+      onClick={onClose}
+    >
+      <Box
+        width="100%"
+        maxW="820px"
+        maxH="calc(100vh - 48px)"
+        overflowY="auto"
+        bg="#151515"
+        border="1px solid"
+        borderColor="whiteAlpha.200"
+        borderRadius="xl"
+        boxShadow="0 24px 80px rgba(0,0,0,0.45)"
+        onClick={(event) => event.stopPropagation()}
+      >
+        <Flex px={5} py={4} justify="space-between" gap={4} align="flex-start" borderBottom="1px solid" borderColor="whiteAlpha.100">
+          <Box minW={0}>
+            <Heading as="h2" size="md" color="white">
+              {title}
+            </Heading>
+            {description && (
+              <Text color="whiteAlpha.600" fontSize="sm" mt={1}>
+                {description}
+              </Text>
+            )}
+          </Box>
+          <Button
+            aria-label="Close modal"
+            boxSize="36px"
+            minW="36px"
+            p={0}
+            borderRadius="full"
+            bg="whiteAlpha.100"
+            color="white"
+            _hover={{ bg: 'whiteAlpha.200' }}
+            onClick={onClose}
+          >
+            <X size={18} />
+          </Button>
+        </Flex>
+        <Box p={5}>{children}</Box>
+      </Box>
     </Box>
   )
 }
@@ -363,6 +666,10 @@ export default function Payments() {
   const [syncingKey, setSyncingKey] = useState('')
   const [message, setMessage] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
+  const [actionModal, setActionModal] = useState<PaymentActionModal>(null)
+  const [searchByTab, setSearchByTab] = useState<Record<PaymentsTab, string>>(initialTabText)
+  const [pageByTab, setPageByTab] = useState<Record<PaymentsTab, number>>(initialTabPage)
+  const [pageSize, setPageSize] = useState(10)
   const [collectionForm, setCollectionForm] = useState<CollectionForm>(emptyCollectionForm)
   const [withdrawalForm, setWithdrawalForm] = useState<WithdrawalForm>(emptyWithdrawalForm)
   const [returnForm, setReturnForm] = useState<ReturnForm>(emptyReturnForm)
@@ -382,6 +689,88 @@ export default function Payments() {
   const completedTransactions = (dashboard?.localTransactions || []).filter((transaction) =>
     String(transaction.status || '').toLowerCase() === 'completed'
   )
+  const activeSearch = searchByTab[activeTab]
+  const activePage = pageByTab[activeTab]
+  const reconciliationItems = useMemo(
+    () => dashboard ? getReconciliationItems(dashboard) : [],
+    [dashboard]
+  )
+  const filteredOverviewSessions = useMemo(
+    () => (dashboard?.sessions || []).filter((session) =>
+      recordMatchesSearch(session as unknown as Record<string, unknown>, searchByTab.overview, ['title', 'sessionId', 'currency'])
+    ),
+    [dashboard?.sessions, searchByTab.overview]
+  )
+  const filteredCollections = useMemo(
+    () => (dashboard?.localTransactions || []).filter((record) =>
+      recordMatchesSearch(record, searchByTab.collections, [
+        'displayName',
+        'email',
+        'phone',
+        'reference',
+        'transactionId',
+        'status',
+        'gatewayStatus',
+        'failureReason',
+      ])
+    ),
+    [dashboard?.localTransactions, searchByTab.collections]
+  )
+  const filteredReconciliation = useMemo(
+    () => reconciliationItems.filter((item) => {
+      const query = normalizeSearch(searchByTab.reconciliation)
+      if (!query) return true
+      return `${item.title} ${item.subtitle} ${flattenSearchValue(item.issue)}`.toLowerCase().includes(query)
+    }),
+    [reconciliationItems, searchByTab.reconciliation]
+  )
+  const filteredWithdrawals = useMemo(
+    () => (dashboard?.withdrawals || []).filter((record) =>
+      recordMatchesSearch(record, searchByTab.withdrawals, [
+        'recipientDisplayName',
+        'recipientEmail',
+        'phone',
+        'operator',
+        'reference',
+        'lencoReference',
+        'transferId',
+        'withdrawalId',
+        'status',
+        'failureReason',
+        'transferRequestError',
+        'message',
+      ])
+    ),
+    [dashboard?.withdrawals, searchByTab.withdrawals]
+  )
+  const filteredReturns = useMemo(
+    () => (dashboard?.returns || []).filter((record) =>
+      recordMatchesSearch(record, searchByTab.returns, [
+        'reason',
+        'reference',
+        'transactionId',
+        'externalReference',
+        'status',
+        'method',
+        'notes',
+      ])
+    ),
+    [dashboard?.returns, searchByTab.returns]
+  )
+
+  const setActiveSearch = (value: string) => {
+    setSearchByTab((previous) => ({ ...previous, [activeTab]: value }))
+    setPageByTab((previous) => ({ ...previous, [activeTab]: 1 }))
+  }
+
+  const setActivePage = (page: number) => {
+    setPageByTab((previous) => ({ ...previous, [activeTab]: Math.max(page, 1) }))
+  }
+
+  const handlePageSizeChange = (value: number) => {
+    setPageSize(value)
+    setPageByTab(initialTabPage)
+  }
 
   const loadDashboard = useCallback(async () => {
     setLoading(true)
@@ -474,6 +863,7 @@ export default function Payments() {
         currency: previous.currency,
       }))
       await loadDashboard()
+      setActionModal(null)
     } catch (collectError) {
       setError(collectError instanceof Error ? collectError.message : 'Unable to start collection.')
     } finally {
@@ -506,6 +896,7 @@ export default function Payments() {
       setMessage(result.message || `Withdrawal ${result.status || 'started'}.`)
       setWithdrawalForm(emptyWithdrawalForm)
       await loadDashboard()
+      setActionModal(null)
     } catch (withdrawError) {
       setError(withdrawError instanceof Error ? withdrawError.message : 'Unable to start withdrawal.')
     } finally {
@@ -602,6 +993,7 @@ export default function Payments() {
       setMessage(result.returnId ? `Return recorded: ${result.returnId}` : 'Return recorded.')
       setReturnForm(emptyReturnForm)
       await loadDashboard()
+      setActionModal(null)
     } catch (returnError) {
       setError(returnError instanceof Error ? returnError.message : 'Unable to record return.')
     } finally {
@@ -609,12 +1001,10 @@ export default function Payments() {
     }
   }
 
-  const totals = dashboard?.totals
-
   return (
     <AdminLayout>
       <Box p={{ base: 4, md: 8 }}>
-        <Flex justify="space-between" align={{ base: 'stretch', md: 'center' }} gap={4} direction={{ base: 'column', md: 'row' }} mb={6}>
+        <Flex justify="space-between" align={{ base: 'stretch', lg: 'flex-start' }} gap={5} direction={{ base: 'column', lg: 'row' }} mb={6}>
           <Box>
             <Heading as="h1" color="white" fontSize={{ base: '2xl', md: '3xl' }}>
               Payments
@@ -623,7 +1013,13 @@ export default function Payments() {
               Firestore ledger for collections, reconciliation, withdrawals, and returns.
             </Text>
           </Box>
-          <HStack gap={3} flexWrap="wrap">
+          <Flex
+            direction={{ base: 'column', sm: 'row', lg: 'column' }}
+            gap={3}
+            align={{ base: 'stretch', sm: 'center', lg: 'flex-end' }}
+            width={{ base: '100%', lg: '420px' }}
+            marginLeft={{ lg: 'auto' }}
+          >
             <select value={sessionFilter} onChange={(event) => setSessionFilter(event.target.value)} style={selectStyle}>
               <option value="all">All sessions</option>
               {sessions.map((session) => (
@@ -632,11 +1028,11 @@ export default function Payments() {
                 </option>
               ))}
             </select>
-            <Button h="46px" px={5} borderRadius="xl" bg="brand.500" color="white" _hover={{ bg: 'brand.600' }} onClick={() => void loadDashboard()} disabled={loading}>
+            <Button h="46px" px={5} borderRadius="xl" bg="brand.500" color="white" _hover={{ bg: 'brand.600' }} onClick={() => void loadDashboard()} disabled={loading} alignSelf={{ base: 'stretch', sm: 'auto', lg: 'flex-end' }}>
               {loading ? <Spinner size="sm" /> : <RefreshCw size={16} />}
               Refresh
             </Button>
-          </HStack>
+          </Flex>
         </Flex>
 
         {(message || error) && (
@@ -644,14 +1040,6 @@ export default function Payments() {
             <Text color={error ? 'red.200' : 'green.200'}>{error || message}</Text>
           </Box>
         )}
-
-        <SimpleGrid columns={{ base: 1, md: 2, xl: 5 }} gap={4} mb={6}>
-          <MetricCard label="Total revenue" value={formatMoney(totals?.grossCollected)} helper="Gross paid online and external" icon={<TrendingUp size={20} />} />
-          <MetricCard label="Current balance" value={formatMoney(totals?.netCollected)} helper="After returns and withdrawals" icon={<Wallet size={20} />} />
-          <MetricCard label="Pending" value={formatMoney(totals?.pending)} helper="Collections awaiting confirmation" icon={<RefreshCw size={20} />} />
-          <MetricCard label="Withdrawals" value={formatMoney(totals?.recordedWithdrawals)} helper="Recorded withdrawal records" icon={<Banknote size={20} />} />
-          <MetricCard label="Returns" value={formatMoney(totals?.completedReturns)} helper="Completed return records" icon={<RotateCcw size={20} />} />
-        </SimpleGrid>
 
         <HStack gap={2} flexWrap="wrap" mb={6}>
           {tabs.map((tab) => (
@@ -721,8 +1109,16 @@ export default function Payments() {
                 </Panel>
 
                 <Panel title="Session Totals">
+                  <ListControls
+                    searchValue={activeSearch}
+                    onSearchChange={setActiveSearch}
+                    pageSize={pageSize}
+                    onPageSizeChange={handlePageSizeChange}
+                    total={filteredOverviewSessions.length}
+                    placeholder="Search sessions"
+                  />
                   <VStack align="stretch" gap={0}>
-                    {(dashboard?.sessions || []).map((session) => (
+                    {pageItems(filteredOverviewSessions, activePage, pageSize).map((session) => (
                       <Flex key={session.sessionId} py={4} gap={4} justify="space-between" align={{ base: 'stretch', lg: 'center' }} direction={{ base: 'column', lg: 'row' }} borderBottom="1px solid" borderColor="whiteAlpha.100">
                         <Box minW={0}>
                           <HStack gap={2} minW={0}>
@@ -742,8 +1138,14 @@ export default function Payments() {
                         </HStack>
                       </Flex>
                     ))}
-                    {dashboard?.sessions.length === 0 && <Text color="whiteAlpha.500">No session payment records yet.</Text>}
+                    {filteredOverviewSessions.length === 0 && <Text color="whiteAlpha.500">No session payment records found.</Text>}
                   </VStack>
+                  <PaginationFooter
+                    page={activePage}
+                    pageSize={pageSize}
+                    total={filteredOverviewSessions.length}
+                    onPageChange={setActivePage}
+                  />
                 </Panel>
 
                 <Panel title="Ledger Source">
@@ -756,130 +1158,101 @@ export default function Payments() {
 
             {dashboard && activeTab === 'collections' && (
               <>
-                <Panel title="Charge Attendee Mobile Money">
-                  <Text color="whiteAlpha.600" mb={4}>
-                    Collections request money from a member phone. The member must approve the mobile-money prompt before it becomes paid.
-                  </Text>
-                  <form onSubmit={handleCollect}>
-                    <SimpleGrid columns={{ base: 1, lg: 3 }} gap={3}>
-                      <select value={collectionForm.sessionId} onChange={(event) => handleCollectionSessionChange(event.target.value)} style={selectStyle} disabled={sessionsLoading || busy}>
-                        <option value="">{sessionsLoading ? 'Loading sessions...' : 'Select session'}</option>
-                        {sessions.map((session: Session) => (
-                          <option key={session.id} value={session.id}>{session.title}</option>
-                        ))}
-                      </select>
-                      <select value={collectionForm.registrationId} onChange={(event) => handleCollectionRegistrationChange(event.target.value)} style={selectStyle} disabled={!collectionForm.sessionId || busy}>
-                        <option value="">No linked registration</option>
-                        {filteredRegistrations.map((registration: SessionRegistration) => (
-                          <option key={registration.id} value={registration.id}>
-                            {registration.displayName || registration.email || registration.userId}
-                          </option>
-                        ))}
-                      </select>
-                      <select value={collectionForm.operator} onChange={(event) => setCollectionForm((previous) => ({ ...previous, operator: event.target.value as MobileMoneyOperator }))} style={selectStyle} disabled={busy}>
-                        <option value="airtel">Airtel Money</option>
-                        <option value="mtn">MTN MoMo</option>
-                        <option value="zamtel">Zamtel</option>
-                      </select>
-                      <Input value={collectionForm.phone} onChange={(event) => setCollectionForm((previous) => ({ ...previous, phone: event.target.value }))} placeholder="Mobile money number" h="46px" bg="whiteAlpha.50" borderColor="whiteAlpha.200" color="white" disabled={busy} />
-                      <Input value={collectionForm.amount} onChange={(event) => setCollectionForm((previous) => ({ ...previous, amount: event.target.value }))} placeholder={selectedCollectionSession?.price ? String(selectedCollectionSession.price) : 'Amount'} h="46px" bg="whiteAlpha.50" borderColor="whiteAlpha.200" color="white" disabled={busy} />
-                      <Input value={collectionForm.currency} onChange={(event) => setCollectionForm((previous) => ({ ...previous, currency: event.target.value.toUpperCase() }))} placeholder="Currency" h="46px" bg="whiteAlpha.50" borderColor="whiteAlpha.200" color="white" disabled={busy} />
-                    </SimpleGrid>
-                    <Textarea value={collectionForm.note} onChange={(event) => setCollectionForm((previous) => ({ ...previous, note: event.target.value }))} placeholder="Admin note" mt={3} bg="whiteAlpha.50" borderColor="whiteAlpha.200" color="white" disabled={busy} />
-                    <Button type="submit" mt={4} h="46px" px={5} borderRadius="xl" bg="brand.500" color="white" _hover={{ bg: 'brand.600' }} disabled={busy}>
-                      {busy ? <Spinner size="sm" /> : <Send size={16} />}
-                      Send Payment Prompt
-                    </Button>
-                  </form>
-                </Panel>
+                <TabActionHeader
+                  title="Collections"
+                  description="Request mobile-money payments from attendees and sync local collection records."
+                  actionLabel="New Collection"
+                  icon={<Send size={16} />}
+                  onAction={() => setActionModal('collection')}
+                />
 
                 <Panel title="Local Collections">
+                  <ListControls
+                    searchValue={activeSearch}
+                    onSearchChange={setActiveSearch}
+                    pageSize={pageSize}
+                    onPageSizeChange={handlePageSizeChange}
+                    total={filteredCollections.length}
+                    placeholder="Search collections"
+                  />
                   <VStack align="stretch" gap={0}>
-                    {(dashboard?.localTransactions || []).map((record) => {
+                    {pageItems(filteredCollections, activePage, pageSize).map((record) => {
                       const key = asString(record.reference) || asString(record.transactionId) || asString(record.id)
                       return <PaymentRow key={key} record={record} onSync={handleSync} syncing={syncingKey === key} />
                     })}
-                    {dashboard?.localTransactions.length === 0 && <Text color="whiteAlpha.500">No local collections yet.</Text>}
+                    {filteredCollections.length === 0 && <Text color="whiteAlpha.500">No local collections found.</Text>}
                   </VStack>
+                  <PaginationFooter
+                    page={activePage}
+                    pageSize={pageSize}
+                    total={filteredCollections.length}
+                    onPageChange={setActivePage}
+                  />
                 </Panel>
               </>
             )}
 
             {dashboard && activeTab === 'reconciliation' && (
               <Panel title={`Reconciliation Issues (${dashboard?.reconciliation.issueCount || 0})`}>
+                <ListControls
+                  searchValue={activeSearch}
+                  onSearchChange={setActiveSearch}
+                  pageSize={pageSize}
+                  onPageSizeChange={handlePageSizeChange}
+                  total={filteredReconciliation.length}
+                  placeholder="Search reconciliation issues"
+                />
                 <VStack align="stretch" gap={4}>
-                  {dashboard?.reconciliation.transactionStatusIssues.map((issue, index) => (
-                    <Box key={`mismatch-${index}`} p={4} bg="orange.500/10" border="1px solid" borderColor="orange.400/30" borderRadius="xl">
+                  {pageItems(filteredReconciliation, activePage, pageSize).map((item) => (
+                    <Box
+                      key={item.id}
+                      p={4}
+                      bg={item.tone === 'orange' ? 'orange.500/10' : 'red.500/10'}
+                      border="1px solid"
+                      borderColor={item.tone === 'orange' ? 'orange.400/30' : 'red.400/30'}
+                      borderRadius="xl"
+                    >
                       <HStack gap={2}>
-                        <AlertTriangle size={16} color="#fed7aa" />
-                        <Text color="orange.100" fontWeight="semibold">Paid transaction needs signup update</Text>
+                        <AlertTriangle size={16} color={item.tone === 'orange' ? '#fed7aa' : '#fca5a5'} />
+                        <Text color={item.tone === 'orange' ? 'orange.100' : 'red.100'} fontWeight="semibold">
+                          {item.title}
+                        </Text>
                       </HStack>
-                      <Text color="whiteAlpha.600" fontSize="sm" mt={1}>{asString(issue.reference)}</Text>
+                      <Text color="whiteAlpha.600" fontSize="sm" mt={1}>{item.subtitle}</Text>
                     </Box>
                   ))}
-                  {dashboard?.reconciliation.registrationPaymentIssues.map((issue, index) => (
-                    <Box key={`registration-${index}`} p={4} bg="red.500/10" border="1px solid" borderColor="red.400/30" borderRadius="xl">
-                      <HStack gap={2}>
-                        <AlertTriangle size={16} color="#fca5a5" />
-                        <Text color="red.100" fontWeight="semibold">Paid signup missing completed transaction</Text>
-                      </HStack>
-                      <Text color="whiteAlpha.600" fontSize="sm" mt={1}>{asString(issue.reference) || 'No payment reference'}</Text>
-                    </Box>
-                  ))}
-                  {dashboard?.reconciliation.returnIssues.map((issue, index) => (
-                    <Box key={`return-${index}`} p={4} bg="red.500/10" border="1px solid" borderColor="red.400/30" borderRadius="xl">
-                      <HStack gap={2}>
-                        <AlertTriangle size={16} color="#fca5a5" />
-                        <Text color="red.100" fontWeight="semibold">Return needs transaction review</Text>
-                      </HStack>
-                      <Text color="whiteAlpha.600" fontSize="sm" mt={1}>{asString(issue.reference) || 'No payment reference'}</Text>
-                    </Box>
-                  ))}
-                  {dashboard?.reconciliation.issueCount === 0 && <Text color="whiteAlpha.500">No reconciliation issues in the loaded window.</Text>}
+                  {filteredReconciliation.length === 0 && <Text color="whiteAlpha.500">No reconciliation issues found.</Text>}
                 </VStack>
+                <PaginationFooter
+                  page={activePage}
+                  pageSize={pageSize}
+                  total={filteredReconciliation.length}
+                  onPageChange={setActivePage}
+                />
               </Panel>
             )}
 
             {dashboard && activeTab === 'withdrawals' && (
               <>
-                <Panel title="Withdraw to Admin">
-                  <Text color="whiteAlpha.600" mb={4}>
-                    Withdrawals send money out from the Lenco balance to an admin mobile-money number. This does not ask the phone owner to approve a charge.
-                  </Text>
-                  <form onSubmit={handleWithdraw}>
-                    <SimpleGrid columns={{ base: 1, lg: 3 }} gap={3}>
-                      <select value={withdrawalForm.recipientUserId} onChange={(event) => handleWithdrawalRecipientChange(event.target.value)} style={selectStyle} disabled={usersLoading || busy}>
-                        <option value="">{usersLoading ? 'Loading admins...' : 'Manual number'}</option>
-                        {adminRecipients.map((user: FirestoreUser) => (
-                          <option key={user.id} value={user.id}>{getUserPaymentLabel(user)}</option>
-                        ))}
-                      </select>
-                      <select value={withdrawalForm.operator} onChange={(event) => setWithdrawalForm((previous) => ({ ...previous, operator: event.target.value as MobileMoneyOperator }))} style={selectStyle} disabled={busy}>
-                        <option value="airtel">Airtel Money</option>
-                        <option value="mtn">MTN MoMo</option>
-                        <option value="zamtel">Zamtel</option>
-                      </select>
-                      <Input value={withdrawalForm.phone} onChange={(event) => setWithdrawalForm((previous) => ({ ...previous, phone: event.target.value }))} placeholder="Admin mobile money number" h="46px" bg="whiteAlpha.50" borderColor="whiteAlpha.200" color="white" disabled={busy} />
-                      <Input value={withdrawalForm.amount} onChange={(event) => setWithdrawalForm((previous) => ({ ...previous, amount: event.target.value }))} placeholder="Amount" h="46px" bg="whiteAlpha.50" borderColor="whiteAlpha.200" color="white" disabled={busy} />
-                      <Input value={withdrawalForm.currency} onChange={(event) => setWithdrawalForm((previous) => ({ ...previous, currency: event.target.value.toUpperCase() }))} placeholder="Currency" h="46px" bg="whiteAlpha.50" borderColor="whiteAlpha.200" color="white" disabled={busy} />
-                      <Input value={withdrawalForm.reason} onChange={(event) => setWithdrawalForm((previous) => ({ ...previous, reason: event.target.value }))} placeholder="Reason" h="46px" bg="whiteAlpha.50" borderColor="whiteAlpha.200" color="white" disabled={busy} />
-                    </SimpleGrid>
-                    <Textarea value={withdrawalForm.note} onChange={(event) => setWithdrawalForm((previous) => ({ ...previous, note: event.target.value }))} placeholder="Admin note" mt={3} bg="whiteAlpha.50" borderColor="whiteAlpha.200" color="white" disabled={busy} />
-                    {adminRecipients.length === 0 && !usersLoading && (
-                      <Text color="orange.200" fontSize="sm" mt={3}>
-                        No admin accounts with saved phone numbers were found. Use a manual number or update an admin profile first.
-                      </Text>
-                    )}
-                    <Button type="submit" mt={4} h="46px" px={5} borderRadius="xl" bg="brand.500" color="white" _hover={{ bg: 'brand.600' }} disabled={busy}>
-                      {busy ? <Spinner size="sm" /> : <Send size={16} />}
-                      Send Withdrawal
-                    </Button>
-                  </form>
-                </Panel>
+                <TabActionHeader
+                  title="Withdrawals"
+                  description="Send money from the Lenco balance to an admin mobile-money wallet and review transfer records."
+                  actionLabel="New Withdrawal"
+                  icon={<Send size={16} />}
+                  onAction={() => setActionModal('withdrawal')}
+                />
 
                 <Panel title="Withdrawal Records">
+                  <ListControls
+                    searchValue={activeSearch}
+                    onSearchChange={setActiveSearch}
+                    pageSize={pageSize}
+                    onPageSizeChange={handlePageSizeChange}
+                    total={filteredWithdrawals.length}
+                    placeholder="Search withdrawals"
+                  />
                   <VStack align="stretch" gap={3}>
-                    {(dashboard?.withdrawals || []).map((record) => {
+                    {pageItems(filteredWithdrawals, activePage, pageSize).map((record) => {
                       const key = asString(record.reference) || asString(record.transferId) || asString(record.withdrawalId) || asString(record.id)
                       const providerTransfer = asRecord(record.providerTransfer)
                       const failureDetail =
@@ -942,62 +1315,39 @@ export default function Payments() {
                         </Flex>
                       )
                     })}
-                    {dashboard?.withdrawals.length === 0 && <Text color="whiteAlpha.500">No withdrawal records yet.</Text>}
+                    {filteredWithdrawals.length === 0 && <Text color="whiteAlpha.500">No withdrawal records found.</Text>}
                   </VStack>
+                  <PaginationFooter
+                    page={activePage}
+                    pageSize={pageSize}
+                    total={filteredWithdrawals.length}
+                    onPageChange={setActivePage}
+                  />
                 </Panel>
               </>
             )}
 
             {dashboard && activeTab === 'returns' && (
               <>
-                <Panel title="Record Return">
-                  <form onSubmit={handleRecordReturn}>
-                    <SimpleGrid columns={{ base: 1, lg: 3 }} gap={3}>
-                      <select value={returnForm.transactionKey} onChange={(event) => handleReturnTransactionChange(event.target.value)} style={selectStyle} disabled={busy}>
-                        <option value="">No linked transaction</option>
-                        {completedTransactions.map((transaction) => {
-                          const key = asString(transaction.reference) || asString(transaction.transactionId)
-                          return (
-                            <option key={key} value={key}>
-                              {recordLabel(transaction, ['displayName', 'email', 'reference'])} - {formatMoney(transaction.amount, asString(transaction.currency) || 'ZMW')}
-                            </option>
-                          )
-                        })}
-                      </select>
-                      <select value={returnForm.sessionId} onChange={(event) => setReturnForm((previous) => ({ ...previous, sessionId: event.target.value }))} style={selectStyle} disabled={busy}>
-                        <option value="">Select session</option>
-                        {sessions.map((session) => (
-                          <option key={session.id} value={session.id}>{session.title}</option>
-                        ))}
-                      </select>
-                      <select value={returnForm.status} onChange={(event) => setReturnForm((previous) => ({ ...previous, status: event.target.value as ReturnForm['status'] }))} style={selectStyle} disabled={busy}>
-                        <option value="pending">Pending</option>
-                        <option value="completed">Completed</option>
-                        <option value="cancelled">Cancelled</option>
-                      </select>
-                      <Input value={returnForm.amount} onChange={(event) => setReturnForm((previous) => ({ ...previous, amount: event.target.value }))} placeholder="Amount" h="46px" bg="whiteAlpha.50" borderColor="whiteAlpha.200" color="white" disabled={busy} />
-                      <Input value={returnForm.currency} onChange={(event) => setReturnForm((previous) => ({ ...previous, currency: event.target.value.toUpperCase() }))} placeholder="Currency" h="46px" bg="whiteAlpha.50" borderColor="whiteAlpha.200" color="white" disabled={busy} />
-                      <select value={returnForm.method} onChange={(event) => setReturnForm((previous) => ({ ...previous, method: event.target.value as ReturnForm['method'] }))} style={selectStyle} disabled={busy}>
-                        <option value="mobile_money">Mobile money</option>
-                        <option value="bank_transfer">Bank transfer</option>
-                        <option value="cash">Cash</option>
-                        <option value="card">Card</option>
-                        <option value="other">Other</option>
-                      </select>
-                    </SimpleGrid>
-                    <Input value={returnForm.reason} onChange={(event) => setReturnForm((previous) => ({ ...previous, reason: event.target.value }))} placeholder="Reason" mt={3} h="46px" bg="whiteAlpha.50" borderColor="whiteAlpha.200" color="white" disabled={busy} />
-                    <Input value={returnForm.externalReference} onChange={(event) => setReturnForm((previous) => ({ ...previous, externalReference: event.target.value }))} placeholder="External return reference" mt={3} h="46px" bg="whiteAlpha.50" borderColor="whiteAlpha.200" color="white" disabled={busy} />
-                    <Textarea value={returnForm.notes} onChange={(event) => setReturnForm((previous) => ({ ...previous, notes: event.target.value }))} placeholder="Return notes" mt={3} bg="whiteAlpha.50" borderColor="whiteAlpha.200" color="white" disabled={busy} />
-                    <Button type="submit" mt={4} h="46px" px={5} borderRadius="xl" bg="brand.500" color="white" _hover={{ bg: 'brand.600' }} disabled={busy}>
-                      {busy ? <Spinner size="sm" /> : <RotateCcw size={16} />}
-                      Record Return
-                    </Button>
-                  </form>
-                </Panel>
+                <TabActionHeader
+                  title="Returns"
+                  description="Record refunds, cash returns, and manual corrections against completed payment records."
+                  actionLabel="New Return"
+                  icon={<RotateCcw size={16} />}
+                  onAction={() => setActionModal('return')}
+                />
 
                 <Panel title="Return Records">
+                  <ListControls
+                    searchValue={activeSearch}
+                    onSearchChange={setActiveSearch}
+                    pageSize={pageSize}
+                    onPageSizeChange={handlePageSizeChange}
+                    total={filteredReturns.length}
+                    placeholder="Search returns"
+                  />
                   <VStack align="stretch" gap={3}>
-                    {(dashboard?.returns || []).map((record) => (
+                    {pageItems(filteredReturns, activePage, pageSize).map((record) => (
                       <Flex key={asString(record.id)} justify="space-between" gap={4} p={4} bg="blackAlpha.200" borderRadius="xl">
                         <Box minW={0}>
                           <HStack gap={2} flexWrap="wrap">
@@ -1009,14 +1359,170 @@ export default function Payments() {
                         <Text color="red.200" fontWeight="bold">{formatMoney(record.amount, asString(record.currency) || 'ZMW')}</Text>
                       </Flex>
                     ))}
-                    {dashboard?.returns.length === 0 && <Text color="whiteAlpha.500">No return records yet.</Text>}
+                    {filteredReturns.length === 0 && <Text color="whiteAlpha.500">No return records found.</Text>}
                   </VStack>
+                  <PaginationFooter
+                    page={activePage}
+                    pageSize={pageSize}
+                    total={filteredReturns.length}
+                    onPageChange={setActivePage}
+                  />
                 </Panel>
               </>
             )}
           </VStack>
         )}
       </Box>
+
+      {actionModal === 'collection' && (
+        <PaymentModal
+          title="Charge Attendee Mobile Money"
+          description="The attendee must approve the mobile-money prompt before the collection becomes paid."
+          onClose={() => {
+            if (!busy) setActionModal(null)
+          }}
+        >
+          <form onSubmit={handleCollect}>
+            <SimpleGrid columns={{ base: 1, lg: 3 }} gap={3}>
+              <select value={collectionForm.sessionId} onChange={(event) => handleCollectionSessionChange(event.target.value)} style={selectStyle} disabled={sessionsLoading || busy}>
+                <option value="">{sessionsLoading ? 'Loading sessions...' : 'Select session'}</option>
+                {sessions.map((session: Session) => (
+                  <option key={session.id} value={session.id}>{session.title}</option>
+                ))}
+              </select>
+              <select value={collectionForm.registrationId} onChange={(event) => handleCollectionRegistrationChange(event.target.value)} style={selectStyle} disabled={!collectionForm.sessionId || busy}>
+                <option value="">No linked registration</option>
+                {filteredRegistrations.map((registration: SessionRegistration) => (
+                  <option key={registration.id} value={registration.id}>
+                    {registration.displayName || registration.email || registration.userId}
+                  </option>
+                ))}
+              </select>
+              <select value={collectionForm.operator} onChange={(event) => setCollectionForm((previous) => ({ ...previous, operator: event.target.value as MobileMoneyOperator }))} style={selectStyle} disabled={busy}>
+                <option value="airtel">Airtel Money</option>
+                <option value="mtn">MTN MoMo</option>
+                <option value="zamtel">Zamtel</option>
+              </select>
+              <Input value={collectionForm.phone} onChange={(event) => setCollectionForm((previous) => ({ ...previous, phone: event.target.value }))} placeholder="Mobile money number" h="46px" bg="whiteAlpha.50" borderColor="whiteAlpha.200" color="white" disabled={busy} />
+              <Input value={collectionForm.amount} onChange={(event) => setCollectionForm((previous) => ({ ...previous, amount: event.target.value }))} placeholder={selectedCollectionSession?.price ? String(selectedCollectionSession.price) : 'Amount'} h="46px" bg="whiteAlpha.50" borderColor="whiteAlpha.200" color="white" disabled={busy} />
+              <Input value={collectionForm.currency} onChange={(event) => setCollectionForm((previous) => ({ ...previous, currency: event.target.value.toUpperCase() }))} placeholder="Currency" h="46px" bg="whiteAlpha.50" borderColor="whiteAlpha.200" color="white" disabled={busy} />
+            </SimpleGrid>
+            <Textarea value={collectionForm.note} onChange={(event) => setCollectionForm((previous) => ({ ...previous, note: event.target.value }))} placeholder="Admin note" mt={3} bg="whiteAlpha.50" borderColor="whiteAlpha.200" color="white" disabled={busy} />
+            <HStack justify="flex-end" gap={3} mt={5} flexWrap="wrap">
+              <Button type="button" h="42px" px={5} borderRadius="full" bg="whiteAlpha.100" color="white" _hover={{ bg: 'whiteAlpha.200' }} onClick={() => setActionModal(null)} disabled={busy}>
+                Cancel
+              </Button>
+              <Button type="submit" h="42px" px={5} borderRadius="full" bg="brand.500" color="white" _hover={{ bg: 'brand.600' }} disabled={busy}>
+                {busy ? <Spinner size="sm" /> : <Send size={16} />}
+                Send Payment Prompt
+              </Button>
+            </HStack>
+          </form>
+        </PaymentModal>
+      )}
+
+      {actionModal === 'withdrawal' && (
+        <PaymentModal
+          title="Withdraw to Admin"
+          description="Send money from the Lenco balance to an admin mobile-money wallet."
+          onClose={() => {
+            if (!busy) setActionModal(null)
+          }}
+        >
+          <form onSubmit={handleWithdraw}>
+            <SimpleGrid columns={{ base: 1, lg: 3 }} gap={3}>
+              <select value={withdrawalForm.recipientUserId} onChange={(event) => handleWithdrawalRecipientChange(event.target.value)} style={selectStyle} disabled={usersLoading || busy}>
+                <option value="">{usersLoading ? 'Loading admins...' : 'Manual number'}</option>
+                {adminRecipients.map((user: FirestoreUser) => (
+                  <option key={user.id} value={user.id}>{getUserPaymentLabel(user)}</option>
+                ))}
+              </select>
+              <select value={withdrawalForm.operator} onChange={(event) => setWithdrawalForm((previous) => ({ ...previous, operator: event.target.value as MobileMoneyOperator }))} style={selectStyle} disabled={busy}>
+                <option value="airtel">Airtel Money</option>
+                <option value="mtn">MTN MoMo</option>
+                <option value="zamtel">Zamtel</option>
+              </select>
+              <Input value={withdrawalForm.phone} onChange={(event) => setWithdrawalForm((previous) => ({ ...previous, phone: event.target.value }))} placeholder="Admin mobile money number" h="46px" bg="whiteAlpha.50" borderColor="whiteAlpha.200" color="white" disabled={busy} />
+              <Input value={withdrawalForm.amount} onChange={(event) => setWithdrawalForm((previous) => ({ ...previous, amount: event.target.value }))} placeholder="Amount" h="46px" bg="whiteAlpha.50" borderColor="whiteAlpha.200" color="white" disabled={busy} />
+              <Input value={withdrawalForm.currency} onChange={(event) => setWithdrawalForm((previous) => ({ ...previous, currency: event.target.value.toUpperCase() }))} placeholder="Currency" h="46px" bg="whiteAlpha.50" borderColor="whiteAlpha.200" color="white" disabled={busy} />
+              <Input value={withdrawalForm.reason} onChange={(event) => setWithdrawalForm((previous) => ({ ...previous, reason: event.target.value }))} placeholder="Reason" h="46px" bg="whiteAlpha.50" borderColor="whiteAlpha.200" color="white" disabled={busy} />
+            </SimpleGrid>
+            <Textarea value={withdrawalForm.note} onChange={(event) => setWithdrawalForm((previous) => ({ ...previous, note: event.target.value }))} placeholder="Admin note" mt={3} bg="whiteAlpha.50" borderColor="whiteAlpha.200" color="white" disabled={busy} />
+            {adminRecipients.length === 0 && !usersLoading && (
+              <Text color="orange.200" fontSize="sm" mt={3}>
+                No admin accounts with saved phone numbers were found. Use a manual number or update an admin profile first.
+              </Text>
+            )}
+            <HStack justify="flex-end" gap={3} mt={5} flexWrap="wrap">
+              <Button type="button" h="42px" px={5} borderRadius="full" bg="whiteAlpha.100" color="white" _hover={{ bg: 'whiteAlpha.200' }} onClick={() => setActionModal(null)} disabled={busy}>
+                Cancel
+              </Button>
+              <Button type="submit" h="42px" px={5} borderRadius="full" bg="brand.500" color="white" _hover={{ bg: 'brand.600' }} disabled={busy}>
+                {busy ? <Spinner size="sm" /> : <Send size={16} />}
+                Send Withdrawal
+              </Button>
+            </HStack>
+          </form>
+        </PaymentModal>
+      )}
+
+      {actionModal === 'return' && (
+        <PaymentModal
+          title="Record Return"
+          description="Record a refund, correction, or manual return against the Firestore ledger."
+          onClose={() => {
+            if (!busy) setActionModal(null)
+          }}
+        >
+          <form onSubmit={handleRecordReturn}>
+            <SimpleGrid columns={{ base: 1, lg: 3 }} gap={3}>
+              <select value={returnForm.transactionKey} onChange={(event) => handleReturnTransactionChange(event.target.value)} style={selectStyle} disabled={busy}>
+                <option value="">No linked transaction</option>
+                {completedTransactions.map((transaction) => {
+                  const key = asString(transaction.reference) || asString(transaction.transactionId)
+                  return (
+                    <option key={key} value={key}>
+                      {recordLabel(transaction, ['displayName', 'email', 'reference'])} - {formatMoney(transaction.amount, asString(transaction.currency) || 'ZMW')}
+                    </option>
+                  )
+                })}
+              </select>
+              <select value={returnForm.sessionId} onChange={(event) => setReturnForm((previous) => ({ ...previous, sessionId: event.target.value }))} style={selectStyle} disabled={busy}>
+                <option value="">Select session</option>
+                {sessions.map((session) => (
+                  <option key={session.id} value={session.id}>{session.title}</option>
+                ))}
+              </select>
+              <select value={returnForm.status} onChange={(event) => setReturnForm((previous) => ({ ...previous, status: event.target.value as ReturnForm['status'] }))} style={selectStyle} disabled={busy}>
+                <option value="pending">Pending</option>
+                <option value="completed">Completed</option>
+                <option value="cancelled">Cancelled</option>
+              </select>
+              <Input value={returnForm.amount} onChange={(event) => setReturnForm((previous) => ({ ...previous, amount: event.target.value }))} placeholder="Amount" h="46px" bg="whiteAlpha.50" borderColor="whiteAlpha.200" color="white" disabled={busy} />
+              <Input value={returnForm.currency} onChange={(event) => setReturnForm((previous) => ({ ...previous, currency: event.target.value.toUpperCase() }))} placeholder="Currency" h="46px" bg="whiteAlpha.50" borderColor="whiteAlpha.200" color="white" disabled={busy} />
+              <select value={returnForm.method} onChange={(event) => setReturnForm((previous) => ({ ...previous, method: event.target.value as ReturnForm['method'] }))} style={selectStyle} disabled={busy}>
+                <option value="mobile_money">Mobile money</option>
+                <option value="bank_transfer">Bank transfer</option>
+                <option value="cash">Cash</option>
+                <option value="card">Card</option>
+                <option value="other">Other</option>
+              </select>
+            </SimpleGrid>
+            <Input value={returnForm.reason} onChange={(event) => setReturnForm((previous) => ({ ...previous, reason: event.target.value }))} placeholder="Reason" mt={3} h="46px" bg="whiteAlpha.50" borderColor="whiteAlpha.200" color="white" disabled={busy} />
+            <Input value={returnForm.externalReference} onChange={(event) => setReturnForm((previous) => ({ ...previous, externalReference: event.target.value }))} placeholder="External return reference" mt={3} h="46px" bg="whiteAlpha.50" borderColor="whiteAlpha.200" color="white" disabled={busy} />
+            <Textarea value={returnForm.notes} onChange={(event) => setReturnForm((previous) => ({ ...previous, notes: event.target.value }))} placeholder="Return notes" mt={3} bg="whiteAlpha.50" borderColor="whiteAlpha.200" color="white" disabled={busy} />
+            <HStack justify="flex-end" gap={3} mt={5} flexWrap="wrap">
+              <Button type="button" h="42px" px={5} borderRadius="full" bg="whiteAlpha.100" color="white" _hover={{ bg: 'whiteAlpha.200' }} onClick={() => setActionModal(null)} disabled={busy}>
+                Cancel
+              </Button>
+              <Button type="submit" h="42px" px={5} borderRadius="full" bg="brand.500" color="white" _hover={{ bg: 'brand.600' }} disabled={busy}>
+                {busy ? <Spinner size="sm" /> : <RotateCcw size={16} />}
+                Record Return
+              </Button>
+            </HStack>
+          </form>
+        </PaymentModal>
+      )}
     </AdminLayout>
   )
 }
