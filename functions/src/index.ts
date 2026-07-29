@@ -373,6 +373,10 @@ function getLencoUnauthorizedMessage(path: string): string {
   return "Lenco rejected the request. Check the Lenco API key and account permissions.";
 }
 
+function isGenericLencoUnauthorizedMessage(message: string): boolean {
+  return message.trim().toLowerCase() === "unauthorized";
+}
+
 function isRecentFirestoreTimestamp(value: unknown, maxAgeMs: number): boolean {
   if (!(value instanceof admin.firestore.Timestamp)) {
     return false;
@@ -1387,7 +1391,8 @@ async function lencoRequest(
 
     const providerMessage = normalizeOptionalString(responseData.message) ??
       "Lenco request failed.";
-    const message = response.status === 401 ?
+    const message = response.status === 401 &&
+      isGenericLencoUnauthorizedMessage(providerMessage) ?
       getLencoUnauthorizedMessage(path) :
       providerMessage;
 
