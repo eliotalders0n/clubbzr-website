@@ -17,6 +17,7 @@ import {
 } from '@chakra-ui/react'
 import {
   AlertTriangle,
+  CheckCircle2,
   ChevronLeft,
   ChevronRight,
   Plus,
@@ -34,6 +35,7 @@ import {
   createPaymentWithdrawal,
   getAdminPaymentsDashboard,
   recordPaymentReturn,
+  resolvePaymentReconciliationIssue,
   syncPaymentCollection,
   syncPaymentWithdrawal,
   type AdminPaymentDashboard,
@@ -49,6 +51,7 @@ interface ReconciliationListItem {
   title: string
   subtitle: string
   tone: 'orange' | 'red'
+  action: 'update_signup' | 'review'
   issue: Record<string, unknown>
 }
 
@@ -306,6 +309,7 @@ function getReconciliationItems(dashboard: AdminPaymentDashboard): Reconciliatio
       title: 'Paid transaction needs signup update',
       subtitle: asString(issue.reference),
       tone: 'orange' as const,
+      action: 'update_signup' as const,
       issue,
     })),
     ...dashboard.reconciliation.registrationPaymentIssues.map((issue, index) => ({
@@ -313,6 +317,7 @@ function getReconciliationItems(dashboard: AdminPaymentDashboard): Reconciliatio
       title: 'Paid signup missing completed transaction',
       subtitle: asString(issue.reference) || 'No payment reference',
       tone: 'red' as const,
+      action: 'review' as const,
       issue,
     })),
     ...dashboard.reconciliation.returnIssues.map((issue, index) => ({
@@ -320,6 +325,7 @@ function getReconciliationItems(dashboard: AdminPaymentDashboard): Reconciliatio
       title: 'Return needs transaction review',
       subtitle: asString(issue.reference) || 'No payment reference',
       tone: 'red' as const,
+      action: 'review' as const,
       issue,
     })),
   ]
@@ -664,6 +670,7 @@ export default function Payments() {
   const [loading, setLoading] = useState(true)
   const [busy, setBusy] = useState(false)
   const [syncingKey, setSyncingKey] = useState('')
+  const [resolvingIssueKey, setResolvingIssueKey] = useState('')
   const [message, setMessage] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [actionModal, setActionModal] = useState<PaymentActionModal>(null)
@@ -921,6 +928,39 @@ export default function Payments() {
       setError(syncError instanceof Error ? syncError.message : 'Unable to sync payment.')
     } finally {
       setSyncingKey('')
+    }
+  }
+
+  const handleResolveReconciliationIssue = async (item: ReconciliationListItem) => {
+    if (item.action !== 'update_signup') return
+
+    const transaction = asRecord(item.issue.transaction)
+    const reference = asString(item.issue.reference) || asString(transaction.reference)
+    const transactionId = asString(transaction.transactionId) || asString(transaction.id)
+    const registrationId = asString(transaction.registrationId)
+    const key = item.id
+
+    if (!reference && !transactionId) {
+      setError('This issue is missing its payment reference.')
+      return
+    }
+
+    setResolvingIssueKey(key)
+    setMessage(null)
+    setError(null)
+    try {
+      const result = await resolvePaymentReconciliationIssue({
+        issueType: 'transaction_signup_status',
+        reference: reference || undefined,
+        transactionId: transactionId || undefined,
+        registrationId: registrationId || undefined,
+      })
+      setMessage(result.message || 'Signup payment status updated.')
+      await loadDashboard()
+    } catch (resolveError) {
+      setError(resolveError instanceof Error ? resolveError.message : 'Unable to resolve issue.')
+    } finally {
+      setResolvingIssueKey('')
     }
   }
 
@@ -1204,22 +1244,60 @@ export default function Payments() {
                 />
                 <VStack align="stretch" gap={4}>
                   {pageItems(filteredReconciliation, activePage, pageSize).map((item) => (
-                    <Box
+                    <Flex
                       key={item.id}
                       p={4}
                       bg={item.tone === 'orange' ? 'orange.500/10' : 'red.500/10'}
                       border="1px solid"
                       borderColor={item.tone === 'orange' ? 'orange.400/30' : 'red.400/30'}
                       borderRadius="xl"
+                      align={{ base: 'stretch', md: 'center' }}
+                      justify="space-between"
+                      direction={{ base: 'column', md: 'row' }}
+                      gap={4}
                     >
-                      <HStack gap={2}>
-                        <AlertTriangle size={16} color={item.tone === 'orange' ? '#fed7aa' : '#fca5a5'} />
-                        <Text color={item.tone === 'orange' ? 'orange.100' : 'red.100'} fontWeight="semibold">
-                          {item.title}
+                      <Box minW={0}>
+                        <HStack gap={2}>
+                          <AlertTriangle size={16} color={item.tone === 'orange' ? '#fed7aa' : '#fca5a5'} />
+                          <Text color={item.tone === 'orange' ? 'orange.100' : 'red.100'} fontWeight="semibold">
+                            {item.title}
+                          </Text>
+                        </HStack>
+                        <Text color="whiteAlpha.600" fontSize="sm" mt={1} overflowWrap="anywhere">
+                          {item.subtitle}
                         </Text>
-                      </HStack>
-                      <Text color="whiteAlpha.600" fontSize="sm" mt={1}>{item.subtitle}</Text>
-                    </Box>
+                      </Box>
+                      {item.action === 'update_signup' ? (
+                        <Button
+                          h="38px"
+                          minW="132px"
+                          px={4}
+                          borderRadius="full"
+                          bg="orange.500/20"
+                          color="orange.100"
+                          border="1px solid"
+                          borderColor="orange.300/30"
+                          _hover={{ bg: 'orange.500/30' }}
+                          onClick={() => void handleResolveReconciliationIssue(item)}
+                          disabled={resolvingIssueKey === item.id}
+                        >
+                          {resolvingIssueKey === item.id ? <Spinner size="sm" /> : <CheckCircle2 size={15} />}
+                          Update Signup
+                        </Button>
+                      ) : (
+                        <Badge
+                          alignSelf={{ base: 'flex-start', md: 'center' }}
+                          bg="whiteAlpha.100"
+                          color="whiteAlpha.700"
+                          borderRadius="full"
+                          px={3}
+                          py={1}
+                          textTransform="none"
+                        >
+                          Review manually
+                        </Badge>
+                      )}
+                    </Flex>
                   ))}
                   {filteredReconciliation.length === 0 && <Text color="whiteAlpha.500">No reconciliation issues found.</Text>}
                 </VStack>

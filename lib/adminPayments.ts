@@ -126,10 +126,22 @@ export interface AdminCreatePaymentWithdrawalInput {
   note?: string;
 }
 
+export interface AdminResolvePaymentReconciliationIssueInput {
+  issueType: 'transaction_signup_status';
+  transactionId?: string;
+  reference?: string;
+  registrationId?: string;
+}
+
 const getAdminPaymentsDashboardFn = httpsCallable<
   AdminPaymentDashboardFilters,
   AdminPaymentDashboard
 >(functions, 'adminGetPaymentsDashboard');
+
+const resolvePaymentReconciliationIssueFn = httpsCallable<
+  AdminResolvePaymentReconciliationIssueInput,
+  AdminPaymentActionResponse & { registrationId?: string }
+>(functions, 'adminResolvePaymentReconciliationIssue');
 
 const collectSessionPaymentFn = httpsCallable<
   AdminCollectSessionPaymentInput,
@@ -158,6 +170,13 @@ const syncPaymentWithdrawalFn = httpsCallable<
 
 export async function getAdminPaymentsDashboard(filters: AdminPaymentDashboardFilters = {}) {
   const result = await getAdminPaymentsDashboardFn(filters);
+  return result.data;
+}
+
+export async function resolvePaymentReconciliationIssue(
+  input: AdminResolvePaymentReconciliationIssueInput
+) {
+  const result = await resolvePaymentReconciliationIssueFn(input);
   return result.data;
 }
 

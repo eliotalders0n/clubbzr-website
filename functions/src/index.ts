@@ -71,6 +71,13 @@ interface AdminPaymentsDashboardData {
   limit?: number;
 }
 
+interface AdminResolvePaymentReconciliationIssueData {
+  issueType?: string;
+  transactionId?: string;
+  reference?: string;
+  registrationId?: string;
+}
+
 interface RevenuePeriodSummary {
   periodKey: string;
   label: string;
@@ -2518,6 +2525,119 @@ export const adminGetPaymentsDashboard = onCall(
         "Lenco is only contacted for explicit payment actions and manual payment syncs.",
         "Provider-wide accounts, settlements, and transactions are not loaded here.",
       ],
+    };
+  }
+);
+
+export const adminResolvePaymentReconciliationIssue = onCall(
+  {
+    cors: true,
+    invoker: "public",
+  },
+  async (request) => {
+    const adminUid = await requireAdminAuth(request.auth?.uid);
+    const data = (request.data || {}) as
+      AdminResolvePaymentReconciliationIssueData;
+    const issueType = normalizeOptionalString(data.issueType) ??
+      "transaction_signup_status";
+
+    if (issueType !== "transaction_signup_status") {
+      throw new HttpsError(
+        "invalid-argument",
+        "This reconciliation issue requires manual review."
+      );
+    }
+
+    const transactionId = normalizeOptionalString(data.transactionId);
+    const referenceInput = normalizeOptionalString(data.reference);
+
+    if (!transactionId && !referenceInput) {
+      throw new HttpsError(
+        "invalid-argument",
+        "Transaction ID or reference is required."
+      );
+    }
+
+    const transactionRecord = await findSessionPaymentTransaction({
+      transactionId,
+      reference: referenceInput,
+    });
+    const transactionData = transactionRecord.snapshot.data() || {};
+    const status = getFallbackPaymentStatus(transactionData.status);
+
+    if (status !== "completed") {
+      throw new HttpsError(
+        "failed-precondition",
+        "Only completed payments can update a signup."
+      );
+    }
+
+    const metadata = transactionData.metadata as
+      Partial<SessionPaymentMetadata> | undefined;
+    const sessionId = normalizeOptionalString(metadata?.sessionId) ??
+      normalizeOptionalString(transactionData.sessionId);
+    const registrationId = normalizeOptionalString(data.registrationId) ??
+      normalizeOptionalString(metadata?.registrationId) ??
+      normalizeOptionalString(transactionData.registrationId);
+
+    if (!sessionId || !registrationId) {
+      throw new HttpsError(
+        "failed-precondition",
+        "Payment is missing the linked signup information."
+      );
+    }
+
+    const registrationRef = db
+      .collection(SESSION_REGISTRATIONS_COLLECTION)
+      .doc(registrationId);
+    const beforeSnapshot = await registrationRef.get();
+
+    if (!beforeSnapshot.exists) {
+      throw new HttpsError("not-found", "Linked signup was not found.");
+    }
+
+    const resolvedTransactionId =
+      normalizeOptionalString(transactionData.transactionId) ??
+      transactionId ??
+      transactionRecord.snapshot.id;
+    const reference = normalizeOptionalString(transactionData.reference) ??
+      referenceInput ??
+      resolvedTransactionId;
+    const amount = getFiniteAmount(transactionData.amount);
+    const currency = normalizeCurrency(transactionData.currency);
+
+    await markRegistrationPaid({
+      transactionId: resolvedTransactionId,
+      reference,
+      metadata: {
+        source: "club-bzr-admin",
+        sessionId,
+        registrationId,
+      },
+      amount,
+      currency,
+    });
+
+    const afterSnapshot = await registrationRef.get();
+    await db.collection("adminAuditLogs").add({
+      actorUid: adminUid,
+      action: "admin.payment.reconciliation.signup_updated",
+      entityType: "sessionRegistration",
+      entityId: registrationId,
+      relatedTransactionId: resolvedTransactionId,
+      reference,
+      before: serializeForCallable(beforeSnapshot.data() || {}),
+      after: serializeForCallable(afterSnapshot.data() || {}),
+      createdAt: admin.firestore.FieldValue.serverTimestamp(),
+    });
+
+    return {
+      success: true,
+      transactionId: resolvedTransactionId,
+      reference,
+      registrationId,
+      status: "completed",
+      message: "Signup payment status updated.",
     };
   }
 );
