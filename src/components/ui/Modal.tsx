@@ -6,7 +6,7 @@ import {
   type KeyboardEvent,
 } from 'react';
 import { createPortal } from 'react-dom';
-import { motion, AnimatePresence } from 'framer-motion';
+import { motion, AnimatePresence, type Variants } from 'framer-motion';
 import { clsx } from 'clsx';
 import { twMerge } from 'tailwind-merge';
 
@@ -22,6 +22,7 @@ interface ModalProps {
   closeOnBackdrop?: boolean;
   closeOnEscape?: boolean;
   showCloseButton?: boolean;
+  mobileSheet?: boolean;
   className?: string;
 }
 
@@ -40,12 +41,12 @@ const CloseIcon = () => (
   </svg>
 );
 
-const backdropVariants: any = {
+const backdropVariants: Variants = {
   hidden: { opacity: 0 },
   visible: { opacity: 1 },
 };
 
-const modalVariants: any = {
+const modalVariants: Variants = {
   hidden: {
     opacity: 0,
     scale: 0.95,
@@ -90,6 +91,7 @@ export function Modal({
   closeOnBackdrop = true,
   closeOnEscape = true,
   showCloseButton = true,
+  mobileSheet = false,
   className,
 }: ModalProps) {
   const modalRef = useRef<HTMLDivElement>(null);
@@ -166,7 +168,12 @@ export function Modal({
     <AnimatePresence>
       {isOpen && (
         <div
-          className="fixed inset-0 z-50 flex items-center justify-center p-4"
+          className={cn(
+            'fixed inset-0 flex justify-center',
+            mobileSheet
+              ? 'z-[100] items-end p-0 md:items-center md:p-4'
+              : 'z-50 items-center p-4'
+          )}
           role="presentation"
         >
           {/* Backdrop */}
@@ -192,6 +199,8 @@ export function Modal({
               'bg-bzr-gray-900 border border-bzr-gray-800',
               'rounded-2xl shadow-2xl',
               'overflow-hidden',
+              mobileSheet &&
+                'max-h-[88dvh] rounded-b-none rounded-t-[28px] border-x-0 border-b-0 md:rounded-2xl md:border',
               sizes[size],
               className
             )}
@@ -203,7 +212,10 @@ export function Modal({
           >
             {/* Header */}
             {(title || showCloseButton) && (
-              <div className="flex items-start justify-between p-6 pb-0">
+              <div
+                className="flex items-start justify-between p-6 pb-0"
+                data-modal-header
+              >
                 {title && (
                   <div>
                     <h2
@@ -245,7 +257,7 @@ export function Modal({
             )}
 
             {/* Content */}
-            <div className="p-6">
+            <div className="p-6" data-modal-content>
               {children}
             </div>
           </motion.div>

@@ -20,6 +20,7 @@ export interface AdminPaymentSessionSummary {
   pending: number;
   failed: number;
   returned: number;
+  corrections: number;
   withdrawn: number;
   netCollected: number;
   transactionCount: number;
@@ -36,8 +37,10 @@ export interface AdminPaymentRevenuePeriod {
   pending: number;
   failed: number;
   returned: number;
+  corrections: number;
   withdrawn: number;
   netCollected: number;
+  currentBalance: number;
   transactionCount: number;
   registrationCount: number;
 }
@@ -64,6 +67,7 @@ export interface AdminPaymentDashboard {
     pending: number;
     failed: number;
     returned: number;
+    corrections: number;
     withdrawn: number;
     netCollected: number;
     recordedWithdrawals: number;
@@ -114,6 +118,15 @@ export interface AdminRecordPaymentReturnInput {
   externalReference?: string;
   status: 'pending' | 'completed' | 'cancelled';
   notes?: string;
+  origin?: 'manual' | 'cancelled_registration';
+  effect?: 'customer_refund' | 'revenue_correction';
+}
+
+export interface AdminUpdatePaymentReturnInput {
+  returnId: string;
+  status: 'completed' | 'cancelled' | 'reversed';
+  externalReference?: string;
+  notes?: string;
 }
 
 export interface AdminCreatePaymentWithdrawalInput {
@@ -158,6 +171,11 @@ const recordPaymentReturnFn = httpsCallable<
   AdminPaymentActionResponse
 >(functions, 'adminRecordPaymentReturn');
 
+const updatePaymentReturnFn = httpsCallable<
+  AdminUpdatePaymentReturnInput,
+  AdminPaymentActionResponse
+>(functions, 'adminUpdatePaymentReturn');
+
 const createPaymentWithdrawalFn = httpsCallable<
   AdminCreatePaymentWithdrawalInput,
   AdminPaymentActionResponse
@@ -192,6 +210,11 @@ export async function syncPaymentCollection(input: { transactionId?: string; ref
 
 export async function recordPaymentReturn(input: AdminRecordPaymentReturnInput) {
   const result = await recordPaymentReturnFn(input);
+  return result.data;
+}
+
+export async function updatePaymentReturn(input: AdminUpdatePaymentReturnInput) {
+  const result = await updatePaymentReturnFn(input);
   return result.data;
 }
 

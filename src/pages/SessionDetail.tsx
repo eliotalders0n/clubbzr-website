@@ -19,11 +19,12 @@ import {
 } from '@chakra-ui/react'
 import { motion } from 'framer-motion'
 import { Timestamp, arrayUnion, arrayRemove } from 'firebase/firestore'
-import { MessageCircle } from 'lucide-react'
+import { Copy, Map as MapIcon, MessageCircle, Navigation } from 'lucide-react'
 
 import { Header } from '@/components/layout/Header'
 import { Footer } from '@/components/layout/Footer'
 import { SessionGallery, SessionPaymentModal } from '@/components/features/sessions'
+import { OpenStreetArtMap, type MapVenue } from '@/components/map'
 import { useAuth } from '@/contexts/AuthContext'
 import { useDocument, useMutation } from '@/hooks/useFirestore'
 import {
@@ -422,6 +423,21 @@ export default function SessionDetail() {
     isLencoPayment && sessionData?.config.approvalMode === 'auto' && !isInviteOnly
   const currency = session.currency || 'ZMW'
   const paymentAmount = Number(session.price || 0)
+  const sessionCoordinates = session.location?.coordinates
+  const sessionMapVenue: MapVenue | null = sessionCoordinates
+    ? {
+        id: `session:${session.id}`,
+        name: session.title,
+        type: 'event',
+        coordinates: {
+          lat: sessionCoordinates.latitude,
+          lng: sessionCoordinates.longitude,
+        },
+        address: session.location.address || session.location.name,
+        description: session.description,
+        image: session.coverImage,
+      }
+    : null
   const hasPendingOnlinePayment =
     isLencoPayment &&
     sessionData?.currentRegistration?.paymentStatus === 'pending' &&
@@ -577,6 +593,74 @@ export default function SessionDetail() {
                     </Box>
                   </HStack>
                 </MotionBox>
+
+                {sessionMapVenue && (
+                  <MotionBox
+                    initial={{ opacity: 0, y: 20 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    transition={{ duration: 0.6, delay: 0.36 }}
+                    overflow="hidden"
+                    borderRadius="2xl"
+                    bg="gray.900"
+                    border="1px solid"
+                    borderColor="whiteAlpha.100"
+                  >
+                    <Box h={{ base: '220px', md: '300px' }} bg="#090909">
+                      <OpenStreetArtMap
+                        venues={[sessionMapVenue]}
+                        selectedVenueId={sessionMapVenue.id}
+                      />
+                    </Box>
+                    <Flex p={{ base: 5, md: 6 }} justify="space-between" align={{ base: 'stretch', md: 'center' }} direction={{ base: 'column', md: 'row' }} gap={4}>
+                      <Box minW={0}>
+                        <Text color="brand.400" fontSize="xs" fontWeight="semibold" textTransform="uppercase" letterSpacing="0.12em">Session location</Text>
+                        <Heading as="h2" color="white" fontSize="lg" mt={1.5}>{session.location.name}</Heading>
+                        <Text color="whiteAlpha.500" fontSize="sm" mt={1}>{session.location.address}</Text>
+                      </Box>
+                      <Flex gap={2} flexWrap="wrap">
+                        <Button
+                          h="40px"
+                          px={4}
+                          borderRadius="lg"
+                          bg="whiteAlpha.70"
+                          color="whiteAlpha.800"
+                          border={0}
+                          _hover={{ bg: 'whiteAlpha.120', color: 'white' }}
+                          onClick={() => navigator.clipboard.writeText(session.location.address || session.location.name)}
+                        >
+                          <Copy size={15} />
+                          Copy address
+                        </Button>
+                        <Button
+                          h="40px"
+                          px={4}
+                          borderRadius="lg"
+                          bg="whiteAlpha.70"
+                          color="whiteAlpha.800"
+                          border={0}
+                          _hover={{ bg: 'whiteAlpha.120', color: 'white' }}
+                          onClick={() => navigate(`/community/map?focus=session&sessionId=${session.id}`)}
+                        >
+                          <MapIcon size={15} />
+                          View on map
+                        </Button>
+                        <Button
+                          h="40px"
+                          px={4}
+                          borderRadius="lg"
+                          bg="brand.500"
+                          color="white"
+                          border={0}
+                          _hover={{ bg: 'brand.600' }}
+                          onClick={() => window.open(`https://www.google.com/maps/dir/?api=1&destination=${sessionCoordinates.latitude},${sessionCoordinates.longitude}`, '_blank', 'noopener,noreferrer')}
+                        >
+                          <Navigation size={15} />
+                          Directions
+                        </Button>
+                      </Flex>
+                    </Flex>
+                  </MotionBox>
+                )}
               </VStack>
 
               {/* Sidebar */}

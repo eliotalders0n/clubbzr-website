@@ -34,6 +34,10 @@ const RECOVERABLE_WITHDRAWAL_REQUEST_MESSAGE =
   "Withdrawal request could not be confirmed. " +
   "Sync this withdrawal before retrying.";
 const APP_BASE_URL = process.env.APP_BASE_URL || "https://clubbzr.com";
+const GEOCODING_SEARCH_URL = process.env.GEOCODING_SEARCH_URL ||
+  "https://nominatim.openstreetmap.org/search";
+const GEOCODING_REQUEST_TIMEOUT_MS = 10000;
+const GEOCODING_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
 const WHATSAPP_CONFIRMATION_HEADER_IMAGE_URL =
   process.env.WHATSAPP_CONFIRMATION_HEADER_IMAGE_URL ||
   "https://club-bzr.web.app/whatsapp/session-confirmation-header.png";
@@ -91,8 +95,10 @@ interface RevenuePeriodSummary {
   pending: number;
   failed: number;
   returned: number;
+  corrections: number;
   withdrawn: number;
   netCollected: number;
+  currentBalance: number;
   transactionCount: number;
   registrationCount: number;
 }
@@ -140,12 +146,59 @@ interface AdminRecordPaymentReturnData {
   externalReference?: string;
   status?: string;
   notes?: string;
+  origin?: string;
+  effect?: string;
+}
+
+interface AdminUpdatePaymentReturnData {
+  returnId?: string;
+  status?: string;
+  externalReference?: string;
+  notes?: string;
 }
 
 interface AdminSendSessionConfirmationWhatsAppData {
   registrationId?: string;
   force?: boolean;
 }
+
+interface AdminSearchLocationsData {
+  query?: string;
+}
+
+interface GeocodingSearchResult {
+  id: string;
+  name: string;
+  displayName: string;
+  address: string;
+  city: string;
+  latitude: number;
+  longitude: number;
+}
+
+interface GeocodingCacheEntry {
+  expiresAt: number;
+  results: GeocodingSearchResult[];
+}
+
+interface NominatimSearchResult {
+  place_id?: number | string;
+  name?: string;
+  display_name?: string;
+  lat?: string;
+  lon?: string;
+  address?: {
+    city?: string;
+    town?: string;
+    village?: string;
+    municipality?: string;
+    county?: string;
+  };
+}
+
+const geocodingCache = new Map<string, GeocodingCacheEntry>();
+let geocodingQueue: Promise<void> = Promise.resolve();
+let lastGeocodingRequestAt = 0;
 
 interface SessionEmailSummary {
   title: string;
@@ -509,10 +562,24 @@ function summarizeLencoAccounts(accounts: Record<string, unknown>[]): string {
   }).join("; ");
 }
 
-function normalizeReturnStatus(value: unknown): "pending" | "completed" | "cancelled" {
+function normalizeReturnStatus(
+  value: unknown
+): "pending" | "completed" | "cancelled" | "reversed" {
   const status = String(value ?? "pending").trim().toLowerCase();
-  if (status === "completed" || status === "cancelled") return status;
+  if (
+    status === "completed" ||
+    status === "cancelled" ||
+    status === "reversed"
+  ) return status;
   return "pending";
+}
+
+function normalizeReturnEffect(
+  value: unknown
+): "customer_refund" | "revenue_correction" {
+  return value === "revenue_correction" ?
+    "revenue_correction" :
+    "customer_refund";
 }
 
 function normalizeReturnMethod(value: unknown): string {
@@ -638,8 +705,10 @@ function buildRevenueTimeline(input: {
       pending: 0,
       failed: 0,
       returned: 0,
+      corrections: 0,
       withdrawn: 0,
       netCollected: 0,
+      currentBalance: 0,
       transactionCount: 0,
       registrationCount: 0,
     };
@@ -672,7 +741,13 @@ function buildRevenueTimeline(input: {
   });
 
   input.registrations.forEach((registration) => {
-    if (registration.paymentStatus !== "paid_external") return;
+    const paymentStatus = normalizeOptionalString(registration.paymentStatus);
+    const paymentStatusBeforeReturn =
+      normalizeOptionalString(registration.paymentStatusBeforeReturn);
+    const wasExternallyPaid = paymentStatus === "paid_external" ||
+      (paymentStatus === "refunded" &&
+        paymentStatusBeforeReturn === "paid_external");
+    if (!wasExternallyPaid) return;
 
     const date = getRecordDate(registration, [
       "paidAt",
@@ -692,13 +767,21 @@ function buildRevenueTimeline(input: {
   input.returns.forEach((returnRecord) => {
     if (returnRecord.status !== "completed") return;
 
-    const date = getRecordDate(returnRecord, ["createdAt", "updatedAt"]);
+    const date = getRecordDate(returnRecord, [
+      "completedAt",
+      "updatedAt",
+      "createdAt",
+    ]);
     if (!date) return;
 
     const amount = getFiniteAmount(returnRecord.amount) ?? 0;
     const currency = normalizeCurrency(returnRecord.currency);
     const period = getPeriod(date, currency);
-    period.returned += amount;
+    if (normalizeReturnEffect(returnRecord.effect) === "revenue_correction") {
+      period.corrections += amount;
+    } else {
+      period.returned += amount;
+    }
   });
 
   input.withdrawals.forEach((withdrawal) => {
@@ -717,10 +800,11 @@ function buildRevenueTimeline(input: {
     period.withdrawn += amount;
   });
 
-  return Array.from(periods.values())
+  const timeline = Array.from(periods.values())
     .map((period) => {
       const grossCollected = roundCurrency(
-        period.onlineCollected + period.externalCollected
+        period.onlineCollected +
+        period.externalCollected
       );
 
       return {
@@ -731,13 +815,28 @@ function buildRevenueTimeline(input: {
         pending: roundCurrency(period.pending),
         failed: roundCurrency(period.failed),
         returned: roundCurrency(period.returned),
+        corrections: roundCurrency(period.corrections),
         withdrawn: roundCurrency(period.withdrawn),
         netCollected: roundCurrency(
-          grossCollected - period.returned - period.withdrawn
+          grossCollected -
+          period.corrections -
+          period.returned -
+          period.withdrawn
         ),
       };
     })
-    .sort((a, b) => b.periodKey.localeCompare(a.periodKey));
+    .sort((a, b) => a.periodKey.localeCompare(b.periodKey));
+
+  const balancesByCurrency = new Map<string, number>();
+  timeline.forEach((period) => {
+    const currentBalance = roundCurrency(
+      (balancesByCurrency.get(period.currency) || 0) + period.netCollected
+    );
+    balancesByCurrency.set(period.currency, currentBalance);
+    period.currentBalance = currentBalance;
+  });
+
+  return timeline.reverse();
 }
 
 function getAdminNotificationEmails(): string[] {
@@ -1750,6 +1849,127 @@ async function requireAdminAuth(uid: string | undefined): Promise<string> {
   return uid;
 }
 
+async function requestNominatimLocations(
+  query: string
+): Promise<GeocodingSearchResult[]> {
+  const url = new URL(GEOCODING_SEARCH_URL);
+  url.searchParams.set("q", query);
+  url.searchParams.set("format", "jsonv2");
+  url.searchParams.set("addressdetails", "1");
+  url.searchParams.set("countrycodes", "zm");
+  url.searchParams.set("dedupe", "1");
+  url.searchParams.set("limit", "6");
+
+  const controller = new AbortController();
+  const timeoutId = setTimeout(
+    () => controller.abort(),
+    GEOCODING_REQUEST_TIMEOUT_MS
+  );
+
+  try {
+    const response = await fetch(url, {
+      signal: controller.signal,
+      headers: {
+        "Accept": "application/json",
+        "Accept-Language": "en",
+        "User-Agent": `ClubBZR/1.0 (${APP_BASE_URL})`,
+      },
+    });
+
+    if (!response.ok) {
+      logger.error("Location provider returned an error", {
+        status: response.status,
+        query,
+      });
+      throw new HttpsError(
+        "unavailable",
+        "Location search is temporarily unavailable."
+      );
+    }
+
+    const body = await response.json() as NominatimSearchResult[];
+    if (!Array.isArray(body)) return [];
+
+    return body.flatMap((item) => {
+      const latitude = Number(item.lat);
+      const longitude = Number(item.lon);
+      const displayName = item.display_name?.trim();
+      if (!Number.isFinite(latitude) ||
+          !Number.isFinite(longitude) ||
+          !displayName) {
+        return [];
+      }
+
+      const city = item.address?.city ||
+        item.address?.town ||
+        item.address?.village ||
+        item.address?.municipality ||
+        item.address?.county ||
+        "Zambia";
+      const name = item.name?.trim() ||
+        displayName.split(",")[0]?.trim() ||
+        query;
+
+      return [{
+        id: String(item.place_id || `${latitude},${longitude}`),
+        name,
+        displayName,
+        address: displayName,
+        city,
+        latitude,
+        longitude,
+      }];
+    });
+  } catch (error) {
+    if (error instanceof HttpsError) throw error;
+    if (error instanceof Error && error.name === "AbortError") {
+      throw new HttpsError(
+        "deadline-exceeded",
+        "Location search timed out. Please try again."
+      );
+    }
+    logger.error("Location search request failed", {query, error});
+    throw new HttpsError(
+      "unavailable",
+      "Location search is temporarily unavailable."
+    );
+  } finally {
+    clearTimeout(timeoutId);
+  }
+}
+
+async function searchLocationsWithRateLimit(
+  query: string
+): Promise<GeocodingSearchResult[]> {
+  const cacheKey = query.toLowerCase();
+  const cached = geocodingCache.get(cacheKey);
+  if (cached && cached.expiresAt > Date.now()) return cached.results;
+
+  const request = geocodingQueue.then(async () => {
+    const waitMs = Math.max(0, 1100 - (Date.now() - lastGeocodingRequestAt));
+    if (waitMs > 0) {
+      await new Promise((resolve) => setTimeout(resolve, waitMs));
+    }
+    try {
+      const results = await requestNominatimLocations(query);
+      geocodingCache.set(cacheKey, {
+        expiresAt: Date.now() + GEOCODING_CACHE_TTL_MS,
+        results,
+      });
+      if (geocodingCache.size > 200) {
+        const oldestKey = geocodingCache.keys().next().value;
+        if (oldestKey) geocodingCache.delete(oldestKey);
+      }
+      return results;
+    } finally {
+      lastGeocodingRequestAt = Date.now();
+    }
+  });
+  geocodingQueue = request.then(() => undefined, () => undefined);
+
+  return request;
+}
+
 async function requirePaymentAccess(
   uid: string,
   transactionData: FirebaseFirestore.DocumentData
@@ -2045,6 +2265,36 @@ export const whatsappWebhook = onRequest(
 
     response.set("Allow", "GET, POST");
     response.status(405).send("Method Not Allowed");
+  }
+);
+
+export const adminSearchLocations = onCall(
+  {
+    cors: true,
+    invoker: "public",
+    maxInstances: 1,
+    concurrency: 1,
+    timeoutSeconds: 20,
+  },
+  async (request) => {
+    await requireAdminAuth(request.auth?.uid);
+    const data = (request.data || {}) as AdminSearchLocationsData;
+    const query = String(data.query || "").trim();
+
+    if (query.length < 2) {
+      throw new HttpsError(
+        "invalid-argument",
+        "Enter at least two characters to search."
+      );
+    }
+    if (query.length > 120) {
+      throw new HttpsError(
+        "invalid-argument",
+        "Location search must be 120 characters or fewer."
+      );
+    }
+
+    return {results: await searchLocationsWithRateLimit(query)};
   }
 );
 
@@ -2495,9 +2745,13 @@ export const adminGetPaymentsDashboard = onCall(
       const registrationStatus = normalizeOptionalString(registration?.status);
       const paymentStatus = normalizeOptionalString(registration?.paymentStatus);
       const paymentStateMatches = paymentStatus === "paid_online" ||
-        paymentStatus === "paid_external";
+        paymentStatus === "paid_external" ||
+        paymentStatus === "refunded";
       const signupStateMatches = registrationStatus === "paid_pending_confirmation" ||
-        registrationStatus === "confirmed";
+        registrationStatus === "confirmed" ||
+        (paymentStatus === "refunded" &&
+          (registrationStatus === "declined" ||
+            registrationStatus === "cancelled"));
 
       if (!registration || !paymentStateMatches || !signupStateMatches) {
         transactionStatusIssues.push({
@@ -2532,16 +2786,22 @@ export const adminGetPaymentsDashboard = onCall(
 
       const key = getLocalPaymentKey(returnRecord);
       const transaction = key ? localTransactionsByKey.get(key) : undefined;
+      const registrationId =
+        normalizeOptionalString(returnRecord.registrationId);
+      const registration = registrationId ?
+        registrationsById.get(registrationId) :
+        undefined;
       const returnedAmount = getFiniteAmount(returnRecord.amount) ?? 0;
       const paidAmount = transaction ?
         getFiniteAmount(transaction.amount) ?? 0 :
-        0;
+        getFiniteAmount(registration?.paymentAmount) ?? 0;
 
-      if (!transaction || returnedAmount > paidAmount) {
+      if ((!transaction && !registration) || returnedAmount > paidAmount) {
         returnIssues.push({
           reference: key,
           returnRecord,
           transaction: transaction ?? null,
+          registration: registration ?? null,
         });
       }
     });
@@ -2593,10 +2853,27 @@ export const adminGetPaymentsDashboard = onCall(
         .filter((transaction) => getFallbackPaymentStatus(transaction.status) === "failed")
         .reduce((sum, transaction) => sum + (getFiniteAmount(transaction.amount) ?? 0), 0);
       const externalCollected = sessionRegistrations
-        .filter((registration) => registration.paymentStatus === "paid_external")
+        .filter((registration) => {
+          const paymentStatus =
+            normalizeOptionalString(registration.paymentStatus);
+          const paymentStatusBeforeReturn =
+            normalizeOptionalString(registration.paymentStatusBeforeReturn);
+          return paymentStatus === "paid_external" ||
+            (paymentStatus === "refunded" &&
+              paymentStatusBeforeReturn === "paid_external");
+        })
         .reduce((sum, registration) => sum + (getFiniteAmount(registration.paymentAmount) ?? 0), 0);
       const returned = sessionReturns
-        .filter((returnRecord) => returnRecord.status === "completed")
+        .filter((returnRecord) =>
+          returnRecord.status === "completed" &&
+          normalizeReturnEffect(returnRecord.effect) === "customer_refund"
+        )
+        .reduce((sum, returnRecord) => sum + (getFiniteAmount(returnRecord.amount) ?? 0), 0);
+      const corrections = sessionReturns
+        .filter((returnRecord) =>
+          returnRecord.status === "completed" &&
+          normalizeReturnEffect(returnRecord.effect) === "revenue_correction"
+        )
         .reduce((sum, returnRecord) => sum + (getFiniteAmount(returnRecord.amount) ?? 0), 0);
       const withdrawn = sessionWithdrawals
         .filter((withdrawal) => withdrawal.status === "completed")
@@ -2633,13 +2910,20 @@ export const adminGetPaymentsDashboard = onCall(
         price: getFiniteAmount(session?.price) ?? fallbackPrice,
         onlineCollected: roundCurrency(onlineCollected),
         externalCollected: roundCurrency(externalCollected),
-        grossCollected: roundCurrency(onlineCollected + externalCollected),
+        grossCollected: roundCurrency(
+          onlineCollected + externalCollected
+        ),
         pending: roundCurrency(pending),
         failed: roundCurrency(failed),
         returned: roundCurrency(returned),
+        corrections: roundCurrency(corrections),
         withdrawn: roundCurrency(withdrawn),
         netCollected: roundCurrency(
-          onlineCollected + externalCollected - returned - withdrawn
+          onlineCollected +
+          externalCollected -
+          corrections -
+          returned -
+          withdrawn
         ),
         transactionCount: sessionTransactions.length,
         registrationCount: sessionRegistrations.length,
@@ -2672,7 +2956,16 @@ export const adminGetPaymentsDashboard = onCall(
       0
     );
     const completedReturnTotal = returns
-      .filter((returnRecord) => returnRecord.status === "completed")
+      .filter((returnRecord) =>
+        returnRecord.status === "completed" &&
+        normalizeReturnEffect(returnRecord.effect) === "customer_refund"
+      )
+      .reduce((sum, returnRecord) => sum + (getFiniteAmount(returnRecord.amount) ?? 0), 0);
+    const completedCorrectionTotal = returns
+      .filter((returnRecord) =>
+        returnRecord.status === "completed" &&
+        normalizeReturnEffect(returnRecord.effect) === "revenue_correction"
+      )
       .reduce((sum, returnRecord) => sum + (getFiniteAmount(returnRecord.amount) ?? 0), 0);
     const revenueTimeline = buildRevenueTimeline({
       localTransactions,
@@ -2689,6 +2982,7 @@ export const adminGetPaymentsDashboard = onCall(
         pending: summary.pending + Number(session.pending),
         failed: summary.failed + Number(session.failed),
         returned: summary.returned + Number(session.returned),
+        corrections: summary.corrections + Number(session.corrections),
         withdrawn: summary.withdrawn + Number(session.withdrawn),
         netCollected: summary.netCollected + Number(session.netCollected),
       }),
@@ -2699,15 +2993,20 @@ export const adminGetPaymentsDashboard = onCall(
         pending: 0,
         failed: 0,
         returned: 0,
+        corrections: 0,
         withdrawn: 0,
         netCollected: 0,
       }
     );
     const grossCollectedTotal = roundCurrency(
-      totals.onlineCollected + totals.externalCollected
+      totals.onlineCollected +
+      totals.externalCollected
     );
     const netCollectedTotal = roundCurrency(
-      grossCollectedTotal - completedReturnTotal - recordedWithdrawalTotal
+      grossCollectedTotal -
+      completedCorrectionTotal -
+      completedReturnTotal -
+      recordedWithdrawalTotal
     );
 
     return {
@@ -2736,6 +3035,7 @@ export const adminGetPaymentsDashboard = onCall(
         pending: roundCurrency(totals.pending),
         failed: roundCurrency(totals.failed),
         returned: roundCurrency(completedReturnTotal),
+        corrections: roundCurrency(completedCorrectionTotal),
         withdrawn: roundCurrency(recordedWithdrawalTotal),
         netCollected: netCollectedTotal,
         recordedWithdrawals: roundCurrency(recordedWithdrawalTotal),
@@ -3622,7 +3922,14 @@ export const adminRecordPaymentReturn = onCall(
     const amount = requirePositiveAmount(data.amount, "Return amount is required.");
     const reference = normalizePaymentReference(data.reference);
     const transactionId = normalizeOptionalString(data.transactionId);
-    const status = normalizeReturnStatus(data.status);
+    const origin = data.origin === "cancelled_registration" ?
+      "cancelled_registration" :
+      "manual";
+    const requestedStatus = normalizeReturnStatus(data.status);
+    const status = origin === "cancelled_registration" ?
+      "pending" :
+      requestedStatus;
+    const effect = normalizeReturnEffect(data.effect);
 
     let transactionRecord: {
       docRef: FirebaseFirestore.DocumentReference;
@@ -3648,52 +3955,386 @@ export const adminRecordPaymentReturn = onCall(
 
     const currency = normalizeCurrency(data.currency ?? transactionData.currency);
     const returnRef = db.collection(SESSION_PAYMENT_RETURNS_COLLECTION).doc();
+    const registrationRef = registrationId ?
+      db.collection(SESSION_REGISTRATIONS_COLLECTION).doc(registrationId) :
+      null;
+    const resolvedTransactionId = transactionId ??
+      normalizeOptionalString(transactionData.transactionId) ??
+      null;
+    const resolvedReference = reference ??
+      normalizeOptionalString(transactionData.reference) ??
+      null;
+    const method = normalizeReturnMethod(data.method);
+    const reason = normalizeOptionalString(data.reason) ??
+      (origin === "cancelled_registration" ?
+        "Payment reversal for cancelled registration" :
+        "Admin recorded return");
+    const externalReference = normalizeOptionalString(data.externalReference);
+    const notes = normalizeOptionalString(data.notes);
 
-    const returnRecord = {
-      sessionId,
-      registrationId,
-      transactionId: transactionId ??
-        normalizeOptionalString(transactionData.transactionId) ??
-        null,
-      reference: reference ??
-        normalizeOptionalString(transactionData.reference) ??
-        null,
-      amount,
-      currency,
-      method: normalizeReturnMethod(data.method),
-      reason: normalizeOptionalString(data.reason) ?? "Admin recorded return",
-      externalReference: normalizeOptionalString(data.externalReference),
-      status,
-      notes: normalizeOptionalString(data.notes),
-      recordedBy: adminUid,
-      createdAt: admin.firestore.FieldValue.serverTimestamp(),
-      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-    };
+    const transactionResult = await db.runTransaction(async (transaction) => {
+      const registrationSnapshot = registrationRef ?
+        await transaction.get(registrationRef) :
+        null;
+      const paymentSnapshot = transactionRecord ?
+        await transaction.get(transactionRecord.docRef) :
+        null;
+      const registrationData = registrationSnapshot?.data() || {};
+      const currentTransactionData = paymentSnapshot?.data() || transactionData;
 
-    await returnRef.set(returnRecord);
-
-    if (transactionRecord) {
-      const transactionPatch: FirebaseFirestore.DocumentData = {
-        returnStatus: status,
-        lastReturnId: returnRef.id,
-        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-      };
-
-      if (status === "completed") {
-        transactionPatch.returnedAmount =
-          admin.firestore.FieldValue.increment(amount);
+      if (registrationRef && !registrationSnapshot?.exists) {
+        throw new HttpsError("not-found", "Session registration not found.");
       }
 
-      await transactionRecord.docRef.set(transactionPatch, {merge: true});
-    }
+      if (
+        registrationSnapshot?.exists &&
+        normalizeOptionalString(registrationData.sessionId) !== sessionId
+      ) {
+        throw new HttpsError(
+          "invalid-argument",
+          "The registration does not belong to this session."
+        );
+      }
+
+      const existingReturnStatus =
+        normalizeOptionalString(registrationData.returnStatus);
+      const existingReturnId =
+        normalizeOptionalString(registrationData.lastReturnId);
+      if (
+        registrationSnapshot?.exists &&
+        existingReturnId &&
+        (existingReturnStatus === "pending" ||
+          existingReturnStatus === "completed")
+      ) {
+        return {returnId: existingReturnId, created: false};
+      }
+
+      if (origin === "cancelled_registration") {
+        if (!registrationSnapshot?.exists) {
+          throw new HttpsError(
+            "invalid-argument",
+            "A registration is required for a cancellation reversal."
+          );
+        }
+
+        const signupStatus = normalizeOptionalString(registrationData.status);
+        if (signupStatus !== "declined" && signupStatus !== "cancelled") {
+          throw new HttpsError(
+            "failed-precondition",
+            "Only declined or cancelled registrations can be reversed."
+          );
+        }
+
+        const paymentStatus =
+          normalizeOptionalString(registrationData.paymentStatus);
+        if (
+          paymentStatus !== "paid_online" &&
+          paymentStatus !== "paid_external"
+        ) {
+          throw new HttpsError(
+            "failed-precondition",
+            "This registration does not have a reversible paid payment."
+          );
+        }
+      }
+
+      const paidAmount = Number(
+        registrationData.paymentAmount ?? currentTransactionData.amount
+      );
+      const alreadyReturned = Number(
+        registrationData.returnedAmount ??
+        currentTransactionData.returnedAmount ??
+        0
+      );
+      const alreadyCorrected = Number(
+        registrationData.correctedAmount ??
+        currentTransactionData.correctedAmount ??
+        0
+      );
+      if (
+        Number.isFinite(paidAmount) &&
+        paidAmount > 0 &&
+        amount >
+          Math.max(0, paidAmount - alreadyReturned - alreadyCorrected) + 0.0001
+      ) {
+        throw new HttpsError(
+          "failed-precondition",
+          "Return amount exceeds the remaining paid amount."
+        );
+      }
+
+      const returnRecord = {
+        sessionId,
+        registrationId,
+        transactionId: resolvedTransactionId,
+        reference: resolvedReference,
+        amount,
+        currency,
+        method,
+        reason,
+        externalReference,
+        status,
+        effect,
+        origin,
+        notes,
+        recordedBy: adminUid,
+        createdAt: admin.firestore.FieldValue.serverTimestamp(),
+        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+        ...(status === "completed" ? {
+          completedAt: admin.firestore.FieldValue.serverTimestamp(),
+          completedBy: adminUid,
+        } : {}),
+      };
+
+      transaction.set(returnRef, returnRecord);
+
+      if (registrationRef) {
+        const registrationPatch: FirebaseFirestore.DocumentData = {
+          returnStatus: status,
+          returnEffect: effect,
+          lastReturnId: returnRef.id,
+          returnAmount: amount,
+          returnRequestedAt: admin.firestore.FieldValue.serverTimestamp(),
+          updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+        };
+
+        if (status === "completed") {
+          if (effect === "customer_refund") {
+            registrationPatch.paymentStatusBeforeReturn =
+              normalizeOptionalString(registrationData.paymentStatus);
+            registrationPatch.paymentStatus = "refunded";
+            registrationPatch.returnedAmount =
+              admin.firestore.FieldValue.increment(amount);
+            registrationPatch.returnedAt =
+              admin.firestore.FieldValue.serverTimestamp();
+          } else {
+            registrationPatch.correctedAmount =
+              admin.firestore.FieldValue.increment(amount);
+            registrationPatch.correctedAt =
+              admin.firestore.FieldValue.serverTimestamp();
+          }
+        }
+
+        transaction.set(registrationRef, registrationPatch, {merge: true});
+      }
+
+      if (transactionRecord) {
+        const transactionPatch: FirebaseFirestore.DocumentData = {
+          returnStatus: status,
+          returnEffect: effect,
+          lastReturnId: returnRef.id,
+          updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+        };
+
+        if (status === "completed") {
+          if (effect === "customer_refund") {
+            transactionPatch.returnedAmount =
+              admin.firestore.FieldValue.increment(amount);
+          } else {
+            transactionPatch.correctedAmount =
+              admin.firestore.FieldValue.increment(amount);
+          }
+        }
+
+        transaction.set(transactionRecord.docRef, transactionPatch, {merge: true});
+      }
+
+      return {returnId: returnRef.id, created: true};
+    });
 
     return {
       success: true,
-      returnId: returnRef.id,
+      returnId: transactionResult.returnId,
+      message: transactionResult.created ?
+        (status === "pending" ?
+          "Return created and awaiting completion." :
+          "Return recorded.") :
+        "A return is already active for this registration.",
       record: {
-        id: returnRef.id,
-        ...serializeForCallable(returnRecord) as Record<string, unknown>,
+        id: transactionResult.returnId,
+        status,
+        created: transactionResult.created,
       },
+    };
+  }
+);
+
+export const adminUpdatePaymentReturn = onCall(
+  {
+    cors: true,
+    invoker: "public",
+  },
+  async (request) => {
+    const adminUid = await requireAdminAuth(request.auth?.uid);
+    const data = (request.data || {}) as AdminUpdatePaymentReturnData;
+    const returnId = requireString(data.returnId, "Return ID is required.");
+    const nextStatus = normalizeReturnStatus(data.status);
+
+    if (
+      nextStatus !== "completed" &&
+      nextStatus !== "cancelled" &&
+      nextStatus !== "reversed"
+    ) {
+      throw new HttpsError(
+        "invalid-argument",
+        "A return can only be completed, cancelled, or reversed."
+      );
+    }
+
+    const returnRef = db
+      .collection(SESSION_PAYMENT_RETURNS_COLLECTION)
+      .doc(returnId);
+
+    const result = await db.runTransaction(async (transaction) => {
+      const returnSnapshot = await transaction.get(returnRef);
+      if (!returnSnapshot.exists) {
+        throw new HttpsError("not-found", "Return record not found.");
+      }
+
+      const returnData = returnSnapshot.data() || {};
+      const currentStatus =
+        normalizeOptionalString(returnData.status) || "pending";
+      if (currentStatus === nextStatus) {
+        return {changed: false};
+      }
+      const isPendingTransition =
+        currentStatus === "pending" &&
+        (nextStatus === "completed" || nextStatus === "cancelled");
+      const isReversalTransition =
+        currentStatus === "completed" && nextStatus === "reversed";
+      if (!isPendingTransition && !isReversalTransition) {
+        throw new HttpsError(
+          "failed-precondition",
+          `This return is already ${currentStatus}.`
+        );
+      }
+
+      const registrationId =
+        normalizeOptionalString(returnData.registrationId);
+      const transactionId =
+        normalizeOptionalString(returnData.transactionId);
+      const registrationRef = registrationId ?
+        db.collection(SESSION_REGISTRATIONS_COLLECTION).doc(registrationId) :
+        null;
+      const paymentRef = transactionId ?
+        db.collection(SESSION_PAYMENT_TRANSACTIONS_COLLECTION).doc(transactionId) :
+        null;
+      const registrationSnapshot = registrationRef ?
+        await transaction.get(registrationRef) :
+        null;
+      const paymentSnapshot = paymentRef ?
+        await transaction.get(paymentRef) :
+        null;
+
+      const amount = requirePositiveAmount(
+        returnData.amount,
+        "The return record has an invalid amount."
+      );
+      const effect = normalizeReturnEffect(returnData.effect);
+      const externalReference =
+        normalizeOptionalString(data.externalReference);
+      const notes = normalizeOptionalString(data.notes);
+      const returnPatch: FirebaseFirestore.DocumentData = {
+        status: nextStatus,
+        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+        ...(externalReference ? {externalReference} : {}),
+        ...(notes ? {notes} : {}),
+      };
+
+      if (nextStatus === "completed") {
+        returnPatch.completedAt =
+          admin.firestore.FieldValue.serverTimestamp();
+        returnPatch.completedBy = adminUid;
+      } else if (nextStatus === "cancelled") {
+        returnPatch.cancelledAt =
+          admin.firestore.FieldValue.serverTimestamp();
+        returnPatch.cancelledBy = adminUid;
+      } else {
+        returnPatch.reversedAt =
+          admin.firestore.FieldValue.serverTimestamp();
+        returnPatch.reversedBy = adminUid;
+      }
+      transaction.set(returnRef, returnPatch, {merge: true});
+
+      if (registrationRef && registrationSnapshot?.exists) {
+        const registrationData = registrationSnapshot.data() || {};
+        const registrationPatch: FirebaseFirestore.DocumentData = {
+          returnStatus: nextStatus,
+          returnEffect: effect,
+          lastReturnId: returnId,
+          updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+        };
+        if (nextStatus === "completed") {
+          if (effect === "customer_refund") {
+            registrationPatch.paymentStatusBeforeReturn =
+              normalizeOptionalString(registrationData.paymentStatus);
+            registrationPatch.paymentStatus = "refunded";
+            registrationPatch.returnedAmount =
+              admin.firestore.FieldValue.increment(amount);
+            registrationPatch.returnedAt =
+              admin.firestore.FieldValue.serverTimestamp();
+          } else {
+            registrationPatch.correctedAmount =
+              admin.firestore.FieldValue.increment(amount);
+            registrationPatch.correctedAt =
+              admin.firestore.FieldValue.serverTimestamp();
+          }
+        } else if (nextStatus === "reversed") {
+          if (effect === "customer_refund") {
+            registrationPatch.paymentStatus =
+              normalizeOptionalString(registrationData.paymentStatusBeforeReturn) ??
+              (paymentSnapshot?.exists ? "paid_online" : "paid_external");
+            registrationPatch.returnedAmount =
+              admin.firestore.FieldValue.increment(-amount);
+            registrationPatch.returnedAt =
+              admin.firestore.FieldValue.delete();
+          } else {
+            registrationPatch.correctedAmount =
+              admin.firestore.FieldValue.increment(-amount);
+            registrationPatch.correctedAt =
+              admin.firestore.FieldValue.delete();
+          }
+        }
+        transaction.set(registrationRef, registrationPatch, {merge: true});
+      }
+
+      if (paymentRef && paymentSnapshot?.exists) {
+        const paymentPatch: FirebaseFirestore.DocumentData = {
+          returnStatus: nextStatus,
+          returnEffect: effect,
+          lastReturnId: returnId,
+          updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+        };
+        if (nextStatus === "completed") {
+          if (effect === "customer_refund") {
+            paymentPatch.returnedAmount =
+              admin.firestore.FieldValue.increment(amount);
+          } else {
+            paymentPatch.correctedAmount =
+              admin.firestore.FieldValue.increment(amount);
+          }
+        } else if (nextStatus === "reversed") {
+          if (effect === "customer_refund") {
+            paymentPatch.returnedAmount =
+              admin.firestore.FieldValue.increment(-amount);
+          } else {
+            paymentPatch.correctedAmount =
+              admin.firestore.FieldValue.increment(-amount);
+          }
+        }
+        transaction.set(paymentRef, paymentPatch, {merge: true});
+      }
+
+      return {changed: true};
+    });
+
+    return {
+      success: true,
+      returnId,
+      status: nextStatus,
+      message: result.changed ?
+        `Return ${nextStatus}.` :
+        `Return is already ${nextStatus}.`,
     };
   }
 );

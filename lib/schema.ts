@@ -115,8 +115,12 @@ export type SessionRegistrationPaymentStatus =
   | 'pending'
   | 'paid_online'
   | 'paid_external'
+  | 'refunded'
   | 'waived'
   | 'failed';
+
+export type SessionPaymentReturnStatus = 'pending' | 'completed' | 'cancelled' | 'reversed';
+export type SessionPaymentReturnEffect = 'customer_refund' | 'revenue_correction';
 
 /** Manual or online payment method */
 export type SessionRegistrationPaymentMethod =
@@ -492,6 +496,15 @@ export interface SessionRegistration extends BaseDocument {
   paymentTransactionId?: string;
   paymentAmount?: number;
   paymentCurrency?: string;
+  paymentStatusBeforeReturn?: SessionRegistrationPaymentStatus;
+  returnStatus?: SessionPaymentReturnStatus;
+  returnEffect?: SessionPaymentReturnEffect;
+  lastReturnId?: string;
+  returnAmount?: number;
+  returnRequestedAt?: FirestoreTimestamp;
+  returnedAmount?: number;
+  correctedAmount?: number;
+  returnedAt?: FirestoreTimestamp;
 
   requestedAt: FirestoreTimestamp;
   paidAt?: FirestoreTimestamp;
@@ -523,7 +536,21 @@ export interface SessionLocation {
   address?: string;
   city?: string;
   coordinates?: GeoPoint;
+  artLocationId?: string;
+  source?: 'art_location' | 'custom';
+  showOnCommunityMap?: boolean;
+  visibility?: 'public' | 'registered_only';
   instructions?: string;
+}
+
+/** Opt-in location attached to a community post */
+export interface CommunityPostLocation {
+  name: string;
+  address?: string;
+  city?: string;
+  coordinates: GeoPoint;
+  artLocationId?: string;
+  source: 'art_location' | 'device' | 'custom';
 }
 
 /** Facilitator info */
@@ -669,6 +696,7 @@ export interface CommunityPost extends BaseDocument {
   content: string;
   mediaUrls: string[];
   mediaType: MediaType | null;
+  location?: CommunityPostLocation;
 
   // Engagement
   reactions: Reactions;

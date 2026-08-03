@@ -1,7 +1,7 @@
 'use client'
 
 import { useState, useCallback, useEffect, useMemo, useRef } from 'react'
-import { useLocation, useNavigate } from 'react-router-dom'
+import { Link as RouterLink, useLocation, useNavigate } from 'react-router-dom'
 import {
   collection,
   doc,
@@ -29,7 +29,7 @@ import {
   Spinner,
 } from '@chakra-ui/react'
 import { motion } from 'framer-motion'
-import { Image as ImageIcon, LockKeyhole, LogIn, UserPlus } from 'lucide-react'
+import { ArrowUpRight, Image as ImageIcon, LockKeyhole, LogIn, MapPinned, UserPlus } from 'lucide-react'
 
 import { Header } from '@/components/layout/Header'
 import { Footer } from '@/components/layout/Footer'
@@ -47,6 +47,7 @@ import {
   type SubmissionVoteValue,
 } from '../../lib/submissionVotes'
 import type {
+  ArtLocation,
   CommunityPost as CommunityPostType,
   Comment,
   CreateDocument,
@@ -500,6 +501,10 @@ export default function CommunityWall() {
 
   const { data: quests } = useCollection('quests', {
     limit: 80,
+  })
+  const { data: communityPlaces } = useCollection('artLocations', {
+    where: [{ field: 'isActive', operator: '==', value: true }],
+    limit: 100,
   })
 
   const {
@@ -986,6 +991,25 @@ export default function CommunityWall() {
             >
               Share your creative journey, connect with fellow artists, and find inspiration.
             </Text>
+
+            <RouterLink to="/community/map" style={{ display: 'inline-block' }}>
+              <Button
+                mt={{ base: 5, md: 7 }}
+                size={{ base: 'sm', md: 'md' }}
+                bg="brand.500"
+                color="white"
+                borderRadius="full"
+                px={{ base: 4, md: 5 }}
+                fontWeight="semibold"
+                _hover={{ bg: 'brand.600', transform: 'translateY(-2px)' }}
+                _active={{ bg: 'brand.700' }}
+                transition="all 0.2s ease"
+              >
+                <MapPinned size={16} aria-hidden="true" />
+                Explore the Art Map
+                <ArrowUpRight size={16} aria-hidden="true" />
+              </Button>
+            </RouterLink>
           </MotionBox>
 
           {/* Two column layout - stacks on mobile */}
@@ -1004,6 +1028,7 @@ export default function CommunityWall() {
                     userId={currentUserId}
                     userName={currentUserName}
                     userPhotoURL={currentUserPhoto}
+                    places={communityPlaces as ArtLocation[]}
                     onSubmit={handleCreatePost}
                     initialPrompt={selectedPrompt || undefined}
                     onPromptClear={() => setSelectedPrompt(null)}

@@ -17,18 +17,21 @@ import {
   Spinner,
 } from '@chakra-ui/react'
 import { motion, AnimatePresence } from 'framer-motion'
-import { CalendarDays, CheckCircle2, CreditCard, ImagePlus, Link as LinkIcon, Mail, MapPin, MessageCircle, Pencil, Plus, Search, Send, Trash2, UserRoundMinus, Users, X } from 'lucide-react'
-import { Timestamp, arrayRemove, arrayUnion } from 'firebase/firestore'
+import { CalendarDays, CheckCircle2, CreditCard, ImagePlus, Link as LinkIcon, MapPin, MessageCircle, Pencil, Plus, RotateCcw, Search, Send, Trash2, UserRoundMinus, Users, X } from 'lucide-react'
+import { GeoPoint, Timestamp, arrayRemove, arrayUnion } from 'firebase/firestore'
 
 import { AdminLayout } from '@/components/layout/AdminLayout'
+import { LocationPicker, type LocationPickerValue } from '@/components/map'
 import { useAuth } from '@/contexts/AuthContext'
 import { useCollection } from '@/hooks'
 import { sendSessionConfirmationWhatsApp } from '../../../lib/adminNotifications'
+import { recordPaymentReturn } from '../../../lib/adminPayments'
 import { createDocument, createDocumentWithId, deleteDocument, updateDocument } from '../../../lib/firestore'
 import { getRegistrationCounts, getSessionRegistrationId, getUserWhatsAppPhone, normalizeSessionRegistrationConfig, updateSessionRegistration } from '../../../lib/sessionRegistrations'
 import { STORAGE_PATHS, uploadFileSimple, validateFile } from '../../../lib/storage'
 import type {
   CreateDocument,
+  ArtLocation,
   GalleryItem,
   Session,
   SessionAccessMode,
@@ -47,6 +50,7 @@ import type {
 const MotionBox = motion.create(Box)
 
 type TabFilter = 'upcoming' | 'past'
+type RegistrationQueueTab = 'all' | 'pending' | 'declined' | 'completed' | 'waitlist'
 
 interface SessionForm {
   title: string
@@ -58,6 +62,13 @@ interface SessionForm {
   time: string
   endTime: string
   location: string
+  locationAddress: string
+  locationCity: string
+  locationLatitude: number | null
+  locationLongitude: number | null
+  locationArtLocationId?: string
+  locationSource: 'art_location' | 'custom'
+  showOnCommunityMap: boolean
   capacity: string
   accessMode: SessionAccessMode
   paymentMode: SessionPaymentMode
@@ -90,6 +101,13 @@ const emptyForm: SessionForm = {
   time: '18:00',
   endTime: '20:00',
   location: '',
+  locationAddress: '',
+  locationCity: 'Lusaka',
+  locationLatitude: null,
+  locationLongitude: null,
+  locationArtLocationId: undefined,
+  locationSource: 'custom',
+  showOnCommunityMap: true,
   capacity: '30',
   accessMode: 'open',
   paymentMode: 'free',
@@ -103,16 +121,6 @@ const emptyForm: SessionForm = {
   gallery: [],
   tags: '',
 }
-
-const registrationStatuses: SessionRegistrationStatus[] = [
-  'requested',
-  'pending_payment',
-  'paid_pending_confirmation',
-  'confirmed',
-  'waitlisted',
-  'declined',
-  'cancelled',
-]
 
 const registrationStatusLabels: Record<SessionRegistrationStatus, string> = {
   requested: 'Requested',
@@ -130,6 +138,7 @@ const paymentStatusLabels: Record<SessionRegistrationPaymentStatus, string> = {
   pending: 'Payment Pending',
   paid_online: 'Paid Online',
   paid_external: 'Paid Externally',
+  refunded: 'Refunded',
   waived: 'Waived',
   failed: 'Failed',
 }
@@ -186,29 +195,13 @@ const filterButtonProps = {
   whiteSpace: 'nowrap',
 } as const
 
-const modalFooterButtonProps = {
-  h: '44px',
-  minW: '112px',
-  px: 5,
-  borderRadius: 'xl',
-  fontSize: 'sm',
-  fontWeight: 'semibold',
-  lineHeight: '1',
-  gap: 2,
-  display: 'inline-flex',
-  alignItems: 'center',
-  justifyContent: 'center',
-  flexShrink: 0,
-  whiteSpace: 'nowrap',
-} as const
-
 const registrationActionButtonProps = {
-  h: '42px',
-  minW: { base: 'full', sm: '132px' },
-  w: { base: 'full', sm: 'auto' },
-  px: 4.5,
-  borderRadius: 'full',
-  fontSize: 'sm',
+  h: '40px',
+  minW: { base: 0, lg: '132px' },
+  w: 'full',
+  px: 4,
+  borderRadius: 'lg',
+  fontSize: 'xs',
   fontWeight: 'semibold',
   lineHeight: '1',
   gap: 2,
@@ -260,37 +253,6 @@ const getWhatsAppConfirmationState = (registration: SessionRegistration) => {
   }
 
   return null
-}
-
-function RegistrationDetail({
-  label,
-  value,
-  icon,
-}: {
-  label: string
-  value: string
-  icon: ReactNode
-}) {
-  return (
-    <Box
-      minW={0}
-      p={3}
-      bg="blackAlpha.200"
-      border="1px solid"
-      borderColor="whiteAlpha.100"
-      borderRadius="lg"
-    >
-      <HStack gap={2} color="whiteAlpha.500" fontSize="xs" mb={1} minW={0}>
-        <Box flexShrink={0}>{icon}</Box>
-        <Text textTransform="uppercase" letterSpacing="0.08em" fontWeight="semibold">
-          {label}
-        </Text>
-      </HStack>
-      <Text color="whiteAlpha.800" fontSize="sm" fontWeight="medium" overflow="hidden" textOverflow="ellipsis" whiteSpace="nowrap">
-        {value}
-      </Text>
-    </Box>
-  )
 }
 
 const toDate = (value: unknown): Date | null => {
@@ -443,6 +405,13 @@ const toForm = (session: Session): SessionForm => ({
   time: toInputTime(session.date) || '18:00',
   endTime: toInputTime(session.endDate) || '',
   location: session.location?.name || session.location?.address || '',
+  locationAddress: session.location?.address || '',
+  locationCity: session.location?.city || 'Lusaka',
+  locationLatitude: session.location?.coordinates?.latitude ?? null,
+  locationLongitude: session.location?.coordinates?.longitude ?? null,
+  locationArtLocationId: session.location?.artLocationId,
+  locationSource: session.location?.source || (session.location?.artLocationId ? 'art_location' : 'custom'),
+  showOnCommunityMap: session.location?.showOnCommunityMap ?? true,
   capacity: String(session.capacity || 0),
   accessMode: session.accessMode || 'open',
   paymentMode: session.paymentMode || (session.isFree === false || (session.price && session.price > 0) ? 'paid' : 'free'),
@@ -488,7 +457,15 @@ const buildPayload = (
     ...(typeof duration === 'number' ? { duration } : {}),
     location: {
       name: form.location.trim() || (isOnline ? 'Online' : 'TBD'),
-      address: form.location.trim(),
+      address: form.locationAddress.trim() || form.location.trim(),
+      city: form.locationCity.trim() || 'Lusaka',
+      ...(form.locationLatitude !== null && form.locationLongitude !== null
+        ? { coordinates: new GeoPoint(form.locationLatitude, form.locationLongitude) }
+        : {}),
+      ...(form.locationArtLocationId ? { artLocationId: form.locationArtLocationId } : {}),
+      source: form.locationSource,
+      showOnCommunityMap: form.showOnCommunityMap,
+      visibility: 'public',
     },
     isOnline,
     capacity: Number(form.capacity) || 0,
@@ -524,10 +501,12 @@ export default function ManageSessions() {
   const {
     data: userDocs,
     loading: usersLoading,
-    error: usersError,
   } = useCollection('users', {
     orderBy: 'displayName',
     orderDirection: 'asc',
+  })
+  const { data: artLocations } = useCollection('artLocations', {
+    where: [{ field: 'isActive', operator: '==', value: true }],
   })
   const {
     data: registrations,
@@ -547,6 +526,7 @@ export default function ManageSessions() {
   const [formData, setFormData] = useState<SessionForm>(emptyForm)
   const [submitting, setSubmitting] = useState(false)
   const [resendingWhatsAppId, setResendingWhatsAppId] = useState<string | null>(null)
+  const [reversingRegistrationId, setReversingRegistrationId] = useState<string | null>(null)
 
   const sessions = useMemo(
     () => [...data].sort((a, b) => toMillis(b.date) - toMillis(a.date)),
@@ -608,6 +588,13 @@ export default function ManageSessions() {
     event.preventDefault()
     if (!formData.title.trim()) {
       alert('Session title is required.')
+      return
+    }
+    const isInPerson = formData.type !== 'online'
+    if (isInPerson && formData.status === 'published' && (
+      formData.locationLatitude === null || formData.locationLongitude === null
+    )) {
+      alert('Place the session on the map before publishing it.')
       return
     }
 
@@ -782,6 +769,53 @@ export default function ManageSessions() {
         waitlist: arrayRemove(registration.userId) as unknown as string[],
       })
       void refetch()
+    })()
+  }
+
+  const handleReverseRegistrationPayment = (registration: SessionRegistration) => {
+    void (async () => {
+      const amount = Number(registration.paymentAmount || 0)
+      if (!Number.isFinite(amount) || amount <= 0) {
+        alert('This registration does not have a valid paid amount to reverse.')
+        return
+      }
+
+      if (!window.confirm(
+        `Create a pending return of ${registration.paymentCurrency || 'ZMW'} ${amount.toFixed(2)} for ${registration.displayName}?`
+      )) return
+
+      setReversingRegistrationId(registration.id)
+      try {
+        const method = registration.paymentMethod === 'cash' ||
+          registration.paymentMethod === 'bank_transfer' ||
+          registration.paymentMethod === 'mobile_money' ||
+          registration.paymentMethod === 'card'
+          ? registration.paymentMethod
+          : 'other'
+        const result = await recordPaymentReturn({
+          sessionId: registration.sessionId,
+          registrationId: registration.id,
+          transactionId: registration.paymentStatus === 'paid_online'
+            ? registration.paymentTransactionId
+            : undefined,
+          reference: registration.paymentStatus === 'paid_online'
+            ? registration.paymentReference
+            : undefined,
+          amount,
+          currency: registration.paymentCurrency || 'ZMW',
+          method,
+          reason: `Payment reversal for ${registrationStatusLabels[registration.status].toLowerCase()} registration`,
+          status: 'pending',
+          origin: 'cancelled_registration',
+          notes: `Created from the ${registrationStatusLabels[registration.status]} registration queue.`,
+        })
+        await refetchRegistrations()
+        alert(result.message || 'Pending return created. Complete it in Payments → Returns after the funds are sent.')
+      } catch (returnError) {
+        alert(getClientErrorMessage(returnError, 'Failed to create the payment return.'))
+      } finally {
+        setReversingRegistrationId(null)
+      }
     })()
   }
 
@@ -970,64 +1004,95 @@ export default function ManageSessions() {
         </SimpleGrid>
 
         {modalMode && (
-          <Modal title={modalMode === 'edit' ? 'Edit Session' : 'Create Session'} onClose={closeModal}>
+          <Modal title={modalMode === 'edit' ? 'Edit Session' : 'Create Session'} onClose={closeModal} fullScreen>
             <form onSubmit={handleSubmit}>
-              <SessionFormFields form={formData} setForm={setFormData} />
-              <HStack justify="flex-end" gap={3} mt={6}>
-                <Button type="button" onClick={closeModal} bg="whiteAlpha.100" color="white" borderRadius="full" _hover={{ bg: 'whiteAlpha.200' }}>Cancel</Button>
-                <Button type="submit" loading={submitting} bg="brand.500" color="white" borderRadius="full" _hover={{ bg: 'brand.600' }}>
-                  {modalMode === 'edit' ? 'Save Changes' : 'Create Session'}
+              <Box maxW="1080px" mx="auto" px={{ base: 4, md: 7 }} py={{ base: 4, md: 6 }}>
+                <Flex justify="space-between" align={{ base: 'flex-start', lg: 'center' }} direction={{ base: 'column', lg: 'row' }} gap={4} mb={5}>
+                  <Box>
+                    <Text color="brand.300" fontSize="xs" fontWeight="semibold" letterSpacing="0.16em" textTransform="uppercase">
+                      Session setup
+                    </Text>
+                    <Heading as="h2" color="white" fontSize={{ base: '2xl', md: '3xl' }} mt={2}>
+                      {modalMode === 'edit' ? formData.title || 'Edit session' : 'Create a session'}
+                    </Heading>
+                    <Text color="whiteAlpha.500" mt={2} maxW="620px">
+                      Manage session details, registration rules, payment settings, and gallery media.
+                    </Text>
+                  </Box>
+                  {modalMode === 'edit' && (
+                    <HStack gap={2} flexWrap="wrap">
+                      <SessionTypeBadge type={formData.type} />
+                      <StatusBadge status={formData.status} />
+                    </HStack>
+                  )}
+                </Flex>
+                <Box>
+                  <SessionFormFields form={formData} setForm={setFormData} places={artLocations} />
+                </Box>
+              </Box>
+              <Flex
+                position="sticky"
+                bottom={0}
+                zIndex={4}
+                justify="flex-end"
+                gap={3}
+                px={{ base: 4, md: 8 }}
+                py={4}
+                bg="rgba(17,17,17,0.96)"
+                borderTop="1px solid"
+                borderColor="rgba(255,255,255,0.07)"
+                backdropFilter="blur(12px)"
+              >
+                <Button type="button" onClick={closeModal} h="44px" px={6} bg="whiteAlpha.70" color="whiteAlpha.800" borderRadius="lg" _hover={{ bg: 'whiteAlpha.120', color: 'white' }}>Cancel</Button>
+                <Button type="submit" loading={submitting} h="44px" px={6} bg="brand.500" color="white" borderRadius="lg" _hover={{ bg: 'brand.600' }}>
+                  {modalMode === 'edit' ? 'Save changes' : 'Create session'}
                 </Button>
-              </HStack>
+              </Flex>
             </form>
           </Modal>
         )}
 
         {detailSession && (
-          <Modal title="Session Details" onClose={() => setDetailSession(null)}>
-            <VStack align="stretch" gap={5}>
-              {detailSession.coverImage && (
-                <Image src={detailSession.coverImage} alt={detailSession.title} borderRadius="xl" maxH="220px" objectFit="cover" />
-              )}
-              <Box>
-                <HStack gap={2} mb={3}>
-                  <SessionTypeBadge type={detailSession.type} />
-                  <StatusBadge status={detailSession.status} />
-                </HStack>
-                <Heading as="h2" size="md" color="white">{detailSession.title}</Heading>
-                <Text color="whiteAlpha.650" mt={2}>{detailSession.description}</Text>
-                {detailSession.about && (
-                  <Box mt={4} p={4} borderRadius="xl" bg="whiteAlpha.50" border="1px solid" borderColor="whiteAlpha.100">
-                    <Text color="whiteAlpha.500" fontSize="xs" textTransform="uppercase" letterSpacing="wider" mb={2}>About This Session</Text>
-                    <Text color="whiteAlpha.700" whiteSpace="pre-line">{detailSession.about}</Text>
-                  </Box>
-                )}
-              </Box>
-              <SimpleGrid columns={{ base: 1, sm: 2 }} gap={4}>
-                <Info label="Date" value={`${formatDate(detailSession.date)} ${formatTime(detailSession.date)}`} />
-                <Info label="Location" value={detailSession.location?.name || 'Not set'} />
-                <Info label="Facilitator" value={detailSession.facilitator?.name || 'Not set'} />
-                <Info label="Attendance" value={`${getSessionConfirmedCount(detailSession, registrationsBySessionId)} / ${detailSession.capacity || 0}`} />
-                <Info label="Waitlist" value={String(getSessionWaitlistCount(detailSession, registrationsBySessionId))} />
-                <Info label="Access" value={(detailSession.accessMode || 'open').replace('_', ' ')} />
-                <Info label="Payment" value={normalizeSessionRegistrationConfig(detailSession).paymentMode === 'paid' ? `${detailSession.currency || 'ZMW'} ${Number(detailSession.price || 0).toFixed(2)}` : 'Free'} />
-                <Info label="Gallery" value={`${detailSession.gallery?.length || 0} images`} />
-              </SimpleGrid>
-              {detailSession.gallery && detailSession.gallery.length > 0 && (
-                <SimpleGrid columns={{ base: 2, sm: 3 }} gap={3}>
-                  {detailSession.gallery.slice(0, 6).map((item) => (
-                    <Image
-                      key={item.id}
-                      src={item.thumbnailUrl || item.url}
-                      alt={item.caption || 'Session gallery image'}
-                      borderRadius="xl"
-                      h="108px"
-                      w="full"
-                      objectFit="cover"
-                    />
-                  ))}
-                </SimpleGrid>
-              )}
+          <Modal title="Operations Ledger" onClose={() => setDetailSession(null)} fullScreen>
+            <VStack align="stretch" gap={0}>
+              <Flex
+                px={{ base: 4, md: 7 }}
+                py={{ base: 5, md: 6 }}
+                justify="space-between"
+                align={{ base: 'flex-start', lg: 'center' }}
+                direction={{ base: 'column', lg: 'row' }}
+                gap={5}
+                borderBottom="1px solid"
+                borderColor="whiteAlpha.100"
+              >
+                <Box minW={0}>
+                  <HStack gap={2} mb={3} flexWrap="wrap">
+                    <SessionTypeBadge type={detailSession.type} />
+                    <StatusBadge status={detailSession.status} />
+                  </HStack>
+                  <Heading as="h2" color="white" fontSize={{ base: 'xl', md: '2xl' }} lineClamp={1}>
+                    {detailSession.title}
+                  </Heading>
+                  <Flex mt={2} gap={{ base: 2, md: 5 }} color="whiteAlpha.600" fontSize="sm" flexWrap="wrap">
+                    <HStack gap={2}><CalendarDays size={15} /><Text>{formatDate(detailSession.date)} · {formatTime(detailSession.date)}</Text></HStack>
+                    <HStack gap={2}><MapPin size={15} /><Text>{detailSession.location?.name || 'Location not set'}</Text></HStack>
+                    <HStack gap={2}><Users size={15} /><Text>{getSessionConfirmedCount(detailSession, registrationsBySessionId)} / {detailSession.capacity || 0} confirmed</Text></HStack>
+                  </Flex>
+                </Box>
+                <Button
+                  h="42px"
+                  px={5}
+                  borderRadius="lg"
+                  bg="whiteAlpha.50"
+                  color="whiteAlpha.800"
+                  border={0}
+                  _hover={{ bg: 'whiteAlpha.100', color: 'white' }}
+                  onClick={() => { setDetailSession(null); openEdit(detailSession) }}
+                >
+                  <Pencil size={15} />
+                  Edit session
+                </Button>
+              </Flex>
               <RegistrationManager
                 session={detailSession}
                 users={userDocs}
@@ -1040,51 +1105,11 @@ export default function ManageSessions() {
                 onConfirm={handleConfirmRegistration}
                 onWaitlist={handleWaitlistRegistration}
                 onDecline={handleDeclineRegistration}
+                onReversePayment={handleReverseRegistrationPayment}
                 onRetryWhatsApp={handleRetryWhatsApp}
                 resendingWhatsAppId={resendingWhatsAppId}
+                reversingRegistrationId={reversingRegistrationId}
               />
-              {getSessionRegistrations(registrationsBySessionId, detailSession.id).length === 0 && (
-                <>
-                  <SignupSection
-                    title="Legacy Signed Up"
-                    emptyLabel="No legacy attendees yet."
-                    people={resolveSignupPeople(detailSession.attendees, usersById)}
-                    loading={usersLoading}
-                    error={usersError?.message}
-                  />
-                  <SignupSection
-                    title="Legacy Waitlist"
-                    emptyLabel="No legacy waitlist entries yet."
-                    people={resolveSignupPeople(detailSession.waitlist, usersById)}
-                    loading={usersLoading}
-                    error={usersError?.message}
-                  />
-                </>
-              )}
-              <HStack justify="flex-end" gap={3} pt={1} flexWrap="wrap">
-                <Button
-                  {...modalFooterButtonProps}
-                  onClick={() => setDetailSession(null)}
-                  bg="whiteAlpha.100"
-                  color="white"
-                  border="1px solid"
-                  borderColor="whiteAlpha.200"
-                  _hover={{ bg: 'whiteAlpha.200' }}
-                >
-                  <X size={16} />
-                  Close
-                </Button>
-                <Button
-                  {...modalFooterButtonProps}
-                  onClick={() => { setDetailSession(null); openEdit(detailSession) }}
-                  bg="brand.500"
-                  color="white"
-                  _hover={{ bg: 'brand.600' }}
-                >
-                  <Pencil size={16} />
-                  Edit
-                </Button>
-              </HStack>
             </VStack>
           </Modal>
         )}
@@ -1168,15 +1193,6 @@ function StatusBadge({ status }: { status: SessionStatus }) {
   return <Badge bg={colors.bg} color={colors.color} borderRadius="full" px={3} py={1} textTransform="capitalize">{status}</Badge>
 }
 
-function Info({ label, value }: { label: string; value: string }) {
-  return (
-    <Box p={4} bg="whiteAlpha.50" border="1px solid" borderColor="whiteAlpha.100" borderRadius="xl">
-      <Text color="whiteAlpha.500" fontSize="xs" textTransform="uppercase" letterSpacing="0.12em">{label}</Text>
-      <Text color="white" mt={1}>{value}</Text>
-    </Box>
-  )
-}
-
 function RegistrationManager({
   session,
   users,
@@ -1189,8 +1205,10 @@ function RegistrationManager({
   onConfirm,
   onWaitlist,
   onDecline,
+  onReversePayment,
   onRetryWhatsApp,
   resendingWhatsAppId,
+  reversingRegistrationId,
 }: {
   session: Session
   users: FirestoreUser[]
@@ -1209,13 +1227,18 @@ function RegistrationManager({
   onConfirm: (registration: SessionRegistration, markPaid?: boolean) => void
   onWaitlist: (registration: SessionRegistration) => void
   onDecline: (registration: SessionRegistration) => void
+  onReversePayment: (registration: SessionRegistration) => void
   onRetryWhatsApp: (registration: SessionRegistration) => void
   resendingWhatsAppId: string | null
+  reversingRegistrationId: string | null
 }) {
   const [selectedUserId, setSelectedUserId] = useState('')
   const [newRegistrationPhone, setNewRegistrationPhone] = useState('')
   const [newRegistrationStatus, setNewRegistrationStatus] = useState<SessionRegistrationStatus>('requested')
   const [addingRegistration, setAddingRegistration] = useState(false)
+  const [activeQueueTab, setActiveQueueTab] = useState<RegistrationQueueTab>('all')
+  const [registrationSearch, setRegistrationSearch] = useState('')
+  const [registrationSort, setRegistrationSort] = useState<'newest' | 'oldest' | 'name'>('newest')
   const existingUserIds = useMemo(
     () => new Set(registrations.map((registration) => registration.userId)),
     [registrations]
@@ -1228,6 +1251,56 @@ function RegistrationManager({
     [existingUserIds, users]
   )
   const newPaymentStatus = getAdminAddPaymentStatus(session, newRegistrationStatus)
+  const queueTabs: { value: RegistrationQueueTab; label: string; count: number }[] = [
+    { value: 'all', label: 'All', count: registrations.length },
+    {
+      value: 'pending',
+      label: 'Pending',
+      count: registrations.filter((registration) =>
+        ['requested', 'pending_payment', 'paid_pending_confirmation'].includes(registration.status)
+      ).length,
+    },
+    {
+      value: 'declined',
+      label: 'Declined',
+      count: registrations.filter((registration) =>
+        registration.status === 'declined' || registration.status === 'cancelled'
+      ).length,
+    },
+    {
+      value: 'completed',
+      label: 'Completed',
+      count: registrations.filter((registration) => registration.status === 'confirmed').length,
+    },
+    {
+      value: 'waitlist',
+      label: 'Waitlist',
+      count: registrations.filter((registration) => registration.status === 'waitlisted').length,
+    },
+  ]
+  const visibleRegistrations = useMemo(() => {
+    const query = registrationSearch.trim().toLowerCase()
+    const records = registrations.filter((registration) => {
+      const matchesTab = activeQueueTab === 'all' ||
+        (activeQueueTab === 'pending' && ['requested', 'pending_payment', 'paid_pending_confirmation'].includes(registration.status)) ||
+        (activeQueueTab === 'declined' && (registration.status === 'declined' || registration.status === 'cancelled')) ||
+        (activeQueueTab === 'completed' && registration.status === 'confirmed') ||
+        (activeQueueTab === 'waitlist' && registration.status === 'waitlisted')
+      const matchesSearch = !query || [
+        registration.displayName,
+        registration.email,
+        registration.whatsappPhone,
+        registration.userId,
+      ].some((value) => String(value || '').toLowerCase().includes(query))
+      return matchesTab && matchesSearch
+    })
+
+    return [...records].sort((a, b) => {
+      if (registrationSort === 'name') return a.displayName.localeCompare(b.displayName)
+      const difference = toMillis(a.requestedAt) - toMillis(b.requestedAt)
+      return registrationSort === 'oldest' ? difference : -difference
+    })
+  }, [activeQueueTab, registrationSearch, registrationSort, registrations])
 
   const handleAddRegistrationSubmit = async (event: FormEvent) => {
     event.preventDefault()
@@ -1257,131 +1330,132 @@ function RegistrationManager({
     }
   }
 
-  const addRegistrationForm = (
-    <Box p={4} bg="whiteAlpha.50" border="1px solid" borderColor="whiteAlpha.100" borderRadius="xl">
-      <Flex justify="space-between" align={{ base: 'flex-start', sm: 'center' }} gap={3} direction={{ base: 'column', sm: 'row' }} mb={3}>
-        <Box>
-          <Text color="white" fontWeight="semibold">Add guest</Text>
-          <Text color="whiteAlpha.500" fontSize="sm">Create a registration for an existing Club BZR account.</Text>
-        </Box>
-        <Badge bg="brand.500/20" color="brand.200" borderRadius="full" px={3} py={1}>
-          {paymentStatusLabels[newPaymentStatus]}
-        </Badge>
-      </Flex>
-      <form onSubmit={handleAddRegistrationSubmit}>
-        <SimpleGrid columns={{ base: 1, lg: 4 }} gap={3}>
-          <select
-            value={selectedUserId}
-            onChange={(event) => {
-              const userId = event.target.value
-              const selectedUser = availableUsers.find((user) => (user.uid || user.id) === userId)
-              setSelectedUserId(userId)
-              setNewRegistrationPhone(selectedUser?.whatsappPhone || selectedUser?.phone || '')
-            }}
-            style={filterSelectStyle}
-            disabled={usersLoading || addingRegistration}
-          >
-            <option value="">{usersLoading ? 'Loading users...' : 'Select user'}</option>
-            {availableUsers.map((user) => {
-              const userId = user.uid || user.id
-              return (
-                <option key={userId} value={userId}>
-                  {user.displayName || user.email || userId} {user.email ? `- ${user.email}` : ''}
-                </option>
-              )
-            })}
-          </select>
-          <Input
-            value={newRegistrationPhone}
-            onChange={(event) => setNewRegistrationPhone(event.target.value)}
-            placeholder="WhatsApp number"
-            h="46px"
-            bg="whiteAlpha.50"
-            borderColor="whiteAlpha.200"
-            color="white"
-            disabled={addingRegistration}
-          />
-          <select
-            value={newRegistrationStatus}
-            onChange={(event) => setNewRegistrationStatus(event.target.value as SessionRegistrationStatus)}
-            style={filterSelectStyle}
-            disabled={addingRegistration}
-          >
-            {adminAddRegistrationStatuses.map((status) => (
-              <option key={status} value={status}>
-                {registrationStatusLabels[status]}
-              </option>
-            ))}
-          </select>
-          <Button
-            type="submit"
-            h="46px"
-            bg="brand.500"
-            color="white"
-            borderRadius="xl"
-            _hover={{ bg: 'brand.600' }}
-            disabled={!selectedUserId || !newRegistrationPhone.trim() || addingRegistration || usersLoading}
-          >
-            {addingRegistration ? <Spinner size="sm" /> : 'Add Registration'}
-          </Button>
-        </SimpleGrid>
-      </form>
-      {!usersLoading && availableUsers.length === 0 && (
-        <Text color="whiteAlpha.500" fontSize="sm" mt={3}>
-          Every existing user already has a registration record for this session.
-        </Text>
-      )}
-    </Box>
-  )
-
   return (
-    <VStack align="stretch" gap={4}>
-      {addRegistrationForm}
-
-      {loading ? (
-        <Flex align="center" gap={2} color="whiteAlpha.600" fontSize="sm">
-          <Spinner size="sm" color="brand.500" />
-          <Text>Loading registrations...</Text>
-        </Flex>
-      ) : error ? (
-        <Box p={3} bg="red.500/10" border="1px solid" borderColor="red.500/30" borderRadius="xl">
-          <Text color="red.200" fontSize="sm">{error}</Text>
-        </Box>
-      ) : registrations.length === 0 ? (
-        <Box p={4} bg="whiteAlpha.50" border="1px solid" borderColor="whiteAlpha.100" borderRadius="xl">
-          <Text color="whiteAlpha.500" fontSize="sm">No registration records yet.</Text>
-        </Box>
-      ) : (
-        registrationStatuses.map((status) => {
-          const records = registrations.filter((registration) => registration.status === status)
-          if (records.length === 0) return null
-
+    <VStack align="stretch" gap={0}>
+      <Flex
+        px={{ base: 4, md: 7 }}
+        borderBottom="1px solid"
+        borderColor="whiteAlpha.100"
+        overflowX="auto"
+        gap={{ base: 5, md: 8 }}
+        css={{ scrollbarWidth: 'none', '&::-webkit-scrollbar': { display: 'none' } }}
+      >
+        {queueTabs.map((tab) => {
+          const isActive = activeQueueTab === tab.value
           return (
-            <Box key={status}>
-              <Flex justify="space-between" align="center" mb={3}>
-                <Text color="white" fontWeight="semibold">{registrationStatusLabels[status]}</Text>
-                <Badge bg="whiteAlpha.100" color="whiteAlpha.800" borderRadius="full" px={3} py={1}>
-                  {records.length}
-                </Badge>
-              </Flex>
-              <VStack align="stretch" gap={2}>
-                {records.map((registration) => (
-                  <RegistrationRow
-                    key={registration.id}
-                    registration={registration}
-                    onMarkPaid={onMarkPaid}
-                    onConfirm={onConfirm}
-                    onWaitlist={onWaitlist}
-                    onDecline={onDecline}
-                    onRetryWhatsApp={onRetryWhatsApp}
-                    isRetryingWhatsApp={resendingWhatsAppId === registration.id}
-                  />
-                ))}
-              </VStack>
-            </Box>
+            <Button
+              key={tab.value}
+              onClick={() => setActiveQueueTab(tab.value)}
+              h="58px"
+              px={0}
+              flexShrink={0}
+              bg="transparent"
+              color={isActive ? 'brand.300' : 'whiteAlpha.650'}
+              borderRadius={0}
+              borderBottom="2px solid"
+              borderColor={isActive ? 'brand.400' : 'transparent'}
+              _hover={{ color: 'white', bg: 'transparent' }}
+            >
+              {tab.label}
+              <Badge
+                ml={2}
+                bg={isActive ? 'rgba(239,112,67,0.22)' : 'rgba(255,255,255,0.09)'}
+                color={isActive ? '#ffd1bf' : 'rgba(255,255,255,0.78)'}
+                borderRadius="full"
+                px={2.5}
+                fontWeight="semibold"
+              >
+                {tab.count}
+              </Badge>
+            </Button>
           )
-        })
-      )}
+        })}
+      </Flex>
+
+      <Box px={{ base: 4, md: 7 }} py={6}>
+        <Box p={{ base: 4, md: 5 }} borderRadius="xl" bg="rgba(255,255,255,0.035)">
+          <Flex justify="space-between" align={{ base: 'flex-start', md: 'center' }} gap={3} mb={4} direction={{ base: 'column', md: 'row' }}>
+            <Box>
+              <Text color="white" fontWeight="semibold">Add guest</Text>
+              <Text color="whiteAlpha.500" fontSize="sm">Create a registration for an existing Club BZR member.</Text>
+            </Box>
+            <Badge bg="brand.500/15" color="brand.200" borderRadius="md" px={3} py={1.5}>
+              {paymentStatusLabels[newPaymentStatus]}
+            </Badge>
+          </Flex>
+          <form onSubmit={handleAddRegistrationSubmit}>
+            <SimpleGrid columns={{ base: 1, md: 2, xl: 5 }} gap={4} alignItems="end">
+              <Field label="Member">
+                <select
+                  value={selectedUserId}
+                  onChange={(event) => {
+                    const userId = event.target.value
+                    const selectedUser = availableUsers.find((user) => (user.uid || user.id) === userId)
+                    setSelectedUserId(userId)
+                    setNewRegistrationPhone(selectedUser?.whatsappPhone || selectedUser?.phone || '')
+                  }}
+                  style={{ ...filterSelectStyle, border: 'none', backgroundColor: 'rgba(0,0,0,0.24)' }}
+                  disabled={usersLoading || addingRegistration}
+                >
+                  <option value="">{usersLoading ? 'Loading members...' : 'Select member'}</option>
+                  {availableUsers.map((user) => {
+                    const userId = user.uid || user.id
+                    return <option key={userId} value={userId}>{user.displayName || user.email || userId}{user.email ? ` · ${user.email}` : ''}</option>
+                  })}
+                </select>
+              </Field>
+              <Field label="WhatsApp number">
+                <Input value={newRegistrationPhone} onChange={(event) => setNewRegistrationPhone(event.target.value)} placeholder="e.g. +260 97 123 4567" h="46px" bg="rgba(0,0,0,0.24)" borderColor="rgba(255,255,255,0.1)" color="white" disabled={addingRegistration} />
+              </Field>
+              <Field label="Signup state">
+                <select value={newRegistrationStatus} onChange={(event) => setNewRegistrationStatus(event.target.value as SessionRegistrationStatus)} style={{ ...filterSelectStyle, border: 'none', backgroundColor: 'rgba(0,0,0,0.24)' }} disabled={addingRegistration}>
+                  {adminAddRegistrationStatuses.map((status) => <option key={status} value={status}>{registrationStatusLabels[status]}</option>)}
+                </select>
+              </Field>
+              <Field label="Payment state">
+                <Flex h="46px" px={4} align="center" bg="rgba(0,0,0,0.24)" borderRadius="12px" color="whiteAlpha.750" fontSize="sm">
+                  <CreditCard size={15} />
+                  <Text ml={2}>{paymentStatusLabels[newPaymentStatus]}</Text>
+                </Flex>
+              </Field>
+              <Button type="submit" h="46px" bg="brand.500" color="white" borderRadius="lg" _hover={{ bg: 'brand.600' }} disabled={!selectedUserId || !newRegistrationPhone.trim() || addingRegistration || usersLoading}>
+                {addingRegistration ? <Spinner size="sm" /> : <><Plus size={16} /> Add guest</>}
+              </Button>
+            </SimpleGrid>
+          </form>
+          {!usersLoading && availableUsers.length === 0 && <Text color="whiteAlpha.500" fontSize="sm" mt={3}>Every member already has a registration for this session.</Text>}
+        </Box>
+
+        <Flex mt={4} mb={3} gap={3} justify="space-between" align={{ base: 'stretch', md: 'center' }} direction={{ base: 'column', md: 'row' }}>
+          <Flex h="44px" flex="1" maxW={{ md: '420px' }} align="center" px={3.5} bg="rgba(255,255,255,0.04)" borderRadius="lg">
+            <Search size={17} color="rgba(255,255,255,0.46)" />
+            <Input value={registrationSearch} onChange={(event) => setRegistrationSearch(event.target.value)} placeholder={`Search ${activeQueueTab === 'all' ? 'registrations' : activeQueueTab}...`} border={0} bg="transparent" color="white" px={3} h="full" _focus={{ boxShadow: 'none' }} />
+          </Flex>
+          <select value={registrationSort} onChange={(event) => setRegistrationSort(event.target.value as typeof registrationSort)} style={{ ...filterSelectStyle, width: 'auto', minWidth: '190px', height: '44px', border: 'none', backgroundColor: 'rgba(255,255,255,0.04)' }}>
+            <option value="newest">Requested · newest</option>
+            <option value="oldest">Requested · oldest</option>
+            <option value="name">Guest name · A–Z</option>
+          </select>
+        </Flex>
+
+        <Box borderRadius="xl" overflow="hidden" bg="rgba(255,255,255,0.025)">
+          <Box display={{ base: 'none', lg: 'grid' }} gridTemplateColumns="minmax(205px,1.35fr) minmax(125px,.7fr) minmax(145px,.8fr) minmax(160px,.9fr) minmax(180px,1fr) minmax(230px,1.3fr)" gap={4} px={5} py={3.5} borderBottom="1px solid" borderColor="whiteAlpha.120" color="whiteAlpha.450" fontSize="xs" fontWeight="semibold" textTransform="uppercase" letterSpacing="0.08em">
+            <Text>Guest</Text><Text>Requested</Text><Text>Signup status</Text><Text>Payment</Text><Text>WhatsApp</Text><Text textAlign="right">Actions</Text>
+          </Box>
+          {loading ? (
+            <Flex minH="180px" align="center" justify="center" gap={2} color="whiteAlpha.600"><Spinner size="sm" color="brand.500" /><Text>Loading registrations...</Text></Flex>
+          ) : error ? (
+            <Box m={4} p={4} bg="red.500/10" border="1px solid" borderColor="red.500/25" borderRadius="lg"><Text color="red.200" fontSize="sm">{error}</Text></Box>
+          ) : visibleRegistrations.length === 0 ? (
+            <Flex minH="180px" align="center" justify="center" direction="column" textAlign="center" px={5}><Users size={24} color="rgba(255,255,255,0.3)" /><Text color="whiteAlpha.650" mt={3}>No registrations found</Text><Text color="whiteAlpha.400" fontSize="sm" mt={1}>Try another status tab or search term.</Text></Flex>
+          ) : visibleRegistrations.map((registration) => (
+            <RegistrationRow key={registration.id} registration={registration} onMarkPaid={onMarkPaid} onConfirm={onConfirm} onWaitlist={onWaitlist} onDecline={onDecline} onReversePayment={onReversePayment} onRetryWhatsApp={onRetryWhatsApp} isRetryingWhatsApp={resendingWhatsAppId === registration.id} isReversingPayment={reversingRegistrationId === registration.id} />
+          ))}
+          {!loading && !error && visibleRegistrations.length > 0 && (
+            <Flex px={5} py={3.5} borderTop="1px solid" borderColor="whiteAlpha.100" justify="space-between" color="whiteAlpha.450" fontSize="xs"><Text>Showing {visibleRegistrations.length} of {registrations.length} registrations</Text><Text>{queueTabs.find((tab) => tab.value === activeQueueTab)?.label}</Text></Flex>
+          )}
+        </Box>
+      </Box>
     </VStack>
   )
 }
@@ -1392,16 +1466,20 @@ function RegistrationRow({
   onConfirm,
   onWaitlist,
   onDecline,
+  onReversePayment,
   onRetryWhatsApp,
   isRetryingWhatsApp,
+  isReversingPayment,
 }: {
   registration: SessionRegistration
   onMarkPaid: (registration: SessionRegistration) => void
   onConfirm: (registration: SessionRegistration, markPaid?: boolean) => void
   onWaitlist: (registration: SessionRegistration) => void
   onDecline: (registration: SessionRegistration) => void
+  onReversePayment: (registration: SessionRegistration) => void
   onRetryWhatsApp: (registration: SessionRegistration) => void
   isRetryingWhatsApp: boolean
+  isReversingPayment: boolean
 }) {
   const isTerminal = registration.status === 'declined' || registration.status === 'cancelled'
   const isConfirmed = registration.status === 'confirmed'
@@ -1413,6 +1491,15 @@ function RegistrationRow({
   const canConfirm = !isTerminal && !isConfirmed
   const canMoveToWaitlist = !isTerminal && registration.status !== 'waitlisted' && !isConfirmed
   const canDecline = !isTerminal && !isConfirmed
+  const hasPaidPayment =
+    registration.paymentStatus === 'paid_online' ||
+    registration.paymentStatus === 'paid_external'
+  const canReversePayment =
+    isTerminal &&
+    hasPaidPayment &&
+    Number(registration.paymentAmount || 0) > 0 &&
+    registration.returnStatus !== 'pending' &&
+    registration.returnStatus !== 'completed'
   const whatsappState = getWhatsAppConfirmationState(registration)
   const whatsappIssue =
     registration.confirmationWhatsAppDeliveryError ||
@@ -1440,94 +1527,54 @@ function RegistrationRow({
   const whatsappLabel = registration.whatsappPhone || 'No WhatsApp number'
 
   return (
-    <Box p={{ base: 4, md: 5 }} bg="whiteAlpha.50" border="1px solid" borderColor="whiteAlpha.100" borderRadius="xl">
-      <VStack align="stretch" gap={4}>
-        <Flex gap={4} justify="space-between" align={{ base: 'stretch', lg: 'flex-start' }} direction={{ base: 'column', lg: 'row' }}>
-          <HStack gap={3} minW={0} flex="1" align="center">
-            {registration.photoURL ? (
-              <Image src={registration.photoURL} alt={registration.displayName} boxSize={{ base: '44px', md: '52px' }} borderRadius="full" objectFit="cover" flexShrink={0} />
-            ) : (
-              <Flex boxSize={{ base: '44px', md: '52px' }} borderRadius="full" bg="brand.500/20" color="brand.200" align="center" justify="center" flexShrink={0}>
-                <Users size={20} />
-              </Flex>
-            )}
-            <Box minW={0} flex="1">
-              <Text color="white" fontWeight="bold" fontSize={{ base: 'md', md: 'lg' }} overflow="hidden" textOverflow="ellipsis" whiteSpace="nowrap">
-                {registration.displayName}
-              </Text>
-              <HStack gap={2} color="whiteAlpha.600" fontSize="sm" minW={0}>
-                <Mail size={14} style={{ flexShrink: 0 }} />
-                <Text overflow="hidden" textOverflow="ellipsis" whiteSpace="nowrap">{registration.email || registration.userId}</Text>
-              </HStack>
-            </Box>
-          </HStack>
-
-          <Flex gap={2.5} flexWrap="wrap" justify={{ base: 'flex-start', lg: 'flex-end' }} align="center">
-            <Badge bg="whiteAlpha.100" color="whiteAlpha.800" borderRadius="full" px={3} py={1}>
-              {paymentStatusLabels[registration.paymentStatus]}
-            </Badge>
-            {registration.paymentAmount && (
-              <Badge bg="brand.500/20" color="brand.200" borderRadius="full" px={3} py={1}>
-                {paymentAmountText}
-              </Badge>
-            )}
-            {whatsappState && (
-              <Badge bg={whatsappState.bg} color={whatsappState.color} borderRadius="full" px={3} py={1}>
-                {whatsappState.label}
-              </Badge>
-            )}
-          </Flex>
-        </Flex>
-
-        <SimpleGrid columns={{ base: 1, sm: 2, xl: 4 }} gap={3}>
-          <RegistrationDetail
-            label="Requested"
-            value={formatDateTime(registration.requestedAt)}
-            icon={<CalendarDays size={14} />}
-          />
-          <RegistrationDetail
-            label="Signup State"
-            value={registrationStatusLabels[registration.status]}
-            icon={<Users size={14} />}
-          />
-          <RegistrationDetail
-            label="Payment"
-            value={`${paymentStatusLabels[registration.paymentStatus]} · ${paymentAmountText}`}
-            icon={<CreditCard size={14} />}
-          />
-          <RegistrationDetail
-            label="WhatsApp"
-            value={whatsappLabel}
-            icon={<MessageCircle size={14} />}
-          />
-        </SimpleGrid>
-
-        {showWhatsAppIssue && (
-          <Box
-            p={3}
-            bg={isWhatsAppError ? 'red.500/10' : 'orange.500/10'}
-            border="1px solid"
-            borderColor={isWhatsAppError ? 'red.500/25' : 'orange.500/25'}
-            borderRadius="lg"
-          >
-            <Text
-              color={isWhatsAppError ? 'red.100' : 'orange.100'}
-              fontSize="xs"
-              lineHeight="1.45"
-              overflowWrap="anywhere"
-            >
-              {whatsappIssue}
-            </Text>
+    <Box px={{ base: 4, md: 5 }} py={{ base: 4, lg: 4.5 }} borderBottom="1px solid" borderColor="whiteAlpha.100" _last={{ borderBottom: 0 }} _hover={{ bg: 'whiteAlpha.25' }} transition="background 160ms ease">
+      <Box display={{ base: 'flex', lg: 'grid' }} flexDirection="column" gridTemplateColumns="minmax(205px,1.35fr) minmax(125px,.7fr) minmax(145px,.8fr) minmax(160px,.9fr) minmax(180px,1fr) minmax(230px,1.3fr)" gap={{ base: 4, lg: 4 }} alignItems="center">
+        <HStack gap={3} minW={0}>
+          {registration.photoURL ? (
+            <Image src={registration.photoURL} alt={registration.displayName} boxSize="44px" borderRadius="full" objectFit="cover" flexShrink={0} />
+          ) : (
+            <Flex boxSize="44px" borderRadius="full" bg="brand.500/18" color="brand.200" align="center" justify="center" flexShrink={0}>
+              <Users size={18} />
+            </Flex>
+          )}
+          <Box minW={0}>
+            <Text color="white" fontWeight="semibold" overflow="hidden" textOverflow="ellipsis" whiteSpace="nowrap">{registration.displayName}</Text>
+            <Text color="whiteAlpha.500" fontSize="xs" overflow="hidden" textOverflow="ellipsis" whiteSpace="nowrap">{registration.email || registration.userId}</Text>
           </Box>
-        )}
+        </HStack>
 
-        <Flex
-          pt={4}
-          borderTop="1px solid"
-          borderColor="whiteAlpha.100"
-          gap={3}
-          flexWrap="wrap"
-          justify={{ base: 'stretch', sm: 'flex-start', lg: 'flex-end' }}
+        <LedgerCell label="Requested">
+          <HStack gap={2} color="whiteAlpha.750" fontSize="sm"><CalendarDays size={14} /><Text>{formatDateTime(registration.requestedAt)}</Text></HStack>
+        </LedgerCell>
+
+        <LedgerCell label="Signup status">
+          <Badge bg={isTerminal ? 'red.500/14' : isConfirmed ? 'green.500/14' : registration.status === 'waitlisted' ? 'blue.500/14' : 'orange.500/14'} color={isTerminal ? 'red.200' : isConfirmed ? 'green.200' : registration.status === 'waitlisted' ? 'blue.200' : 'orange.200'} borderRadius="md" px={2.5} py={1} textTransform="none">
+            {registrationStatusLabels[registration.status]}
+          </Badge>
+        </LedgerCell>
+
+        <LedgerCell label="Payment">
+          <Box>
+            <Text color="whiteAlpha.800" fontSize="sm">{paymentStatusLabels[registration.paymentStatus]}</Text>
+            <Text color={registration.paymentAmount ? 'brand.200' : 'whiteAlpha.400'} fontSize="xs" mt={0.5}>{paymentAmountText}</Text>
+          </Box>
+        </LedgerCell>
+
+        <LedgerCell label="WhatsApp">
+          <Box minW={0}>
+            <HStack gap={2} color="whiteAlpha.750" fontSize="sm"><MessageCircle size={14} /><Text lineClamp={1}>{whatsappLabel}</Text></HStack>
+            {whatsappState && <Text color={whatsappState.color} fontSize="xs" mt={0.5}>{whatsappState.label}</Text>}
+            {showWhatsAppIssue && <Text color={isWhatsAppError ? 'red.200' : 'orange.200'} fontSize="xs" mt={1} lineClamp={2}>{whatsappIssue}</Text>}
+          </Box>
+        </LedgerCell>
+
+        <Box
+          display="grid"
+          gridTemplateColumns={{ base: 'repeat(2, minmax(0, 1fr))', lg: 'repeat(2, 132px)' }}
+          gap={2}
+          justifyContent={{ lg: 'end' }}
+          w="full"
+          css={{ '& > :only-child': { gridColumn: '1 / -1', justifySelf: 'end', width: 'auto' } }}
         >
           {canRetryWhatsApp && (
             <Button
@@ -1572,97 +1619,53 @@ function RegistrationRow({
               Decline
             </Button>
           )}
-        </Flex>
-      </VStack>
-    </Box>
-  )
-}
-
-function SignupSection({
-  title,
-  people,
-  emptyLabel,
-  loading,
-  error,
-}: {
-  title: string
-  people: SignupPerson[]
-  emptyLabel: string
-  loading: boolean
-  error?: string
-}) {
-  return (
-    <Box>
-      <Flex justify="space-between" align="center" mb={3}>
-        <Text color="white" fontWeight="semibold">{title}</Text>
-        <Badge bg="whiteAlpha.100" color="whiteAlpha.800" borderRadius="full" px={3} py={1}>
-          {people.length}
-        </Badge>
-      </Flex>
-
-      {loading && (
-        <Flex align="center" gap={2} color="whiteAlpha.600" fontSize="sm">
-          <Spinner size="sm" color="brand.500" />
-          <Text>Loading user details...</Text>
-        </Flex>
-      )}
-
-      {!loading && error && (
-        <Box p={3} bg="red.500/10" border="1px solid" borderColor="red.500/30" borderRadius="xl">
-          <Text color="red.200" fontSize="sm">{error}</Text>
-        </Box>
-      )}
-
-      {!loading && !error && people.length === 0 && (
-        <Box p={4} bg="whiteAlpha.50" border="1px solid" borderColor="whiteAlpha.100" borderRadius="xl">
-          <Text color="whiteAlpha.500" fontSize="sm">{emptyLabel}</Text>
-        </Box>
-      )}
-
-      {!loading && !error && people.length > 0 && (
-        <VStack align="stretch" gap={2}>
-          {people.map((person) => (
-            <Flex
-              key={person.id}
-              align={{ base: 'flex-start', sm: 'center' }}
-              justify="space-between"
-              gap={3}
-              direction={{ base: 'column', sm: 'row' }}
-              p={3}
-              bg="whiteAlpha.50"
-              border="1px solid"
-              borderColor="whiteAlpha.100"
-              borderRadius="xl"
+          {canReversePayment && (
+            <Button
+              {...registrationActionButtonProps}
+              bg="brand.500/15"
+              color="brand.200"
+              _hover={{ bg: 'brand.500/25' }}
+              onClick={() => onReversePayment(registration)}
+              disabled={isReversingPayment}
             >
-              <HStack gap={3} minW={0}>
-                {person.photoURL ? (
-                  <Image src={person.photoURL} alt={person.displayName} boxSize="36px" borderRadius="full" objectFit="cover" />
-                ) : (
-                  <Flex boxSize="36px" borderRadius="full" bg="brand.500/20" color="brand.200" align="center" justify="center" flexShrink={0}>
-                    <Users size={17} />
-                  </Flex>
-                )}
-                <Box minW={0}>
-                  <Text color="white" fontWeight="semibold" lineClamp={1}>{person.displayName}</Text>
-                  <Text color="whiteAlpha.500" fontSize="xs" lineClamp={1}>{person.id}</Text>
-                </Box>
-              </HStack>
-
-              {person.email && (
-                <HStack gap={2} color="whiteAlpha.650" fontSize="sm" minW={0}>
-                  <Mail size={15} />
-                  <Text lineClamp={1}>{person.email}</Text>
-                </HStack>
-              )}
-            </Flex>
-          ))}
-        </VStack>
-      )}
+              {isReversingPayment ? <Spinner size="sm" /> : <RotateCcw size={14} />}
+              Reverse payment
+            </Button>
+          )}
+          {registration.returnStatus === 'pending' && (
+            <Badge bg="orange.500/15" color="orange.200" borderRadius="full" px={3} py={2}>
+              Return pending
+            </Badge>
+          )}
+          {registration.returnStatus === 'completed' && (
+            <Badge bg="green.500/15" color="green.200" borderRadius="md" px={3} py={2}>
+              {registration.returnEffect === 'revenue_correction' ? 'Revenue corrected' : 'Payment returned'}
+            </Badge>
+          )}
+        </Box>
+      </Box>
     </Box>
   )
 }
 
-function SessionFormFields({ form, setForm }: { form: SessionForm; setForm: React.Dispatch<React.SetStateAction<SessionForm>> }) {
+function LedgerCell({ label, children }: { label: string; children: ReactNode }) {
+  return (
+    <Box minW={0}>
+      <Text display={{ base: 'block', lg: 'none' }} color="whiteAlpha.400" fontSize="2xs" textTransform="uppercase" letterSpacing="0.08em" mb={1}>{label}</Text>
+      {children}
+    </Box>
+  )
+}
+
+function SessionFormFields({
+  form,
+  setForm,
+  places,
+}: {
+  form: SessionForm
+  setForm: React.Dispatch<React.SetStateAction<SessionForm>>
+  places: ArtLocation[]
+}) {
   const { firebaseUser } = useAuth()
   const fileInputRef = useRef<HTMLInputElement>(null)
   const galleryInputRef = useRef<HTMLInputElement>(null)
@@ -1783,96 +1786,159 @@ function SessionFormFields({ form, setForm }: { form: SessionForm; setForm: Reac
   }
 
   return (
-    <VStack gap={4} align="stretch">
-      <Field label="Title"><Input value={form.title} onChange={(e) => setForm((prev) => ({ ...prev, title: e.target.value }))} bg="gray.800" color="white" borderColor="whiteAlpha.200" /></Field>
-      <Field label="Hero Description"><Textarea value={form.description} onChange={(e) => setForm((prev) => ({ ...prev, description: e.target.value }))} bg="gray.800" color="white" borderColor="whiteAlpha.200" rows={3} placeholder="Short public summary shown in the hero and session cards." /></Field>
-      <Field label="About This Session"><Textarea value={form.about} onChange={(e) => setForm((prev) => ({ ...prev, about: e.target.value }))} bg="gray.800" color="white" borderColor="whiteAlpha.200" rows={5} placeholder="What will happen at the event, format, materials, schedule, or expectations." /></Field>
-      <SimpleGrid columns={{ base: 1, md: 2 }} gap={4}>
-        <Field label="Type">
-          <select value={form.type} onChange={(e) => setForm((prev) => ({ ...prev, type: e.target.value as SessionType }))} style={selectStyle}>
-            {(['workshop', 'exhibition', 'open_studio', 'critique', 'talk', 'collaboration', 'field_trip', 'social', 'online'] as SessionType[]).map((type) => <option key={type} value={type}>{type.replace('_', ' ')}</option>)}
-          </select>
-        </Field>
-        <Field label="Status">
-          <select value={form.status} onChange={(e) => setForm((prev) => ({ ...prev, status: e.target.value as SessionStatus }))} style={selectStyle}>
-            {(['draft', 'published', 'completed', 'cancelled'] as SessionStatus[]).map((status) => <option key={status} value={status}>{status}</option>)}
-          </select>
-        </Field>
-      </SimpleGrid>
-      <SimpleGrid columns={{ base: 1, md: 3 }} gap={4}>
-        <Field label="Date"><Input type="date" value={form.date} onChange={(e) => setForm((prev) => ({ ...prev, date: e.target.value }))} bg="gray.800" color="white" borderColor="whiteAlpha.200" /></Field>
-        <Field label="Start"><Input type="time" value={form.time} onChange={(e) => setForm((prev) => ({ ...prev, time: e.target.value }))} bg="gray.800" color="white" borderColor="whiteAlpha.200" /></Field>
-        <Field label="End"><Input type="time" value={form.endTime} onChange={(e) => setForm((prev) => ({ ...prev, endTime: e.target.value }))} bg="gray.800" color="white" borderColor="whiteAlpha.200" /></Field>
-      </SimpleGrid>
-      <SimpleGrid columns={{ base: 1, md: 2 }} gap={4}>
-        <Field label="Location"><Input value={form.location} onChange={(e) => setForm((prev) => ({ ...prev, location: e.target.value }))} bg="gray.800" color="white" borderColor="whiteAlpha.200" /></Field>
-        <Field label="Capacity"><Input type="number" value={form.capacity} onChange={(e) => setForm((prev) => ({ ...prev, capacity: e.target.value }))} bg="gray.800" color="white" borderColor="whiteAlpha.200" /></Field>
-      </SimpleGrid>
-      <SimpleGrid columns={{ base: 1, md: 2 }} gap={4}>
-        <Field label="Access">
-          <select value={form.accessMode} onChange={(e) => setForm((prev) => ({ ...prev, accessMode: e.target.value as SessionAccessMode }))} style={selectStyle}>
-            <option value="open">Open</option>
-            <option value="invite_only">Invite only</option>
-          </select>
-        </Field>
-        <Field label="Approval">
-          <select value={form.approvalMode} onChange={(e) => setForm((prev) => ({ ...prev, approvalMode: e.target.value as SessionApprovalMode }))} style={selectStyle}>
-            <option value="auto">Auto confirm</option>
-            <option value="manual">Manual approval</option>
-          </select>
-        </Field>
-      </SimpleGrid>
-      <SimpleGrid columns={{ base: 1, md: 3 }} gap={4}>
-        <Field label="Payment">
-          <select
-            value={form.paymentMode}
-            onChange={(e) => {
-              const paymentMode = e.target.value as SessionPaymentMode
-              setForm((prev) => ({
+    <VStack gap={5} align="stretch">
+      <FormSection title="Session details" description="Public information shown across the website and session cards.">
+        <Box maxW="620px">
+          <Field label="Title"><Input value={form.title} onChange={(e) => setForm((prev) => ({ ...prev, title: e.target.value }))} {...sessionInputProps} /></Field>
+        </Box>
+        <SimpleGrid columns={{ base: 1, md: 2 }} gap={4} maxW="620px">
+          <Field label="Type">
+            <select value={form.type} onChange={(e) => setForm((prev) => ({ ...prev, type: e.target.value as SessionType }))} style={selectStyle}>
+              {(['workshop', 'exhibition', 'open_studio', 'critique', 'talk', 'collaboration', 'field_trip', 'social', 'online'] as SessionType[]).map((type) => <option key={type} value={type}>{type.replace('_', ' ')}</option>)}
+            </select>
+          </Field>
+          <Field label="Status">
+            <select value={form.status} onChange={(e) => setForm((prev) => ({ ...prev, status: e.target.value as SessionStatus }))} style={selectStyle}>
+              {(['draft', 'published', 'completed', 'cancelled'] as SessionStatus[]).map((status) => <option key={status} value={status}>{status}</option>)}
+            </select>
+          </Field>
+        </SimpleGrid>
+        <Field label="Hero Description"><Textarea value={form.description} onChange={(e) => setForm((prev) => ({ ...prev, description: e.target.value }))} {...sessionInputProps} minH="88px" resize="vertical" lineHeight="1.5" placeholder="Short public summary shown in the hero and session cards." /></Field>
+        <Field label="About This Session"><Textarea value={form.about} onChange={(e) => setForm((prev) => ({ ...prev, about: e.target.value }))} {...sessionInputProps} minH="128px" resize="vertical" lineHeight="1.5" placeholder="What will happen at the event, format, materials, schedule, or expectations." /></Field>
+      </FormSection>
+
+      <FormSection title="Schedule & venue" description="When the session happens, where it takes place, and available capacity.">
+        <SimpleGrid columns={{ base: 1, md: 3 }} gap={4}>
+          <Field label="Date"><Input type="date" value={form.date} onChange={(e) => setForm((prev) => ({ ...prev, date: e.target.value }))} {...sessionInputProps} /></Field>
+          <Field label="Start"><Input type="time" value={form.time} onChange={(e) => setForm((prev) => ({ ...prev, time: e.target.value }))} {...sessionInputProps} /></Field>
+          <Field label="End"><Input type="time" value={form.endTime} onChange={(e) => setForm((prev) => ({ ...prev, endTime: e.target.value }))} {...sessionInputProps} /></Field>
+        </SimpleGrid>
+        <Box maxW="320px">
+          <Field label="Capacity"><Input type="number" value={form.capacity} onChange={(e) => setForm((prev) => ({ ...prev, capacity: e.target.value }))} {...sessionInputProps} /></Field>
+        </Box>
+        {form.type !== 'online' ? (
+          <>
+            <LocationPicker
+              places={places}
+              value={{
+                name: form.location,
+                address: form.locationAddress,
+                city: form.locationCity,
+                latitude: form.locationLatitude,
+                longitude: form.locationLongitude,
+                artLocationId: form.locationArtLocationId,
+                source: form.locationSource,
+              }}
+              onChange={(location: LocationPickerValue) => setForm((prev) => ({
                 ...prev,
-                paymentMode,
-                paymentProvider: paymentMode === 'paid' && prev.paymentProvider === 'none' ? 'lenco' : paymentMode === 'free' ? 'none' : prev.paymentProvider,
-              }))
-            }}
-            style={selectStyle}
-          >
-            <option value="free">Free</option>
-            <option value="paid">Paid</option>
-          </select>
-        </Field>
-        <Field label="Provider">
-          <select
-            value={form.paymentProvider}
-            onChange={(e) => {
-              const paymentProvider = e.target.value as SessionPaymentProvider
-              setForm((prev) => ({
-                ...prev,
-                paymentProvider,
-                approvalMode: paymentProvider === 'manual_external' && prev.approvalMode === 'auto' ? 'manual' : prev.approvalMode,
-              }))
-            }}
-            style={selectStyle}
-            disabled={form.paymentMode === 'free'}
-          >
-            <option value="none">None</option>
-            <option value="manual_external">Manual external</option>
-            <option value="lenco">Lenco</option>
-          </select>
-        </Field>
-        <Field label="Currency"><Input value={form.currency} onChange={(e) => setForm((prev) => ({ ...prev, currency: e.target.value.toUpperCase() }))} bg="gray.800" color="white" borderColor="whiteAlpha.200" /></Field>
-      </SimpleGrid>
-      {form.paymentMode === 'paid' && (
-        <>
-          <Field label="Price"><Input type="number" min={0} step="0.01" value={form.price} onChange={(e) => setForm((prev) => ({ ...prev, price: e.target.value }))} bg="gray.800" color="white" borderColor="whiteAlpha.200" /></Field>
-          <Field label="Payment Instructions"><Textarea value={form.paymentInstructions} onChange={(e) => setForm((prev) => ({ ...prev, paymentInstructions: e.target.value }))} bg="gray.800" color="white" borderColor="whiteAlpha.200" rows={3} placeholder="Bank transfer, cash, mobile money, or confirmation notes shown to users." /></Field>
-        </>
-      )}
-      <Field label="Facilitator"><Input value={form.facilitator} onChange={(e) => setForm((prev) => ({ ...prev, facilitator: e.target.value }))} bg="gray.800" color="white" borderColor="whiteAlpha.200" /></Field>
-      <Field label="Cover Image">
+                location: location.name,
+                locationAddress: location.address,
+                locationCity: location.city,
+                locationLatitude: location.latitude,
+                locationLongitude: location.longitude,
+                locationArtLocationId: location.artLocationId,
+                locationSource: location.source,
+              }))}
+            />
+            <Flex as="label" align="center" gap={3} cursor="pointer" w="fit-content">
+              <input
+                type="checkbox"
+                checked={form.showOnCommunityMap}
+                onChange={(event) => setForm((prev) => ({ ...prev, showOnCommunityMap: event.target.checked }))}
+                style={{ width: 18, height: 18, accentColor: '#ff6b35' }}
+              />
+              <Box>
+                <Text color="whiteAlpha.800" fontSize="sm" fontWeight="medium">Show this session on the Community Map</Text>
+                <Text color="whiteAlpha.400" fontSize="xs" mt={0.5}>Published upcoming sessions appear in the Sessions map layer.</Text>
+              </Box>
+            </Flex>
+          </>
+        ) : (
+          <Box maxW="620px">
+            <Field label="Online location label"><Input value={form.location} onChange={(e) => setForm((prev) => ({ ...prev, location: e.target.value }))} {...sessionInputProps} placeholder="Online" /></Field>
+          </Box>
+        )}
+      </FormSection>
+
+      <FormSection title="Registration" description="Control who can join and how registrations are approved.">
+        <SimpleGrid columns={{ base: 1, md: 2 }} gap={4} maxW="720px">
+          <Field label="Access">
+            <select value={form.accessMode} onChange={(e) => setForm((prev) => ({ ...prev, accessMode: e.target.value as SessionAccessMode }))} style={selectStyle}>
+              <option value="open">Open</option>
+              <option value="invite_only">Invite only</option>
+            </select>
+          </Field>
+          <Field label="Approval">
+            <select value={form.approvalMode} onChange={(e) => setForm((prev) => ({ ...prev, approvalMode: e.target.value as SessionApprovalMode }))} style={selectStyle}>
+              <option value="auto">Auto confirm</option>
+              <option value="manual">Manual approval</option>
+            </select>
+          </Field>
+        </SimpleGrid>
+      </FormSection>
+
+      <FormSection title="Payment" description="Configure the charge, provider, currency, and payment guidance.">
+        <SimpleGrid columns={{ base: 1, sm: 2, lg: 4 }} gap={4}>
+          <Field label="Payment">
+            <select
+              value={form.paymentMode}
+              onChange={(e) => {
+                const paymentMode = e.target.value as SessionPaymentMode
+                setForm((prev) => ({
+                  ...prev,
+                  paymentMode,
+                  paymentProvider: paymentMode === 'paid' && prev.paymentProvider === 'none' ? 'lenco' : paymentMode === 'free' ? 'none' : prev.paymentProvider,
+                }))
+              }}
+              style={selectStyle}
+            >
+              <option value="free">Free</option>
+              <option value="paid">Paid</option>
+            </select>
+          </Field>
+          <Field label="Provider">
+            <select
+              value={form.paymentProvider}
+              onChange={(e) => {
+                const paymentProvider = e.target.value as SessionPaymentProvider
+                setForm((prev) => ({
+                  ...prev,
+                  paymentProvider,
+                  approvalMode: paymentProvider === 'manual_external' && prev.approvalMode === 'auto' ? 'manual' : prev.approvalMode,
+                }))
+              }}
+              style={selectStyle}
+              disabled={form.paymentMode === 'free'}
+            >
+              <option value="none">None</option>
+              <option value="manual_external">Manual external</option>
+              <option value="lenco">Lenco</option>
+            </select>
+          </Field>
+          <Field label="Currency"><Input value={form.currency} onChange={(e) => setForm((prev) => ({ ...prev, currency: e.target.value.toUpperCase() }))} {...sessionInputProps} /></Field>
+          {form.paymentMode === 'paid' && (
+            <Field label="Price"><Input type="number" min={0} step="0.01" value={form.price} onChange={(e) => setForm((prev) => ({ ...prev, price: e.target.value }))} {...sessionInputProps} /></Field>
+          )}
+        </SimpleGrid>
+        {form.paymentMode === 'paid' && (
+          <Field label="Payment Instructions"><Textarea value={form.paymentInstructions} onChange={(e) => setForm((prev) => ({ ...prev, paymentInstructions: e.target.value }))} {...sessionInputProps} minH="88px" resize="vertical" placeholder="Bank transfer, cash, mobile money, or confirmation notes shown to users." /></Field>
+        )}
+      </FormSection>
+
+      <FormSection title="Host & discovery" description="Identify the facilitator and add searchable session tags.">
+        <SimpleGrid columns={{ base: 1, md: 2 }} gap={4}>
+          <Field label="Facilitator"><Input value={form.facilitator} onChange={(e) => setForm((prev) => ({ ...prev, facilitator: e.target.value }))} {...sessionInputProps} /></Field>
+          <Field label="Tags"><Input value={form.tags} onChange={(e) => setForm((prev) => ({ ...prev, tags: e.target.value }))} {...sessionInputProps} placeholder="workshop, drawing" /></Field>
+        </SimpleGrid>
+      </FormSection>
+
+      <FormSection title="Media" description="Manage the cover image and supporting gallery photographs.">
+        <SimpleGrid columns={{ base: 1, lg: 2 }} gap={5} alignItems="start">
+        <Field label="Cover Image">
         <VStack align="stretch" gap={3}>
           {coverImage && (
             <Box position="relative" overflow="hidden" borderRadius="xl" border="1px solid" borderColor="whiteAlpha.150" bg="whiteAlpha.50">
-              <Image src={coverImage} alt="Session cover preview" w="full" h="150px" objectFit="cover" />
+              <Image src={coverImage} alt="Session cover preview" w="full" h="112px" objectFit="cover" />
               <Button
                 type="button"
                 position="absolute"
@@ -1900,7 +1966,7 @@ function SessionFormFields({ form, setForm }: { form: SessionForm; setForm: Reac
             }}
             onDragLeave={() => setIsDraggingCover(false)}
             onDrop={handleCoverDrop}
-            p={4}
+            p={3}
             bg={isDraggingCover ? 'brand.500/10' : 'whiteAlpha.50'}
             border="1px dashed"
             borderColor={isDraggingCover ? 'brand.500' : 'whiteAlpha.200'}
@@ -1908,24 +1974,23 @@ function SessionFormFields({ form, setForm }: { form: SessionForm; setForm: Reac
             transition="all 0.2s"
           >
             <Flex align={{ base: 'stretch', sm: 'center' }} direction={{ base: 'column', sm: 'row' }} gap={3}>
-              <Flex w="44px" h="44px" align="center" justify="center" borderRadius="full" bg="gray.800" color="brand.300" flexShrink={0}>
-                <ImagePlus size={20} />
+              <Flex w="38px" h="38px" align="center" justify="center" borderRadius="full" bg="gray.800" color="brand.300" flexShrink={0}>
+                <ImagePlus size={18} />
               </Flex>
               <Box flex={1}>
                 <Text color="white" fontWeight="semibold">Upload a cover image</Text>
-                <Text color="whiteAlpha.500" fontSize="sm" mt={1}>Drop an image here or choose a JPG, PNG, WebP, or GIF under 10MB.</Text>
+                <Text color="whiteAlpha.500" fontSize="xs" mt={1}>Drop an image here or choose a file under 10MB.</Text>
               </Box>
               <Input ref={fileInputRef} type="file" accept="image/jpeg,image/png,image/webp,image/gif" display="none" onChange={handleCoverInput} />
               <Button
                 type="button"
                 {...actionButtonProps}
-                h="40px"
+                h="36px"
                 px={4}
                 loading={uploadingCover}
                 bg="whiteAlpha.100"
                 color="white"
-                border="1px solid"
-                borderColor="whiteAlpha.200"
+                border={0}
                 _hover={{ bg: 'whiteAlpha.200' }}
                 onClick={() => fileInputRef.current?.click()}
               >
@@ -1947,20 +2012,18 @@ function SessionFormFields({ form, setForm }: { form: SessionForm; setForm: Reac
               onChange={(e) => setForm((prev) => ({ ...prev, coverImage: e.target.value }))}
               placeholder="Or paste an image URL"
               pl={10}
-              bg="gray.800"
-              color="white"
-              borderColor="whiteAlpha.200"
+              {...sessionInputProps}
             />
           </Box>
         </VStack>
-      </Field>
-      <Field label="Gallery Images">
+        </Field>
+        <Field label="Gallery Images">
         <VStack align="stretch" gap={3}>
           {galleryItems.length > 0 && (
             <SimpleGrid columns={{ base: 2, md: 3 }} gap={3}>
               {galleryItems.map((item) => (
                 <Box key={item.id} position="relative" overflow="hidden" borderRadius="xl" border="1px solid" borderColor="whiteAlpha.150" bg="whiteAlpha.50">
-                  <Image src={item.thumbnailUrl || item.url} alt={item.caption || 'Session gallery image'} w="full" h="118px" objectFit="cover" />
+                  <Image src={item.thumbnailUrl || item.url} alt={item.caption || 'Session gallery image'} w="full" h="92px" objectFit="cover" />
                   <Button
                     type="button"
                     position="absolute"
@@ -1992,7 +2055,7 @@ function SessionFormFields({ form, setForm }: { form: SessionForm; setForm: Reac
             }}
             onDragLeave={() => setIsDraggingGallery(false)}
             onDrop={handleGalleryDrop}
-            p={4}
+            p={3}
             bg={isDraggingGallery ? 'brand.500/10' : 'whiteAlpha.50'}
             border="1px dashed"
             borderColor={isDraggingGallery ? 'brand.500' : 'whiteAlpha.200'}
@@ -2000,24 +2063,23 @@ function SessionFormFields({ form, setForm }: { form: SessionForm; setForm: Reac
             transition="all 0.2s"
           >
             <Flex align={{ base: 'stretch', sm: 'center' }} direction={{ base: 'column', sm: 'row' }} gap={3}>
-              <Flex w="44px" h="44px" align="center" justify="center" borderRadius="full" bg="gray.800" color="brand.300" flexShrink={0}>
-                <ImagePlus size={20} />
+              <Flex w="38px" h="38px" align="center" justify="center" borderRadius="full" bg="gray.800" color="brand.300" flexShrink={0}>
+                <ImagePlus size={18} />
               </Flex>
               <Box flex={1}>
                 <Text color="white" fontWeight="semibold">Upload gallery images</Text>
-                <Text color="whiteAlpha.500" fontSize="sm" mt={1}>Drop images here or choose multiple JPG, PNG, WebP, or GIF files under 10MB each.</Text>
+                <Text color="whiteAlpha.500" fontSize="xs" mt={1}>Drop images here or choose files under 10MB each.</Text>
               </Box>
               <Input ref={galleryInputRef} type="file" accept="image/jpeg,image/png,image/webp,image/gif" multiple display="none" onChange={handleGalleryInput} />
               <Button
                 type="button"
                 {...actionButtonProps}
-                h="40px"
+                h="36px"
                 px={4}
                 loading={uploadingGallery}
                 bg="whiteAlpha.100"
                 color="white"
-                border="1px solid"
-                borderColor="whiteAlpha.200"
+                border={0}
                 _hover={{ bg: 'whiteAlpha.200' }}
                 onClick={() => galleryInputRef.current?.click()}
               >
@@ -2030,8 +2092,9 @@ function SessionFormFields({ form, setForm }: { form: SessionForm; setForm: Reac
             <Text color="red.300" fontSize="sm">{galleryUploadError}</Text>
           )}
         </VStack>
-      </Field>
-      <Field label="Tags"><Input value={form.tags} onChange={(e) => setForm((prev) => ({ ...prev, tags: e.target.value }))} bg="gray.800" color="white" borderColor="whiteAlpha.200" placeholder="workshop, drawing" /></Field>
+        </Field>
+        </SimpleGrid>
+      </FormSection>
     </VStack>
   )
 }
@@ -2039,31 +2102,109 @@ function SessionFormFields({ form, setForm }: { form: SessionForm; setForm: Reac
 const selectStyle: React.CSSProperties = {
   width: '100%',
   height: '40px',
-  padding: '0 12px',
-  backgroundColor: '#1f2937',
-  border: '1px solid rgba(255,255,255,0.2)',
-  borderRadius: '8px',
+  padding: '0 14px',
+  backgroundColor: 'rgba(255,255,255,0.045)',
+  border: '1px solid rgba(255,255,255,0.08)',
+  borderRadius: '12px',
   color: 'white',
+}
+
+const sessionInputProps = {
+  minH: '40px',
+  bg: 'rgba(255,255,255,0.045)',
+  color: 'white',
+  borderColor: 'rgba(255,255,255,0.08)',
+  borderRadius: 'xl',
+  _placeholder: { color: 'whiteAlpha.400' },
+  _hover: { borderColor: 'rgba(255,255,255,0.14)' },
+  _focusVisible: { borderColor: 'brand.400', boxShadow: '0 0 0 1px var(--chakra-colors-brand-400)' },
+} as const
+
+function FormSection({
+  title,
+  description,
+  children,
+}: {
+  title: string
+  description: string
+  children: ReactNode
+}) {
+  return (
+    <Box bg="rgba(255,255,255,0.025)" borderRadius="xl" p={{ base: 4, md: 5 }}>
+      <Box mb={4}>
+        <Heading as="h3" color="white" fontSize="md" fontWeight="semibold">{title}</Heading>
+        <Text color="whiteAlpha.450" fontSize="sm" mt={1}>{description}</Text>
+      </Box>
+      <VStack align="stretch" gap={4}>{children}</VStack>
+    </Box>
+  )
 }
 
 function Field({ label, children }: { label: string; children: React.ReactNode }) {
   return (
     <Box>
-      <Text color="whiteAlpha.600" fontSize="sm" mb={2}>{label}</Text>
+      <Text color="whiteAlpha.550" fontSize="sm" fontWeight="medium" mb={2}>{label}</Text>
       {children}
     </Box>
   )
 }
 
-function Modal({ title, children, onClose }: { title: string; children: React.ReactNode; onClose: () => void }) {
+function Modal({
+  title,
+  children,
+  onClose,
+  fullScreen = false,
+}: {
+  title: string
+  children: React.ReactNode
+  onClose: () => void
+  fullScreen?: boolean
+}) {
   return (
-    <Flex position="fixed" inset={0} zIndex={80} bg="blackAlpha.700" align="center" justify="center" p={4} onClick={onClose}>
-      <MotionBox initial={{ opacity: 0, scale: 0.96 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0, scale: 0.96 }} bg="gray.900" border="1px solid" borderColor="whiteAlpha.100" borderRadius="2xl" maxW="680px" w="full" maxH="calc(100vh - 32px)" overflowY="auto" onClick={(event) => event.stopPropagation()}>
-        <Flex justify="space-between" align="center" p={5} borderBottom="1px solid" borderColor="whiteAlpha.100">
-          <Heading as="h2" size="sm" color="white">{title}</Heading>
-          <Button onClick={onClose} size="sm" bg="whiteAlpha.100" color="white" borderRadius="full" _hover={{ bg: 'whiteAlpha.200' }}>Close</Button>
+    <Flex
+      position="fixed"
+      inset={0}
+      zIndex={80}
+      bg="blackAlpha.700"
+      align={fullScreen ? 'stretch' : 'center'}
+      justify="center"
+      p={fullScreen ? 0 : 4}
+      onClick={onClose}
+    >
+      <MotionBox
+        initial={fullScreen ? { opacity: 0, y: 18 } : { opacity: 0, scale: 0.96 }}
+        animate={fullScreen ? { opacity: 1, y: 0 } : { opacity: 1, scale: 1 }}
+        exit={fullScreen ? { opacity: 0, y: 18 } : { opacity: 0, scale: 0.96 }}
+        bg="#111111"
+        border={fullScreen ? 0 : '1px solid'}
+        borderColor="whiteAlpha.100"
+        borderRadius={fullScreen ? 0 : '2xl'}
+        maxW={fullScreen ? 'none' : '680px'}
+        w="full"
+        h={fullScreen ? '100dvh' : 'auto'}
+        maxH={fullScreen ? '100dvh' : 'calc(100vh - 32px)'}
+        overflowY="auto"
+        onClick={(event) => event.stopPropagation()}
+      >
+        <Flex
+          justify="space-between"
+          align="center"
+          px={{ base: 4, md: 7 }}
+          py={4}
+          borderBottom="1px solid"
+          borderColor="whiteAlpha.100"
+          position={fullScreen ? 'sticky' : 'static'}
+          top={0}
+          zIndex={5}
+          bg="#111111"
+        >
+          <Heading as="h2" fontSize={{ base: 'md', md: 'lg' }} color="white">{title}</Heading>
+          <Button onClick={onClose} h="44px" px={5} bg="whiteAlpha.50" color="whiteAlpha.800" border={0} borderRadius="lg" _hover={{ bg: 'whiteAlpha.100', color: 'white' }}>
+            <X size={15} />
+            Close
+          </Button>
         </Flex>
-        <Box p={5}>{children}</Box>
+        <Box p={fullScreen ? 0 : 5}>{children}</Box>
       </MotionBox>
     </Flex>
   )

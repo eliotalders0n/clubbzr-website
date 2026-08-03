@@ -45,14 +45,6 @@ export type {
   GalleryLayout,
 } from './GalleryScene';
 
-// Interactive art map
-export { ArtMapGlobe } from './ArtMapGlobe';
-export type {
-  ArtMapGlobeProps,
-  Venue,
-  VenueConnection,
-} from './ArtMapGlobe';
-
 // =============================================================================
 // Shaders
 // =============================================================================

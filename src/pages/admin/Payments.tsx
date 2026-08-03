@@ -38,6 +38,7 @@ import {
   resolvePaymentReconciliationIssue,
   syncPaymentCollection,
   syncPaymentWithdrawal,
+  updatePaymentReturn,
   type AdminPaymentDashboard,
 } from '../../../lib/adminPayments'
 import type { MobileMoneyOperator } from '../../../lib/lenco'
@@ -82,9 +83,17 @@ interface ReturnForm {
   currency: string
   method: 'cash' | 'bank_transfer' | 'mobile_money' | 'card' | 'other'
   status: 'pending' | 'completed' | 'cancelled'
+  effect: 'customer_refund' | 'revenue_correction'
   reason: string
   externalReference: string
   notes: string
+}
+
+interface ReturnSource {
+  key: string
+  type: 'transaction' | 'registration'
+  record: Record<string, unknown>
+  label: string
 }
 
 const selectStyle: CSSProperties = {
@@ -157,6 +166,7 @@ const emptyReturnForm: ReturnForm = {
   currency: 'ZMW',
   method: 'mobile_money',
   status: 'pending',
+  effect: 'customer_refund',
   reason: '',
   externalReference: '',
   notes: '',
@@ -671,6 +681,7 @@ export default function Payments() {
   const [busy, setBusy] = useState(false)
   const [syncingKey, setSyncingKey] = useState('')
   const [resolvingIssueKey, setResolvingIssueKey] = useState('')
+  const [updatingReturnId, setUpdatingReturnId] = useState('')
   const [message, setMessage] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [actionModal, setActionModal] = useState<PaymentActionModal>(null)
@@ -693,9 +704,69 @@ export default function Payments() {
       .sort((a: FirestoreUser, b: FirestoreUser) => getUserPaymentLabel(a).localeCompare(getUserPaymentLabel(b))),
     [userDocs]
   )
-  const completedTransactions = (dashboard?.localTransactions || []).filter((transaction) =>
-    String(transaction.status || '').toLowerCase() === 'completed'
+  const completedTransactions = useMemo(
+    () => (dashboard?.localTransactions || []).filter((transaction) => {
+      const isCompleted = String(transaction.status || '').toLowerCase() === 'completed'
+      const hasPendingReturn = String(transaction.returnStatus || '').toLowerCase() === 'pending'
+      const remainingAmount =
+        asNumber(transaction.amount) -
+        asNumber(transaction.returnedAmount) -
+        asNumber(transaction.correctedAmount)
+      return isCompleted && !hasPendingReturn && remainingAmount > 0
+    }),
+    [dashboard?.localTransactions]
   )
+  const returnSources = useMemo<ReturnSource[]>(() => {
+    const transactionSources = completedTransactions.flatMap((transaction) => {
+      const transactionKey =
+        asString(transaction.reference) ||
+        asString(transaction.transactionId) ||
+        asString(transaction.id)
+      if (!transactionKey) return []
+
+      return [{
+        key: `transaction:${transactionKey}`,
+        type: 'transaction' as const,
+        record: transaction,
+        label: `Paid transaction · ${recordLabel(transaction, ['displayName', 'email', 'reference'])} - ${formatMoney(transaction.amount, asString(transaction.currency) || 'ZMW')}`,
+      }]
+    })
+    const registrationSources = registrations.flatMap((registration) => {
+      const isTerminal = registration.status === 'declined' || registration.status === 'cancelled'
+      const isPaid =
+        registration.paymentStatus === 'paid_external' ||
+        registration.paymentStatus === 'paid_online'
+      const hasActiveReturn =
+        registration.returnStatus === 'pending' ||
+        registration.returnStatus === 'completed'
+      if (
+        !isTerminal ||
+        !isPaid ||
+        hasActiveReturn ||
+        asNumber(registration.paymentAmount) <= 0
+      ) {
+        return []
+      }
+
+      const record = registration as unknown as Record<string, unknown>
+      const stateLabel = registration.status === 'declined' ? 'Declined' : 'Cancelled'
+      return [{
+        key: `registration:${registration.id}`,
+        type: 'registration' as const,
+        record,
+        label: `${stateLabel} · ${registration.email || registration.displayName || registration.userId} - ${formatMoney(registration.paymentAmount, registration.paymentCurrency || 'ZMW')}`,
+      }]
+    })
+    const terminalRegistrationIds = new Set(
+      registrationSources.map((source) => asString(source.record.id)).filter(Boolean)
+    )
+    const unlinkedTransactionSources = transactionSources.filter(
+      (source) => !terminalRegistrationIds.has(asString(source.record.registrationId))
+    )
+
+    return [...registrationSources, ...unlinkedTransactionSources]
+  }, [completedTransactions, registrations])
+  const selectedReturnSource = returnSources.find((source) => source.key === returnForm.transactionKey)
   const activeSearch = searchByTab[activeTab]
   const activePage = pageByTab[activeTab]
   const reconciliationItems = useMemo(
@@ -758,6 +829,7 @@ export default function Payments() {
         'transactionId',
         'externalReference',
         'status',
+        'effect',
         'method',
         'notes',
       ])
@@ -986,16 +1058,30 @@ export default function Payments() {
   }
 
   const handleReturnTransactionChange = (transactionKey: string) => {
-    const transaction = completedTransactions.find((entry) =>
-      asString(entry.reference) === transactionKey || asString(entry.transactionId) === transactionKey
-    )
+    const source = returnSources.find((entry) => entry.key === transactionKey)
+    const record = source?.record
+    const isCancelledRegistration = source?.type === 'registration'
+    const paymentMethod = asString(record?.paymentMethod)
+    const method = ['cash', 'bank_transfer', 'mobile_money', 'card', 'other'].includes(paymentMethod)
+      ? paymentMethod as ReturnForm['method']
+      : undefined
 
     setReturnForm((previous) => ({
       ...previous,
       transactionKey,
-      sessionId: asString(transaction?.sessionId) || previous.sessionId,
-      amount: transaction?.amount ? String(transaction.amount) : previous.amount,
-      currency: asString(transaction?.currency) || previous.currency,
+      sessionId: asString(record?.sessionId) || previous.sessionId,
+      amount: record
+        ? String(record.amount ?? record.paymentAmount ?? previous.amount)
+        : previous.amount,
+      currency:
+        asString(record?.currency) ||
+        asString(record?.paymentCurrency) ||
+        previous.currency,
+      method: method || previous.method,
+      status: isCancelledRegistration ? 'pending' : previous.status,
+      reason: isCancelledRegistration
+        ? `Payment reversal for ${asString(record?.status) || 'cancelled'} registration`
+        : previous.reason,
     }))
   }
 
@@ -1010,25 +1096,36 @@ export default function Payments() {
       return
     }
 
-    const transaction = completedTransactions.find((entry) =>
-      asString(entry.reference) === returnForm.transactionKey ||
-      asString(entry.transactionId) === returnForm.transactionKey
-    )
+    const source = returnSources.find((entry) => entry.key === returnForm.transactionKey)
+    const sourceRecord = source?.record
+    const isCancelledRegistration = source?.type === 'registration'
 
     setBusy(true)
     try {
       const result = await recordPaymentReturn({
         sessionId: returnForm.sessionId,
-        registrationId: asString(transaction?.registrationId) || undefined,
-        transactionId: asString(transaction?.transactionId) || undefined,
-        reference: asString(transaction?.reference) || undefined,
+        registrationId: isCancelledRegistration
+          ? asString(sourceRecord?.id) || undefined
+          : asString(sourceRecord?.registrationId) || undefined,
+        transactionId: source?.type === 'transaction'
+          ? asString(sourceRecord?.transactionId) || undefined
+          : asString(sourceRecord?.paymentStatus) === 'paid_online'
+            ? asString(sourceRecord?.paymentTransactionId) || undefined
+            : undefined,
+        reference: source?.type === 'transaction'
+          ? asString(sourceRecord?.reference) || undefined
+          : asString(sourceRecord?.paymentStatus) === 'paid_online'
+            ? asString(sourceRecord?.paymentReference) || undefined
+            : undefined,
         amount,
         currency: returnForm.currency,
         method: returnForm.method,
-        status: returnForm.status,
+        status: isCancelledRegistration ? 'pending' : returnForm.status,
         reason: returnForm.reason,
         externalReference: returnForm.externalReference || undefined,
         notes: returnForm.notes || undefined,
+        origin: isCancelledRegistration ? 'cancelled_registration' : 'manual',
+        effect: returnForm.effect,
       })
       setMessage(result.returnId ? `Return recorded: ${result.returnId}` : 'Return recorded.')
       setReturnForm(emptyReturnForm)
@@ -1038,6 +1135,57 @@ export default function Payments() {
       setError(returnError instanceof Error ? returnError.message : 'Unable to record return.')
     } finally {
       setBusy(false)
+    }
+  }
+
+  const handleUpdateReturn = async (
+    record: Record<string, unknown>,
+    status: 'completed' | 'cancelled' | 'reversed'
+  ) => {
+    const returnId = asString(record.id)
+    if (!returnId) return
+
+    let externalReference = asString(record.externalReference)
+    const effect = asString(record.effect) || 'customer_refund'
+    if (status === 'completed') {
+      if (effect === 'customer_refund') {
+        const enteredReference = window.prompt(
+          'Refund or transfer reference (optional)',
+          externalReference
+        )
+        if (enteredReference === null) return
+        externalReference = enteredReference.trim()
+        if (!window.confirm('Confirm that the funds have been returned to the client?')) return
+      } else if (!window.confirm(
+        'Complete this revenue correction? Gross revenue and current net will be reduced, but no customer refund will be recorded.'
+      )) return
+    } else if (
+      status === 'cancelled' &&
+      !window.confirm('Cancel this pending return? No funds will be recorded as returned.')
+    ) {
+      return
+    } else if (
+      status === 'reversed' &&
+      !window.confirm('Undo this completed ledger entry? Totals will be restored. This does not move money.')
+    ) {
+      return
+    }
+
+    setUpdatingReturnId(returnId)
+    setMessage(null)
+    setError(null)
+    try {
+      const result = await updatePaymentReturn({
+        returnId,
+        status,
+        externalReference: externalReference || undefined,
+      })
+      setMessage(result.message || `Return ${status}.`)
+      await loadDashboard()
+    } catch (returnError) {
+      setError(returnError instanceof Error ? returnError.message : `Unable to mark return ${status}.`)
+    } finally {
+      setUpdatingReturnId('')
     }
   }
 
@@ -1133,11 +1281,15 @@ export default function Payments() {
                             {period.transactionCount + period.registrationCount} paid records
                           </Text>
                         </Box>
-                        <SimpleGrid columns={{ base: 2, md: 3, xl: 5 }} gap={4} flex="1" maxW={{ xl: '920px' }}>
+                        <SimpleGrid columns={{ base: 2, md: 3, xl: 6 }} gap={4} flex="1" maxW={{ xl: '1080px' }}>
                           <AmountCell label="Total revenue" value={formatMoney(period.grossCollected, period.currency)} tone="green.200" />
-                          <AmountCell label="Current net" value={formatMoney(period.netCollected, period.currency)} />
+                          <AmountCell
+                            label="Current balance"
+                            value={formatMoney(period.currentBalance ?? period.netCollected, period.currency)}
+                          />
                           <AmountCell label="Pending" value={formatMoney(period.pending, period.currency)} tone="orange.200" />
                           <AmountCell label="Returns" value={formatMoney(period.returned, period.currency)} tone="red.200" />
+                          <AmountCell label="Corrections" value={formatMoney(period.corrections, period.currency)} tone="yellow.200" />
                           <AmountCell label="Withdrawals" value={formatMoney(period.withdrawn, period.currency)} tone="brand.200" />
                         </SimpleGrid>
                       </Flex>
@@ -1173,6 +1325,9 @@ export default function Payments() {
                         </Box>
                         <HStack gap={4} flexWrap="wrap" justify={{ base: 'space-between', lg: 'flex-end' }}>
                           <Text color="green.200">{formatMoney(session.grossCollected, session.currency)}</Text>
+                          {session.corrections > 0 && (
+                            <Text color="yellow.200">{formatMoney(session.corrections, session.currency)} corrected</Text>
+                          )}
                           <Text color="orange.200">{formatMoney(session.pending, session.currency)} pending</Text>
                           <Text color="white">{formatMoney(session.netCollected, session.currency)} net</Text>
                         </HStack>
@@ -1408,9 +1563,9 @@ export default function Payments() {
             {dashboard && activeTab === 'returns' && (
               <>
                 <TabActionHeader
-                  title="Returns"
-                  description="Record refunds, cash returns, and manual corrections against completed payment records."
-                  actionLabel="New Return"
+                  title="Returns & Corrections"
+                  description="Record customer refunds and correct payments that were entered as revenue by mistake."
+                  actionLabel="New Entry"
                   icon={<RotateCcw size={16} />}
                   onAction={() => setActionModal('return')}
                 />
@@ -1426,15 +1581,81 @@ export default function Payments() {
                   />
                   <VStack align="stretch" gap={3}>
                     {pageItems(filteredReturns, activePage, pageSize).map((record) => (
-                      <Flex key={asString(record.id)} justify="space-between" gap={4} p={4} bg="blackAlpha.200" borderRadius="xl">
+                      <Flex
+                        key={asString(record.id)}
+                        justify="space-between"
+                        align={{ base: 'stretch', md: 'center' }}
+                        direction={{ base: 'column', md: 'row' }}
+                        gap={4}
+                        p={4}
+                        bg="blackAlpha.200"
+                        borderRadius="xl"
+                      >
                         <Box minW={0}>
                           <HStack gap={2} flexWrap="wrap">
                             <Text color="white" fontWeight="semibold">{recordLabel(record, ['reason', 'reference'])}</Text>
                             <StatusBadge status={record.status} />
+                            <Badge bg="whiteAlpha.100" color="whiteAlpha.700" borderRadius="full" px={3} py={1}>
+                              {asString(record.effect) === 'revenue_correction' ? 'Revenue correction' : 'Customer refund'}
+                            </Badge>
                           </HStack>
                           <Text color="whiteAlpha.500" fontSize="sm" mt={1}>{formatDate(record.createdAt)}</Text>
+                          {(record.registrationId || record.externalReference) && (
+                            <Text color="whiteAlpha.500" fontSize="xs" mt={1}>
+                              {record.registrationId ? `Registration ${asString(record.registrationId)}` : ''}
+                              {record.registrationId && record.externalReference ? ' · ' : ''}
+                              {record.externalReference ? `Reference ${asString(record.externalReference)}` : ''}
+                            </Text>
+                          )}
                         </Box>
-                        <Text color="red.200" fontWeight="bold">{formatMoney(record.amount, asString(record.currency) || 'ZMW')}</Text>
+                        <HStack gap={2} flexWrap="wrap" justify={{ base: 'flex-start', md: 'flex-end' }}>
+                          <Text
+                            color={asString(record.effect) === 'revenue_correction' ? 'yellow.200' : 'red.200'}
+                            fontWeight="bold"
+                            mr={2}
+                          >
+                            {formatMoney(record.amount, asString(record.currency) || 'ZMW')}
+                          </Text>
+                          {asString(record.status).toLowerCase() === 'pending' && (
+                            <>
+                              <Button
+                                size="sm"
+                                bg="green.500/15"
+                                color="green.200"
+                                _hover={{ bg: 'green.500/25' }}
+                                onClick={() => void handleUpdateReturn(record, 'completed')}
+                                disabled={updatingReturnId === asString(record.id)}
+                              >
+                                {updatingReturnId === asString(record.id) ? <Spinner size="xs" /> : <CheckCircle2 size={14} />}
+                                Complete
+                              </Button>
+                              <Button
+                                size="sm"
+                                bg="whiteAlpha.100"
+                                color="whiteAlpha.700"
+                                _hover={{ bg: 'whiteAlpha.200', color: 'white' }}
+                                onClick={() => void handleUpdateReturn(record, 'cancelled')}
+                                disabled={updatingReturnId === asString(record.id)}
+                              >
+                                <X size={14} />
+                                Cancel
+                              </Button>
+                            </>
+                          )}
+                          {asString(record.status).toLowerCase() === 'completed' && (
+                            <Button
+                              size="sm"
+                              bg="yellow.500/15"
+                              color="yellow.200"
+                              _hover={{ bg: 'yellow.500/25' }}
+                              onClick={() => void handleUpdateReturn(record, 'reversed')}
+                              disabled={updatingReturnId === asString(record.id)}
+                            >
+                              {updatingReturnId === asString(record.id) ? <Spinner size="xs" /> : <RotateCcw size={14} />}
+                              Undo ledger entry
+                            </Button>
+                          )}
+                        </HStack>
                       </Flex>
                     ))}
                     {filteredReturns.length === 0 && <Text color="whiteAlpha.500">No return records found.</Text>}
@@ -1546,8 +1767,8 @@ export default function Payments() {
 
       {actionModal === 'return' && (
         <PaymentModal
-          title="Record Return"
-          description="Record a refund, correction, or manual return against the Firestore ledger."
+          title="Record Return or Correction"
+          description="Record a customer refund or correct revenue that was entered by mistake."
           onClose={() => {
             if (!busy) setActionModal(null)
           }}
@@ -1556,14 +1777,11 @@ export default function Payments() {
             <SimpleGrid columns={{ base: 1, lg: 3 }} gap={3}>
               <select value={returnForm.transactionKey} onChange={(event) => handleReturnTransactionChange(event.target.value)} style={selectStyle} disabled={busy}>
                 <option value="">No linked transaction</option>
-                {completedTransactions.map((transaction) => {
-                  const key = asString(transaction.reference) || asString(transaction.transactionId)
-                  return (
-                    <option key={key} value={key}>
-                      {recordLabel(transaction, ['displayName', 'email', 'reference'])} - {formatMoney(transaction.amount, asString(transaction.currency) || 'ZMW')}
-                    </option>
-                  )
-                })}
+                {returnSources.map((source) => (
+                  <option key={source.key} value={source.key}>
+                    {source.label}
+                  </option>
+                ))}
               </select>
               <select value={returnForm.sessionId} onChange={(event) => setReturnForm((previous) => ({ ...previous, sessionId: event.target.value }))} style={selectStyle} disabled={busy}>
                 <option value="">Select session</option>
@@ -1571,10 +1789,27 @@ export default function Payments() {
                   <option key={session.id} value={session.id}>{session.title}</option>
                 ))}
               </select>
-              <select value={returnForm.status} onChange={(event) => setReturnForm((previous) => ({ ...previous, status: event.target.value as ReturnForm['status'] }))} style={selectStyle} disabled={busy}>
+              <select
+                value={returnForm.status}
+                onChange={(event) => setReturnForm((previous) => ({ ...previous, status: event.target.value as ReturnForm['status'] }))}
+                style={selectStyle}
+                disabled={busy || selectedReturnSource?.type === 'registration'}
+              >
                 <option value="pending">Pending</option>
                 <option value="completed">Completed</option>
                 <option value="cancelled">Cancelled</option>
+              </select>
+              <select
+                value={returnForm.effect}
+                onChange={(event) => setReturnForm((previous) => ({
+                  ...previous,
+                  effect: event.target.value as ReturnForm['effect'],
+                }))}
+                style={selectStyle}
+                disabled={busy}
+              >
+                <option value="customer_refund">Customer refund</option>
+                <option value="revenue_correction">Revenue correction</option>
               </select>
               <Input value={returnForm.amount} onChange={(event) => setReturnForm((previous) => ({ ...previous, amount: event.target.value }))} placeholder="Amount" h="46px" bg="whiteAlpha.50" borderColor="whiteAlpha.200" color="white" disabled={busy} />
               <Input value={returnForm.currency} onChange={(event) => setReturnForm((previous) => ({ ...previous, currency: event.target.value.toUpperCase() }))} placeholder="Currency" h="46px" bg="whiteAlpha.50" borderColor="whiteAlpha.200" color="white" disabled={busy} />
@@ -1586,6 +1821,18 @@ export default function Payments() {
                 <option value="other">Other</option>
               </select>
             </SimpleGrid>
+            {selectedReturnSource?.type === 'registration' && (
+              <Text color="orange.200" fontSize="sm" mt={3}>
+                {returnForm.effect === 'customer_refund'
+                  ? 'Cancelled and declined registrations create a pending return. Complete it from the Returns list after the funds are sent.'
+                  : 'Revenue corrections are created as pending so another explicit action is required before totals change.'}
+              </Text>
+            )}
+            {returnForm.effect === 'revenue_correction' && (
+              <Text color="yellow.200" fontSize="sm" mt={3}>
+                Revenue corrections are for payments recorded by mistake. They reduce gross revenue and current net without recording a customer refund.
+              </Text>
+            )}
             <Input value={returnForm.reason} onChange={(event) => setReturnForm((previous) => ({ ...previous, reason: event.target.value }))} placeholder="Reason" mt={3} h="46px" bg="whiteAlpha.50" borderColor="whiteAlpha.200" color="white" disabled={busy} />
             <Input value={returnForm.externalReference} onChange={(event) => setReturnForm((previous) => ({ ...previous, externalReference: event.target.value }))} placeholder="External return reference" mt={3} h="46px" bg="whiteAlpha.50" borderColor="whiteAlpha.200" color="white" disabled={busy} />
             <Textarea value={returnForm.notes} onChange={(event) => setReturnForm((previous) => ({ ...previous, notes: event.target.value }))} placeholder="Return notes" mt={3} bg="whiteAlpha.50" borderColor="whiteAlpha.200" color="white" disabled={busy} />
@@ -1595,7 +1842,7 @@ export default function Payments() {
               </Button>
               <Button type="submit" h="42px" px={5} borderRadius="full" bg="brand.500" color="white" _hover={{ bg: 'brand.600' }} disabled={busy}>
                 {busy ? <Spinner size="sm" /> : <RotateCcw size={16} />}
-                Record Return
+                Record entry
               </Button>
             </HStack>
           </form>

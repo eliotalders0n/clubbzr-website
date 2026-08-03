@@ -813,11 +813,31 @@ export default function AdminDashboard() {
 
     const paymentTotals = paymentDashboard?.totals
     const registrationRevenueFallback = registrations
-      .filter((registration) => ['paid_online', 'paid_external'].includes(registration.paymentStatus))
+      .filter((registration) =>
+        ['paid_online', 'paid_external'].includes(registration.paymentStatus) ||
+        (
+          registration.paymentStatus === 'refunded' &&
+          ['paid_online', 'paid_external'].includes(registration.paymentStatusBeforeReturn || '')
+        )
+      )
       .reduce((sum, registration) => sum + getRegistrationValue(registration), 0)
-    const netCollected = toNumber(paymentTotals?.netCollected) || registrationRevenueFallback
-    const grossCollected = toNumber(paymentTotals?.grossCollected) || registrationRevenueFallback
-    const pendingRevenue = toNumber(paymentTotals?.pending) || pendingPaymentRegistrations.reduce((sum, registration) => sum + getRegistrationValue(registration), 0)
+    const registrationReturnsFallback = registrations
+      .filter((registration) => registration.returnStatus === 'completed')
+      .reduce((sum, registration) => sum + toNumber(registration.returnedAmount), 0)
+    const registrationCorrectionsFallback = registrations
+      .filter((registration) => registration.returnStatus === 'completed')
+      .reduce((sum, registration) => sum + toNumber(registration.correctedAmount), 0)
+    const netCollected = paymentDashboard
+      ? toNumber(paymentTotals?.netCollected)
+      : registrationRevenueFallback -
+        registrationCorrectionsFallback -
+        registrationReturnsFallback
+    const grossCollected = paymentDashboard
+      ? toNumber(paymentTotals?.grossCollected)
+      : registrationRevenueFallback - registrationCorrectionsFallback
+    const pendingRevenue = paymentDashboard
+      ? toNumber(paymentTotals?.pending)
+      : pendingPaymentRegistrations.reduce((sum, registration) => sum + getRegistrationValue(registration), 0)
     const paymentIssueCount = paymentDashboard?.reconciliation.issueCount || 0
     const sessionRevenuePipeline = sessionForecastRows.reduce((sum, row) => sum + row.revenue, 0)
 
@@ -994,7 +1014,9 @@ export default function AdminDashboard() {
         details: [
           { label: 'Online collected', value: paymentDetail(toNumber(paymentTotals?.onlineCollected)) },
           { label: 'External collected', value: paymentDetail(toNumber(paymentTotals?.externalCollected)) },
-          { label: 'Reconciliation issues', value: paymentDashboard ? formatCount(paymentIssueCount) : paymentDetail(0) },
+          { label: 'Completed returns', value: paymentDetail(toNumber(paymentTotals?.returned)) },
+          { label: 'Revenue corrections', value: paymentDetail(toNumber(paymentTotals?.corrections)) },
+          { label: 'Withdrawals', value: paymentDetail(toNumber(paymentTotals?.withdrawn)) },
         ],
         tone: paymentIssueCount > 0 ? 'red' : 'cyan',
         icon: <CircleDollarSign size={22} />,

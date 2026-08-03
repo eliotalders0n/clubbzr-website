@@ -5,7 +5,7 @@ import { Link } from 'react-router-dom';
 import { motion, AnimatePresence } from 'framer-motion';
 import { clsx } from 'clsx';
 import { twMerge } from 'tailwind-merge';
-import { ChevronLeft, ChevronRight, Expand, LogIn, X } from 'lucide-react';
+import { ChevronLeft, ChevronRight, Expand, LogIn, MapPin, X } from 'lucide-react';
 import type { CommunityPost as CommunityPostType, ReactionType, Comment } from '../../../../lib/schema';
 import { Timestamp } from 'firebase/firestore';
 import { ReactionBar } from './ReactionBar';
@@ -686,6 +686,18 @@ export const CommunityPost: React.FC<CommunityPostProps> = ({
                   </span>
                 )}
               </p>
+              {post.location?.coordinates && (
+                <a
+                  href={`https://www.google.com/maps/search/?api=1&query=${post.location.coordinates.latitude},${post.location.coordinates.longitude}`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  onClick={(event) => event.stopPropagation()}
+                  style={{ display: 'inline-flex', alignItems: 'center', gap: '5px', marginTop: '5px', color: '#FF8A5F', fontSize: '12px', fontWeight: 500, textDecoration: 'none' }}
+                >
+                  <MapPin size={13} />
+                  {post.location.name || 'View post location'}
+                </a>
+              )}
             </div>
           </Link>
 

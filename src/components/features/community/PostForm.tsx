@@ -4,7 +4,9 @@ import React, { useState, useRef, useCallback } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { clsx } from 'clsx';
 import { twMerge } from 'tailwind-merge';
-import type { MediaType, CreateDocument, CommunityPost } from '../../../../lib/schema';
+import { GeoPoint } from 'firebase/firestore';
+import { LocateFixed, MapPin } from 'lucide-react';
+import type { ArtLocation, MediaType, CreateDocument, CommunityPost } from '../../../../lib/schema';
 import { uploadMultiple, STORAGE_PATHS } from '../../../../lib/storage';
 
 const cn = (...inputs: (string | undefined | null | false)[]) => twMerge(clsx(inputs));
@@ -20,6 +22,7 @@ interface PostFormProps {
   userName: string;
   userPhotoURL?: string | null;
   initialPrompt?: string;
+  places?: ArtLocation[];
   onSubmit: (data: CreateDocument<CommunityPost>) => Promise<void>;
   onPromptClear?: () => void;
   className?: string;
@@ -137,6 +140,7 @@ export const PostForm: React.FC<PostFormProps> = ({
   userName,
   userPhotoURL,
   initialPrompt,
+  places = [],
   onSubmit,
   onPromptClear,
   className,
@@ -146,6 +150,10 @@ export const PostForm: React.FC<PostFormProps> = ({
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [showSuccess, setShowSuccess] = useState(false);
   const [isFocused, setIsFocused] = useState(false);
+  const [shareLocation, setShareLocation] = useState(false);
+  const [locationState, setLocationState] = useState<'idle' | 'loading' | 'ready' | 'error'>('idle');
+  const [postCoordinates, setPostCoordinates] = useState<{ latitude: number; longitude: number } | null>(null);
+  const [nearbyPlace, setNearbyPlace] = useState<ArtLocation | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const selectedPrompt = initialPrompt && initialPrompt.trim().length > 0 ? initialPrompt : null;
@@ -184,6 +192,43 @@ export const PostForm: React.FC<PostFormProps> = ({
 
   // Validate form
   const isValid = content.trim().length > 0 || files.length > 0;
+
+  const toggleLocation = (checked: boolean) => {
+    setShareLocation(checked);
+    if (!checked) {
+      setPostCoordinates(null);
+      setNearbyPlace(null);
+      setLocationState('idle');
+      return;
+    }
+    if (!navigator.geolocation) {
+      setShareLocation(false);
+      setLocationState('error');
+      return;
+    }
+    setLocationState('loading');
+    navigator.geolocation.getCurrentPosition(
+      ({ coords }) => {
+        setPostCoordinates({ latitude: coords.latitude, longitude: coords.longitude });
+        const nearest = places
+          .map((place) => ({
+            place,
+            distance: Math.hypot(
+              place.coordinates.latitude - coords.latitude,
+              place.coordinates.longitude - coords.longitude
+            ),
+          }))
+          .sort((a, b) => a.distance - b.distance)[0];
+        setNearbyPlace(nearest && nearest.distance <= 0.02 ? nearest.place : null);
+        setLocationState('ready');
+      },
+      () => {
+        setShareLocation(false);
+        setLocationState('error');
+      },
+      { enableHighAccuracy: false, timeout: 10000 }
+    );
+  };
 
   // Handle submit
   const handleSubmit = async (e: React.FormEvent) => {
@@ -227,6 +272,16 @@ export const PostForm: React.FC<PostFormProps> = ({
         content: content.trim(),
         mediaUrls,
         mediaType: files.length > 0 ? files[0].type : null,
+        ...(shareLocation && postCoordinates ? {
+          location: {
+            name: nearbyPlace?.name || 'Current location',
+            ...(nearbyPlace?.address ? { address: nearbyPlace.address } : {}),
+            ...(nearbyPlace?.city ? { city: nearbyPlace.city } : {}),
+            coordinates: new GeoPoint(postCoordinates.latitude, postCoordinates.longitude),
+            ...(nearbyPlace ? { artLocationId: nearbyPlace.id } : {}),
+            source: nearbyPlace ? 'art_location' as const : 'device' as const,
+          },
+        } : {}),
         reactions: {},
         reactionsCount: 0,
         comments: [],
@@ -253,6 +308,10 @@ export const PostForm: React.FC<PostFormProps> = ({
         setFiles([]);
         setShowSuccess(false);
         setIsFocused(false);
+        setShareLocation(false);
+        setPostCoordinates(null);
+        setNearbyPlace(null);
+        setLocationState('idle');
         onPromptClear?.();
       }, 2000);
     } catch (error) {
@@ -378,6 +437,37 @@ export const PostForm: React.FC<PostFormProps> = ({
             </motion.div>
           )}
         </AnimatePresence>
+
+        <div style={{ marginTop: '14px' }}>
+          <label style={{ display: 'inline-flex', alignItems: 'center', gap: '10px', cursor: isSubmitting ? 'not-allowed' : 'pointer' }}>
+            <input
+              type="checkbox"
+              checked={shareLocation}
+              disabled={isSubmitting || locationState === 'loading'}
+              onChange={(event) => toggleLocation(event.target.checked)}
+              style={{ width: '18px', height: '18px', accentColor: '#FF6B35' }}
+            />
+            <MapPin size={17} color={shareLocation ? '#FF8A5F' : '#9CA3AF'} />
+            <span style={{ color: shareLocation ? '#E5E7EB' : '#9CA3AF', fontSize: '13px', fontWeight: 500 }}>
+              Add my current location to this post
+            </span>
+          </label>
+          {locationState === 'loading' && (
+            <div style={{ display: 'flex', alignItems: 'center', gap: '7px', marginTop: '8px', color: '#9CA3AF', fontSize: '12px' }}>
+              <LocateFixed size={14} /> Finding your location…
+            </div>
+          )}
+          {locationState === 'ready' && postCoordinates && (
+            <p style={{ marginTop: '7px', color: '#6B7280', fontSize: '12px' }}>
+              {nearbyPlace ? `Near ${nearbyPlace.name}. ` : ''}Location will be visible on this post. You can turn it off before posting.
+            </p>
+          )}
+          {locationState === 'error' && (
+            <p style={{ marginTop: '7px', color: '#FCA5A5', fontSize: '12px' }}>
+              Location permission was not granted. The post will not include a location.
+            </p>
+          )}
+        </div>
       </div>
 
       {/* Actions bar */}
