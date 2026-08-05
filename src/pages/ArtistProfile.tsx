@@ -77,7 +77,9 @@ export default function ArtistProfile() {
     loading: followRecordLoading,
     refetch: refetchFollowRecord,
   } = useDocument('artistFollows', followDocId, { skip: !followDocId || isOwnProfile })
-  const isFollowing = optimisticFollow?.docId === followDocId ? optimisticFollow.value : !!followRecord
+  const isFollowing = optimisticFollow && optimisticFollow.docId === followDocId
+    ? optimisticFollow.value
+    : !!followRecord
   const uploadedPortfolio = useMemo<PortfolioItem[]>(
     () =>
       uploadedArtworks
@@ -101,6 +103,7 @@ export default function ArtistProfile() {
     () => (uploadedPortfolio.length > 0 ? uploadedPortfolio : artist?.portfolio || []),
     [artist?.portfolio, uploadedPortfolio]
   )
+  const usesUploadedPortfolio = uploadedPortfolio.length > 0
   const worksCount = Math.max(artist?.worksCount || 0, displayPortfolio.length)
 
   // Handle follow/unfollow
@@ -649,6 +652,9 @@ export default function ArtistProfile() {
           items={displayPortfolio}
           artistName={displayName}
           initialIndex={galleryIndex}
+          getEngagementKey={(item) =>
+            usesUploadedPortfolio ? `upload-${item.id}` : `portfolio-${artist.id}-${item.id}`
+          }
           onClose={() => setShowGallery(false)}
         />
       )}

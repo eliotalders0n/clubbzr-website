@@ -137,11 +137,22 @@ export function buildDiscoveryArtworks({
   exhibitions: Exhibition[]
 }): DiscoveryArtwork[] {
   const artistsById = new Map(artists.map((artist) => [artist.id, artist]))
+  const artistsByName = new Map<string, Artist>()
+
+  artists.forEach((artist) => {
+    ;[artist.artistName, artist.name]
+      .filter((name): name is string => Boolean(name?.trim()))
+      .forEach((name) => artistsByName.set(name.trim().toLowerCase(), artist))
+  })
+
+  const resolveArtist = (artistId?: string, artistName?: string) =>
+    (artistId ? artistsById.get(artistId) : undefined) ||
+    (artistName ? artistsByName.get(artistName.trim().toLowerCase()) : undefined)
 
   const uploaded = uploadedArtworks
     .filter((artwork) => artwork.visibility !== 'unlisted')
     .map((artwork): DiscoveryArtwork => {
-      const artist = artwork.artistId ? artistsById.get(artwork.artistId) : undefined
+      const artist = resolveArtist(artwork.artistId, artwork.artistName)
       const artworkDate = getDate(artwork.artworkDate)
       const id = `upload-${artwork.id}`
       const imageUrl = artwork.thumbnailUrl || artwork.imageUrl
@@ -209,7 +220,7 @@ export function buildDiscoveryArtworks({
         const imageUrl = item.thumbnailUrl || item.mediaUrls?.[0]
         if (!imageUrl) return null
 
-        const artist = item.artistId ? artistsById.get(item.artistId) : undefined
+        const artist = resolveArtist(item.artistId, item.artistName)
         const exhibitionDate = getDate(exhibition.startDate)
         const id = `exhibition-${exhibition.id}-${item.id}`
         const location = getExhibitionLocation(exhibition)

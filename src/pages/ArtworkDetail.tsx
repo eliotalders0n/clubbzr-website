@@ -32,12 +32,10 @@ import { Footer } from '@/components/layout/Footer'
 import { useAuth } from '@/contexts/AuthContext'
 import { useCollection } from '@/hooks/useFirestore'
 import {
-  DISCOVERY_SHUFFLE_SEED,
   buildDiscoveryArtworks,
   formatMedium,
   getArtworkEngagementKey,
   getArtworkProfileHref,
-  stableScore,
   type DiscoveryArtwork,
 } from '@/lib/artworkDiscovery'
 import { addToArray, removeFromArray } from '../../lib/firestore'
@@ -123,42 +121,28 @@ function IconAction({
   )
 }
 
-function RecommendationCard({ artwork, compact = false }: { artwork: DiscoveryArtwork; compact?: boolean }) {
+function ArtistWorkCard({ artwork }: { artwork: DiscoveryArtwork }) {
   return (
-    <Link to={artwork.detailHref}>
+    <Link to={artwork.detailHref} aria-label={`View ${artwork.title}`}>
       <Box
         role="group"
-        display="grid"
-        gridTemplateColumns={compact ? '86px minmax(0, 1fr)' : '1fr'}
-        gap={compact ? 3 : 0}
-        alignItems="center"
+        aspectRatio={1}
+        borderRadius={{ base: 'md', md: 'xl' }}
+        overflow="hidden"
+        bg="gray.800"
+        border="1px solid"
+        borderColor="whiteAlpha.100"
+        _hover={{ borderColor: 'whiteAlpha.300' }}
       >
-        <Box
-          aspectRatio={compact ? 1 : '4 / 5'}
-          borderRadius="xl"
-          overflow="hidden"
-          bg="gray.800"
-          border="1px solid"
-          borderColor="whiteAlpha.100"
-        >
-          <Image
-            src={artwork.imageUrl}
-            alt={artwork.title}
-            w="full"
-            h="full"
-            objectFit="cover"
-            transition="transform 0.3s ease"
-            _groupHover={{ transform: 'scale(1.04)' }}
-          />
-        </Box>
-        <Box mt={compact ? 0 : 3} minW={0}>
-          <Text color="white" fontSize="sm" fontWeight="semibold" lineClamp={1}>
-            {artwork.title}
-          </Text>
-          <Text color="whiteAlpha.500" fontSize="xs" lineClamp={1}>
-            {artwork.credit.name}
-          </Text>
-        </Box>
+        <Image
+          src={artwork.imageUrl}
+          alt={artwork.title}
+          w="full"
+          h="full"
+          objectFit="cover"
+          transition="transform 0.3s ease"
+          _groupHover={{ transform: 'scale(1.04)' }}
+        />
       </Box>
     </Link>
   )
@@ -198,27 +182,23 @@ export default function ArtworkDetail() {
     () => allArtworks.find((item) => item.id === decodedId),
     [allArtworks, decodedId]
   )
-  const related = useMemo(() => {
+  const artistWorks = useMemo(() => {
     if (!artwork) return []
-    const tagSet = new Set([...artwork.tags, ...artwork.genres].map((tag) => tag.toLowerCase()))
+    const normalizedArtistName = artwork.credit.name.trim().toLowerCase()
 
     return allArtworks
-      .filter((item) => item.id !== artwork.id)
-      .map((item) => {
-        const sharedTags = [...item.tags, ...item.genres].filter((tag) => tagSet.has(tag.toLowerCase())).length
-        const score =
-          (item.medium === artwork.medium ? 30 : 0) +
-          (item.credit.artistId && item.credit.artistId === artwork.credit.artistId ? 24 : 0) +
-          sharedTags * 8
-
-        return { item, score }
+      .filter((item) => {
+        if (item.id === artwork.id) return false
+        if (artwork.credit.artistId && item.credit.artistId) {
+          return item.credit.artistId === artwork.credit.artistId
+        }
+        return item.credit.name.trim().toLowerCase() === normalizedArtistName
       })
-      .sort((a, b) => {
-        if (b.score !== a.score) return b.score - a.score
-        return stableScore(a.item.id, `${DISCOVERY_SHUFFLE_SEED}:${artwork.id}`) -
-          stableScore(b.item.id, `${DISCOVERY_SHUFFLE_SEED}:${artwork.id}`)
-      })
-      .map(({ item }) => item)
+      .filter(
+        (item, index, items) =>
+          items.findIndex((candidate) => candidate.imageUrl === item.imageUrl) === index
+      )
+      .sort((a, b) => b.createdAtMs - a.createdAtMs)
   }, [allArtworks, artwork])
 
   const lovedKeys = useMemo(() => {
@@ -383,11 +363,10 @@ export default function ArtworkDetail() {
   const lovePending = pendingAction === `${artworkKey}:love`
   const savePending = pendingAction === `${artworkKey}:save`
   const profileHref = getArtworkProfileHref(artwork.credit)
-  const sideRecommendations = related.slice(0, 4)
-  const bottomRecommendations = related.slice(0, 8)
+  const moreByArtist = artistWorks.slice(0, 12)
 
   const artistIdentity = (
-    <HStack gap={3} minW={0}>
+    <HStack gap={3} minW={0} borderRadius="xl" _hover={{ opacity: 0.82 }} transition="opacity 0.2s ease">
       <InitialAvatar artwork={artwork} />
       <Box minW={0}>
         <Text color="white" fontWeight="semibold" lineClamp={1}>
@@ -422,16 +401,7 @@ export default function ArtworkDetail() {
             Back
           </Button>
 
-          <Grid templateColumns={{ base: '1fr', xl: '260px minmax(0, 1fr) 340px' }} gap={{ base: 6, xl: 8 }} alignItems="start">
-            <VStack align="stretch" gap={4} display={{ base: 'none', xl: 'flex' }}>
-              <Text color="whiteAlpha.500" fontSize="sm" textTransform="uppercase" letterSpacing="0.16em">
-                Recommended
-              </Text>
-              {sideRecommendations.map((item) => (
-                <RecommendationCard key={item.id} artwork={item} compact />
-              ))}
-            </VStack>
-
+          <Grid templateColumns={{ base: '1fr', xl: 'minmax(0, 1fr) 320px' }} gap={{ base: 6, xl: 8 }} alignItems="start">
             <MotionBox initial={{ opacity: 0, y: 18 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.45 }}>
               <Box
                 bg="gray.900"
@@ -453,12 +423,12 @@ export default function ArtworkDetail() {
               </Box>
             </MotionBox>
 
-            <VStack align="stretch" gap={5}>
+            <VStack align="stretch" gap={4} position={{ xl: 'sticky' }} top={{ xl: '120px' }}>
               <Box>
-                <Badge bg="whiteAlpha.100" color="whiteAlpha.800" borderRadius="full" px={3} py={1} mb={4}>
+                <Badge bg="whiteAlpha.100" color="whiteAlpha.800" borderRadius="full" px={3} py={1} mb={3}>
                   {formatMedium(artwork.medium)}
                 </Badge>
-                <Heading as="h1" color="white" fontSize={{ base: '3xl', md: '4xl' }} fontFamily="heading" lineHeight={1.05} mb={4}>
+                <Heading as="h1" color="white" fontSize={{ base: '3xl', md: '3xl' }} fontFamily="heading" lineHeight={1.05} mb={4}>
                   {artwork.title}
                 </Heading>
 
@@ -497,7 +467,7 @@ export default function ArtworkDetail() {
                 </Box>
               )}
 
-              <VStack align="stretch" gap={3} color="whiteAlpha.700">
+              <VStack align="stretch" gap={3} color="whiteAlpha.700" fontSize="sm">
                 {artwork.description && (
                   <Text lineHeight="tall">
                     {artwork.description}
@@ -527,14 +497,23 @@ export default function ArtworkDetail() {
             </VStack>
           </Grid>
 
-          {bottomRecommendations.length > 0 && (
+          {moreByArtist.length > 0 && (
             <Box mt={{ base: 10, md: 14 }}>
-              <Heading as="h2" color="white" fontSize="2xl" fontFamily="heading" mb={6}>
-                More To See
-              </Heading>
-              <SimpleGrid columns={{ base: 1, sm: 2, lg: 4 }} gap={5}>
-                {bottomRecommendations.map((item) => (
-                  <RecommendationCard key={item.id} artwork={item} />
+              <Flex justify="space-between" align="center" gap={4} mb={6}>
+                <Heading as="h2" color="white" fontSize={{ base: 'xl', md: '2xl' }} fontFamily="heading">
+                  More by {artwork.credit.name}
+                </Heading>
+                {profileHref && (
+                  <Link to={profileHref}>
+                    <Text color="brand.300" fontWeight="semibold" whiteSpace="nowrap" _hover={{ color: 'brand.200' }}>
+                      View profile
+                    </Text>
+                  </Link>
+                )}
+              </Flex>
+              <SimpleGrid columns={{ base: 3, md: 4, lg: 6 }} gap={{ base: 2, md: 4 }}>
+                {moreByArtist.map((item) => (
+                  <ArtistWorkCard key={item.id} artwork={item} />
                 ))}
               </SimpleGrid>
             </Box>

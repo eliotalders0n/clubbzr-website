@@ -3,12 +3,12 @@
 import { Link, useLocation, useNavigate } from 'react-router-dom'
 import {
   CalendarDays,
-  ChevronDown,
   Compass,
+  Eye,
   LogIn,
   LogOut,
-  Map,
   MessageCircle,
+  Plus,
   Radio as RadioIcon,
   Settings,
   UserRound,
@@ -30,6 +30,7 @@ import {
 
 import logoWhite from '@/assets/logos/Club BZR logo (RED).png'
 import { useAuth } from '@/contexts/AuthContext'
+import { useDocument } from '@/hooks/useFirestore'
 
 interface NavLink {
   label: string
@@ -55,6 +56,7 @@ export function Header({ activeLink }: HeaderProps) {
   const location = useLocation()
   const navigate = useNavigate()
   const { user, firebaseUser, signOut } = useAuth()
+  const { data: artistProfile } = useDocument('artists', firebaseUser?.uid, { skip: !firebaseUser?.uid })
 
   const isActive = (link: Pick<NavLink, 'href' | 'match'>) => {
     if (activeLink) return activeLink === link.href
@@ -112,67 +114,24 @@ export function Header({ activeLink }: HeaderProps) {
             </HStack>
 
             <HStack gap={3}>
-              <Menu.Root>
-                <Menu.Trigger
+              <Link to="/subversions/create">
+                <Button
                   display={{ base: 'inline-flex', md: 'none' }}
                   alignItems="center"
                   gap={2}
-                  h={9}
+                  h={10}
                   px={4}
                   borderRadius="full"
-                  bg="whiteAlpha.100"
-                  color="whiteAlpha.900"
+                  bg="brand.500"
+                  color="white"
                   fontSize="xs"
                   fontWeight="semibold"
-                  _hover={{ bg: 'whiteAlpha.200' }}
+                  _hover={{ bg: 'brand.600' }}
                 >
-                  <Map size={16} strokeWidth={2} />
-                  Explore
-                  <ChevronDown size={14} strokeWidth={2.4} />
-                </Menu.Trigger>
-                <Portal>
-                  <Menu.Positioner>
-                    <Menu.Content
-                      minW="248px"
-                      maxW="calc(100vw - 32px)"
-                      p={2}
-                      bg="rgba(18, 18, 18, 0.98)"
-                      border="1px solid"
-                      borderColor="whiteAlpha.200"
-                      borderRadius="18px"
-                      boxShadow="0 18px 50px rgba(0, 0, 0, 0.45)"
-                    >
-                      {NAV_LINKS.map((link) => {
-                        const active = isActive(link)
-                        const Icon = link.icon
-
-                        return (
-                          <Menu.Item
-                            key={link.href}
-                            value={link.href}
-                            onClick={() => navigate(link.href)}
-                            display="flex"
-                            alignItems="center"
-                            gap={3}
-                            minH="44px"
-                            px={3}
-                            py={2}
-                            borderRadius="12px"
-                            bg={active ? 'whiteAlpha.100' : 'transparent'}
-                            color={active ? 'brand.500' : 'whiteAlpha.800'}
-                            fontSize="15px"
-                            fontWeight={active ? 'semibold' : 'medium'}
-                            _hover={{ bg: 'whiteAlpha.100', color: 'white' }}
-                          >
-                            <Icon size={18} strokeWidth={2} />
-                            <Text as="span">{link.label}</Text>
-                          </Menu.Item>
-                        )
-                      })}
-                    </Menu.Content>
-                  </Menu.Positioner>
-                </Portal>
-              </Menu.Root>
+                  <Plus size={17} strokeWidth={2.5} />
+                  Add Subversion
+                </Button>
+              </Link>
 
               {isLoggedIn ? (
                 <Menu.Root>
@@ -258,6 +217,27 @@ export function Header({ activeLink }: HeaderProps) {
                           <Settings size={18} />
                           <Text as="span">Manage Profile</Text>
                         </Menu.Item>
+                        {artistProfile && firebaseUser?.uid && (
+                          <Menu.Item
+                            value="artist-profile"
+                            onClick={() => navigate(`/artists/${firebaseUser.uid}`)}
+                            display="flex"
+                            alignItems="center"
+                            gap={3}
+                            minH="44px"
+                            px={3}
+                            py={2}
+                            borderRadius="12px"
+                            bg="transparent"
+                            color="whiteAlpha.800"
+                            fontSize="sm"
+                            fontWeight="medium"
+                            _hover={{ bg: 'whiteAlpha.100', color: 'white' }}
+                          >
+                            <Eye size={18} />
+                            <Text as="span">View Artist Profile</Text>
+                          </Menu.Item>
+                        )}
                         <Menu.Item
                           value="sign-out"
                           onClick={() => signOut()}

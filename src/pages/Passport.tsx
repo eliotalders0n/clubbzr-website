@@ -16,7 +16,7 @@ import {
   Spinner,
   Textarea,
 } from '@chakra-ui/react';
-import { Award, Bookmark, CalendarDays, CheckCircle2, Eye, Heart, ImageIcon, MessageCircle, Pencil, Save, Settings, Trash2, UserRound, X } from 'lucide-react';
+import { Bookmark, CalendarDays, CheckCircle2, Heart, ImageIcon, MessageCircle, Pencil, Save, Settings, Trash2, X } from 'lucide-react';
 import { Header } from '@/components/layout/Header';
 import { Footer } from '@/components/layout/Footer';
 import { Section } from '@/components/layout/Section';
@@ -24,7 +24,7 @@ import { Button } from '@/components/ui/Button';
 import { useAuth } from '@/contexts/AuthContext';
 import { useCollection, useDocument } from '@/hooks/useFirestore';
 import { Timestamp } from 'firebase/firestore';
-import { createQuestCompletionBadges, getBadgeVisual } from '../../lib/badges';
+import { createQuestCompletionBadges } from '../../lib/badges';
 import { createDocumentWithId, deleteDocument, updateDocument } from '../../lib/firestore';
 import {
   buildDiscoveryArtworks,
@@ -62,7 +62,7 @@ const toMillis = (value: unknown): number => {
 
 const readKeyList = (value: unknown): string[] => (Array.isArray(value) ? value.filter((item): item is string => typeof item === 'string') : []);
 
-type PassportTab = 'posts' | 'artist' | 'quests' | 'events' | 'liked' | 'bookmarked';
+type PassportTab = 'posts' | 'quests' | 'events' | 'liked' | 'bookmarked';
 
 const formatDate = (value: unknown): string => {
   const timestamp = toMillis(value);
@@ -197,10 +197,7 @@ const Passport: React.FC = () => {
     error: passportError,
     refetch: refetchPassport
   } = useDocument('creativePassports', firebaseUser?.uid);
-  const {
-    data: artistProfile,
-    loading: artistProfileLoading,
-  } = useDocument('artists', firebaseUser?.uid, { skip: !firebaseUser?.uid });
+  const { data: artistProfile } = useDocument('artists', firebaseUser?.uid, { skip: !firebaseUser?.uid });
   const {
     data: questSubmissions,
     loading: questSubmissionsLoading,
@@ -759,11 +756,8 @@ const Passport: React.FC = () => {
       ),
     },
   ];
-  const hasArtistProfile = !!artistProfile;
-  const artistDisplayName = artistProfile?.artistName || artistProfile?.name || 'Artist profile';
   const passportTabs: { id: PassportTab; label: string; count?: number }[] = [
     { id: 'posts', label: 'Posts', count: userCommunityPosts.length },
-    { id: 'artist', label: 'Artist Profile' },
     { id: 'quests', label: 'Completed Quests', count: displayUser.completedQuests.length },
     { id: 'events', label: 'Events Attended', count: displayUser.attendedEvents.length },
     { id: 'liked', label: 'Liked Artwork', count: savedArtwork.loved.length },
@@ -926,157 +920,6 @@ const Passport: React.FC = () => {
             </HStack>
 
             <Box mt={5}>
-              {activePassportTab === 'artist' && (
-                <SimpleGrid columns={{ base: 1, lg: 2 }} gap={6}>
-                  <Box
-                    p={{ base: 5, md: 6 }}
-                    borderRadius="xl"
-                    bg="gray.900"
-                    border="1px solid"
-                    borderColor="whiteAlpha.100"
-                    minH="260px"
-                    display="flex"
-                    flexDirection="column"
-                  >
-                    <HStack justify="space-between" align="start" gap={4} mb={5}>
-                      <Box>
-                        <Heading as="h3" fontSize="lg" color="white" mb={1}>Artist Profile</Heading>
-                        <Text color="whiteAlpha.500" fontSize="sm">
-                          Public creator presence
-                        </Text>
-                      </Box>
-                      <Flex
-                        w={12}
-                        h={12}
-                        borderRadius="full"
-                        bg={hasArtistProfile ? 'brand.500/20' : 'whiteAlpha.50'}
-                        color={hasArtistProfile ? 'brand.300' : 'whiteAlpha.500'}
-                        align="center"
-                        justify="center"
-                        flexShrink={0}
-                      >
-                        {hasArtistProfile ? <Pencil size={20} /> : <UserRound size={20} />}
-                      </Flex>
-                    </HStack>
-
-                    {artistProfileLoading ? (
-                      <HStack gap={3} color="whiteAlpha.500" mt="auto">
-                        <Spinner size="sm" color="brand.500" />
-                        <Text fontSize="sm">Checking artist profile...</Text>
-                      </HStack>
-                    ) : hasArtistProfile ? (
-                      <VStack align="stretch" gap={5} flex={1} justify="space-between">
-                        <Box>
-                          <Text color="white" fontSize="xl" fontWeight="bold" lineClamp={1} mb={2}>
-                            {artistDisplayName}
-                          </Text>
-                          <Text color="whiteAlpha.600" fontSize="sm" lineHeight="tall">
-                            Update your public bio, mediums, links, and availability.
-                          </Text>
-                        </Box>
-                        <SimpleGrid columns={2} gap={3}>
-                          <Link to="/artists/create" style={{ display: 'block' }}>
-                            <ChakraButton w="full" h={11} gap={2} bg="brand.500" color="white" borderRadius="full" fontSize="sm" _hover={{ bg: 'brand.600' }}>
-                              <Pencil size={15} />
-                              Edit
-                            </ChakraButton>
-                          </Link>
-                          <Link to={`/artists/${firebaseUser?.uid}`} style={{ display: 'block' }}>
-                            <ChakraButton
-                              w="full"
-                              h={11}
-                              gap={2}
-                              bg="whiteAlpha.50"
-                              color="white"
-                              border="1px solid"
-                              borderColor="whiteAlpha.200"
-                              borderRadius="full"
-                              fontSize="sm"
-                              _hover={{ bg: 'whiteAlpha.100' }}
-                            >
-                              <Eye size={15} />
-                              View
-                            </ChakraButton>
-                          </Link>
-                        </SimpleGrid>
-                      </VStack>
-                    ) : (
-                      <VStack align="stretch" gap={5} flex={1} justify="space-between">
-                        <Text color="whiteAlpha.600" fontSize="sm" lineHeight="tall">
-                          Create a public profile so artists can discover your work and collaboration interests.
-                        </Text>
-                        <Link to="/artists/create" style={{ display: 'block' }}>
-                          <ChakraButton w="full" h={11} gap={2} bg="brand.500" color="white" borderRadius="full" fontSize="sm" _hover={{ bg: 'brand.600' }}>
-                            <UserRound size={15} />
-                            Create Profile
-                          </ChakraButton>
-                        </Link>
-                      </VStack>
-                    )}
-                  </Box>
-
-                  <Box
-                    p={6}
-                    borderRadius="xl"
-                    bg="gray.900"
-                    border="1px solid"
-                    borderColor="whiteAlpha.100"
-                    minH="260px"
-                  >
-                    <HStack justify="space-between" align="start" gap={4} mb={4}>
-                      <Box>
-                        <Heading as="h3" fontSize="md" color="white" mb={1}>Recent Badges</Heading>
-                        <Text color="whiteAlpha.500" fontSize="sm">Earned from quest submissions</Text>
-                      </Box>
-                      <Flex w={11} h={11} borderRadius="full" bg="purple.500/15" color="purple.200" align="center" justify="center" flexShrink={0}>
-                        <Award size={18} />
-                      </Flex>
-                    </HStack>
-                    {displayUser.badges.length > 0 ? (
-                      <VStack align="stretch" gap={3}>
-                        {displayUser.badges.slice(0, 6).map((badge) => {
-                          const visual = getBadgeVisual(badge.id);
-
-                          return (
-                          <HStack key={badge.id} p={3} borderRadius="xl" bg="whiteAlpha.50" gap={3}>
-                            <Box
-                              w={10}
-                              h={10}
-                              borderRadius="full"
-                              bg={visual.bg}
-                              color={visual.color}
-                              display="flex"
-                              alignItems="center"
-                              justifyContent="center"
-                              fontWeight="bold"
-                              flexShrink={0}
-                            >
-                              {visual.icon}
-                            </Box>
-                            <Box minW={0}>
-                              <Text color="white" fontSize="sm" fontWeight="bold" lineClamp={1}>{badge.name}</Text>
-                              <Text color="whiteAlpha.500" fontSize="xs" lineClamp={1}>{badge.description}</Text>
-                            </Box>
-                          </HStack>
-                          );
-                        })}
-                      </VStack>
-                    ) : (
-                      <VStack align="stretch" gap={3}>
-                        <Text color="whiteAlpha.500" fontSize="sm" lineHeight="tall">
-                          No badges earned yet. Submit a quest response to unlock your first badge.
-                        </Text>
-                        <Link to="/quests" style={{ display: 'block' }}>
-                          <ChakraButton size="sm" w="fit-content" bg="purple.500/15" color="purple.200" border="1px solid" borderColor="purple.400/30" borderRadius="full" _hover={{ bg: 'purple.500/25' }}>
-                            Browse Quests
-                          </ChakraButton>
-                        </Link>
-                      </VStack>
-                    )}
-                  </Box>
-                </SimpleGrid>
-              )}
-
               {activePassportTab === 'quests' && (
                 <Box p={{ base: 5, md: 6 }} borderRadius="xl" bg="gray.900" border="1px solid" borderColor="whiteAlpha.100">
                   <HStack justify="space-between" align="start" gap={4} mb={5}>

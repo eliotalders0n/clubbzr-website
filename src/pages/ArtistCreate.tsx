@@ -1,6 +1,6 @@
 'use client'
 
-import { useMemo, useRef, useState, type ChangeEvent, type CSSProperties, type FormEvent } from 'react'
+import { useMemo, useRef, useState, type ChangeEvent, type FormEvent } from 'react'
 import { Link as RouterLink, useNavigate } from 'react-router-dom'
 import {
   Badge,
@@ -19,29 +19,18 @@ import {
   Textarea,
   VStack,
 } from '@chakra-ui/react'
-import { ArrowLeft, Check, ImagePlus, Save, Trash2, UserRound } from 'lucide-react'
-import { Timestamp } from 'firebase/firestore'
+import { ArrowLeft, Check, Images, ImagePlus, Save, Trash2, UserRound } from 'lucide-react'
 
 import { Header } from '@/components/layout/Header'
 import { Footer } from '@/components/layout/Footer'
 import { useAuth } from '@/contexts/AuthContext'
 import { useCollection, useDocument } from '@/hooks/useFirestore'
-import { createDocument, createDocumentWithId, updateDocument } from '../../lib/firestore'
+import { createDocumentWithId, updateDocument } from '../../lib/firestore'
 import { upsertPublicProfile } from '../../lib/publicProfiles'
 import { STORAGE_PATHS, uploadFileSimple, validateFile, VALIDATION_PRESETS } from '../../lib/storage'
-import type { Artist, Artwork, ArtMedium, CreateDocument, UpdateDocument } from '../../lib/schema'
+import type { Artist, ArtMedium, CreateDocument, UpdateDocument } from '../../lib/schema'
 
 type Feedback = { type: 'error' | 'success'; message: string } | null
-
-interface ArtworkForm {
-  title: string
-  description: string
-  medium: ArtMedium
-  imageUrl: string
-  genres: string
-  location: string
-  artworkDate: string
-}
 
 interface ArtistForm {
   name: string
@@ -109,16 +98,6 @@ const defaultForm: ArtistForm = {
   availabilityNotes: '',
 }
 
-const defaultArtworkForm: ArtworkForm = {
-  title: '',
-  description: '',
-  medium: 'digital',
-  imageUrl: '',
-  genres: '',
-  location: '',
-  artworkDate: '',
-}
-
 const fieldStyles = {
   bg: 'gray.900',
   border: '1px solid',
@@ -132,17 +111,6 @@ const fieldStyles = {
   _focus: { borderColor: 'brand.500', boxShadow: '0 0 0 1px var(--chakra-colors-brand-500)' },
 }
 
-const selectStyle: CSSProperties = {
-  width: '100%',
-  minHeight: '48px',
-  padding: '0 16px',
-  backgroundColor: 'var(--chakra-colors-gray-900)',
-  border: '1px solid rgba(255,255,255,0.2)',
-  borderRadius: '12px',
-  color: 'white',
-  outline: 'none',
-}
-
 const splitList = (value: string) =>
   value
     .split(/[\n,]/)
@@ -154,11 +122,6 @@ const normalizeUrl = (value: string) => {
   if (!trimmed) return ''
   return /^https?:\/\//i.test(trimmed) ? trimmed : `https://${trimmed}`
 }
-
-const getTimestampMs = (value: unknown) =>
-  value && typeof (value as { toMillis?: unknown }).toMillis === 'function'
-    ? (value as { toMillis: () => number }).toMillis()
-    : 0
 
 const normalizeHandleUrl = (value: string, baseUrl: string) => {
   const trimmed = value.trim()
@@ -298,6 +261,7 @@ function ToggleButton({
       color={active ? 'white' : 'whiteAlpha.700'}
       border="1px solid"
       borderColor={active ? 'brand.500' : 'whiteAlpha.200'}
+      flexShrink={0}
       _hover={{ bg: active ? 'brand.600' : 'whiteAlpha.100', color: 'white' }}
     >
       {children}
@@ -321,25 +285,20 @@ export default function ArtistCreate() {
     loading: artistLoading,
     error: artistError,
   } = useDocument('artists', artistId, { skip: !artistId })
-  const {
-    data: artistArtworks,
-    refetch: refetchArtworks,
-  } = useCollection('artworks', {
+  const { data: artistArtworks } = useCollection('artworks', {
     where: artistId ? [{ field: 'artistId', operator: '==', value: artistId }] : [],
     skip: !artistId,
   })
   const [draft, setDraft] = useState<Partial<ArtistForm>>({})
-  const [artworkForm, setArtworkForm] = useState<ArtworkForm>(defaultArtworkForm)
   const [feedback, setFeedback] = useState<Feedback>(null)
-  const [artworkFeedback, setArtworkFeedback] = useState<Feedback>(null)
   const [saving, setSaving] = useState(false)
   const [uploadingPhoto, setUploadingPhoto] = useState(false)
-  const [uploadingArtwork, setUploadingArtwork] = useState(false)
-  const [savingArtwork, setSavingArtwork] = useState(false)
   const [photoUploadError, setPhotoUploadError] = useState<string | null>(null)
-  const [artworkUploadError, setArtworkUploadError] = useState<string | null>(null)
+  const [uploadingFeaturedWork, setUploadingFeaturedWork] = useState(false)
+  const [featuredWorkUploadError, setFeaturedWorkUploadError] = useState<string | null>(null)
+  const [showArtworkPicker, setShowArtworkPicker] = useState(false)
   const photoInputRef = useRef<HTMLInputElement | null>(null)
-  const artworkInputRef = useRef<HTMLInputElement | null>(null)
+  const featuredWorkInputRef = useRef<HTMLInputElement | null>(null)
 
   const fallbackName = user?.displayName || firebaseUser?.displayName || ''
   const fallbackPhotoUrl = user?.photoURL || firebaseUser?.photoURL || ''
@@ -348,12 +307,27 @@ export default function ArtistCreate() {
     [existingArtist, fallbackName, fallbackPhotoUrl]
   )
   const form = useMemo(() => ({ ...baseForm, ...draft }), [baseForm, draft])
-  const sortedArtistArtworks = useMemo(
-    () => [...artistArtworks].sort((a, b) => getTimestampMs(b.createdAt) - getTimestampMs(a.createdAt)),
-    [artistArtworks]
-  )
   const profilePhotoUrl = form.photoURL.trim() ? normalizeUrl(form.photoURL) : ''
-  const artworkImageUrl = artworkForm.imageUrl.trim() ? normalizeUrl(artworkForm.imageUrl) : ''
+  const featuredWorkImageUrl = form.featuredWorkUrl.trim() ? normalizeUrl(form.featuredWorkUrl) : ''
+  const existingWorkChoices = useMemo(() => {
+    const choices = [
+      ...artistArtworks.map((artwork) => ({
+        id: artwork.id,
+        title: artwork.title,
+        imageUrl: artwork.thumbnailUrl || artwork.imageUrl,
+      })),
+      ...(existingArtist?.portfolio || []).map((work) => ({
+        id: work.id,
+        title: work.title,
+        imageUrl: work.thumbnailUrl || work.mediaUrls[0] || '',
+      })),
+    ]
+
+    return choices.filter(
+      (choice, index) =>
+        !!choice.imageUrl && choices.findIndex((candidate) => candidate.imageUrl === choice.imageUrl) === index
+    )
+  }, [artistArtworks, existingArtist?.portfolio])
 
   const setField = <K extends keyof ArtistForm>(field: K, value: ArtistForm[K]) => {
     setDraft((current) => ({ ...current, [field]: value }))
@@ -404,22 +378,17 @@ export default function ArtistCreate() {
     event.target.value = ''
   }
 
-  const setArtworkField = <K extends keyof ArtworkForm>(field: K, value: ArtworkForm[K]) => {
-    setArtworkForm((current) => ({ ...current, [field]: value }))
-  }
-
-  const handleArtworkFile = async (file: File | undefined) => {
+  const handleFeaturedWorkFile = async (file: File | undefined) => {
     if (!file || !firebaseUser?.uid) return
 
-    setArtworkUploadError(null)
-
+    setFeaturedWorkUploadError(null)
     const validation = validateFile(file, VALIDATION_PRESETS.portfolioImage)
     if (!validation.valid) {
-      setArtworkUploadError(validation.error || 'Choose an image file under 15MB.')
+      setFeaturedWorkUploadError(validation.error || 'Choose an image file under 15MB.')
       return
     }
 
-    setUploadingArtwork(true)
+    setUploadingFeaturedWork(true)
     const result = await uploadFileSimple(file, `${STORAGE_PATHS.PORTFOLIOS}/${firebaseUser.uid}`, {
       compress: true,
       compressionOptions: {
@@ -429,89 +398,30 @@ export default function ArtistCreate() {
         format: 'jpeg',
       },
     })
-    setUploadingArtwork(false)
+    setUploadingFeaturedWork(false)
 
     if (!result.success || !result.url) {
-      setArtworkUploadError(result.error?.message || 'Could not upload this artwork image.')
+      setFeaturedWorkUploadError(result.error?.message || 'Could not upload this featured work.')
       return
     }
 
-    setArtworkField('imageUrl', result.url)
+    setField('featuredWorkUrl', result.url)
+    setShowArtworkPicker(false)
   }
 
-  const handleArtworkInput = async (event: ChangeEvent<HTMLInputElement>) => {
-    await handleArtworkFile(event.target.files?.[0])
+  const handleFeaturedWorkInput = async (event: ChangeEvent<HTMLInputElement>) => {
+    await handleFeaturedWorkFile(event.target.files?.[0])
     event.target.value = ''
   }
 
-  const handleArtworkSubmit = async () => {
-    setArtworkFeedback(null)
-    setArtworkUploadError(null)
-
-    if (!firebaseUser?.uid || !existingArtist) {
-      setArtworkFeedback({ type: 'error', message: 'Save your artist profile before uploading work.' })
-      return
-    }
-
-    if (!artworkForm.title.trim()) {
-      setArtworkFeedback({ type: 'error', message: 'Add a title for this work.' })
-      return
-    }
-
-    if (!artworkImageUrl) {
-      setArtworkFeedback({ type: 'error', message: 'Upload an image or paste an artwork image URL.' })
-      return
-    }
-
-    const genres = splitList(artworkForm.genres)
-    const artworkDate = artworkForm.artworkDate
-      ? Timestamp.fromDate(new Date(`${artworkForm.artworkDate}T00:00:00`))
-      : undefined
-    const year = artworkDate ? artworkDate.toDate().getFullYear() : undefined
-    const artistName = form.artistName.trim() || form.name.trim() || existingArtist.artistName || existingArtist.name
-
-    setSavingArtwork(true)
-    const payload: CreateDocument<Artwork> = {
-      artistId: firebaseUser.uid,
-      artistName,
-      ...(profilePhotoUrl ? { artistPhotoURL: profilePhotoUrl } : {}),
-      title: artworkForm.title.trim(),
-      ...(artworkForm.description.trim() ? { description: artworkForm.description.trim() } : {}),
-      medium: artworkForm.medium,
-      imageUrl: artworkImageUrl,
-      thumbnailUrl: artworkImageUrl,
-      mediaUrls: [artworkImageUrl],
-      genres,
-      tags: genres,
-      ...(artworkForm.location.trim() ? { location: artworkForm.location.trim() } : {}),
-      ...(artworkDate ? { artworkDate } : {}),
-      ...(year ? { year } : {}),
-      featured: false,
-      visibility: 'public',
-      likesCount: 0,
-      savesCount: 0,
-    }
-
-    const result = await createDocument('artworks', payload)
-
-    if (result.success) {
-      await updateDocument('artists', firebaseUser.uid, {
-        worksCount: artistArtworks.length + 1,
-      } as UpdateDocument<Artist>)
-      setArtworkForm({
-        ...defaultArtworkForm,
-        medium: form.mediums[0] || 'digital',
-      })
-      await refetchArtworks()
-      setArtworkFeedback({ type: 'success', message: 'Artwork added to your profile.' })
-    } else {
-      setArtworkFeedback({
-        type: 'error',
-        message: result.error?.message || 'Could not save this artwork.',
-      })
-    }
-
-    setSavingArtwork(false)
+  const selectExistingWork = (title: string, imageUrl: string) => {
+    setDraft((current) => ({
+      ...current,
+      featuredWorkTitle: title,
+      featuredWorkUrl: imageUrl,
+    }))
+    setFeaturedWorkUploadError(null)
+    setShowArtworkPicker(false)
   }
 
   const handleSubmit = async (event: FormEvent) => {
@@ -776,7 +686,7 @@ export default function ArtistCreate() {
                         Profile picture
                       </Text>
                       <Text color="whiteAlpha.500" fontSize="sm" mb={4}>
-                        Upload a square image or paste an image URL. This appears on your public artist profile.
+                        Upload a square image for your public artist profile.
                       </Text>
                       <Input
                         ref={photoInputRef}
@@ -785,7 +695,7 @@ export default function ArtistCreate() {
                         display="none"
                         onChange={handlePhotoInput}
                       />
-                      <HStack gap={3} flexWrap="wrap" mb={4}>
+                      <HStack gap={3} flexWrap="wrap">
                         <Button
                           type="button"
                           h="44px"
@@ -825,17 +735,6 @@ export default function ArtistCreate() {
                           </Button>
                         )}
                       </HStack>
-                      <Field label="Profile image URL">
-                        <Input
-                          value={form.photoURL}
-                          onChange={(event) => {
-                            setPhotoUploadError(null)
-                            setField('photoURL', event.target.value)
-                          }}
-                          placeholder="https://example.com/profile.jpg"
-                          {...fieldStyles}
-                        />
-                      </Field>
                       {photoUploadError && (
                         <Text color="red.300" fontSize="sm" mt={2}>
                           {photoUploadError}
@@ -888,10 +787,21 @@ export default function ArtistCreate() {
                 </Box>
 
                 <Box>
-                  <Heading as="h2" color="white" fontSize="xl" mb={5}>
-                    Mediums
-                  </Heading>
-                  <HStack gap={2} flexWrap="wrap">
+                  <Flex align="baseline" justify="space-between" gap={4} mb={3}>
+                    <Heading as="h2" color="white" fontSize="xl">
+                      Mediums
+                    </Heading>
+                    <Text color="whiteAlpha.500" fontSize="xs" flexShrink={0}>
+                      {form.mediums.length} selected
+                    </Text>
+                  </Flex>
+                  <HStack
+                    gap={2}
+                    flexWrap="nowrap"
+                    overflowX="auto"
+                    pb={2}
+                    css={{ scrollbarWidth: 'none', '&::-webkit-scrollbar': { display: 'none' } }}
+                  >
                     {mediumOptions.map((medium) => (
                       <ToggleButton
                         key={medium.value}
@@ -902,6 +812,9 @@ export default function ArtistCreate() {
                       </ToggleButton>
                     ))}
                   </HStack>
+                  <Text color="whiteAlpha.400" fontSize="xs" mt={1}>
+                    Scroll to see every medium. Select all that apply.
+                  </Text>
                   <SimpleGrid columns={{ base: 1, md: 2 }} gap={5} mt={5}>
                     <Field label="Styles">
                       <Input
@@ -971,6 +884,147 @@ export default function ArtistCreate() {
                   <Heading as="h2" color="white" fontSize="xl" mb={5}>
                     Work & Links
                   </Heading>
+                  <Box
+                    p={{ base: 4, md: 5 }}
+                    mb={5}
+                    borderRadius="xl"
+                    bg="whiteAlpha.50"
+                    border="1px solid"
+                    borderColor="whiteAlpha.100"
+                  >
+                    <Text color="white" fontWeight="semibold" mb={3}>
+                      Featured work
+                    </Text>
+                    <Flex align="center" gap={4}>
+                      <Flex
+                        w={{ base: '88px', md: '112px' }}
+                        aspectRatio={1}
+                        flexShrink={0}
+                        borderRadius="xl"
+                        overflow="hidden"
+                        bg="gray.800"
+                        border="1px solid"
+                        borderColor="whiteAlpha.200"
+                        align="center"
+                        justify="center"
+                      >
+                        {featuredWorkImageUrl ? (
+                          <Image
+                            src={featuredWorkImageUrl}
+                            alt={form.featuredWorkTitle || 'Featured work'}
+                            w="full"
+                            h="full"
+                            objectFit="cover"
+                          />
+                        ) : (
+                          <ImagePlus size={28} color="rgba(255,255,255,0.35)" />
+                        )}
+                      </Flex>
+                      <VStack align="stretch" gap={3} flex={1} minW={0}>
+                        <Input
+                          value={form.featuredWorkTitle}
+                          onChange={(event) => setField('featuredWorkTitle', event.target.value)}
+                          placeholder="Featured work title"
+                          {...fieldStyles}
+                        />
+                        <Input
+                          ref={featuredWorkInputRef}
+                          type="file"
+                          accept="image/jpeg,image/png,image/webp,image/gif"
+                          display="none"
+                          onChange={handleFeaturedWorkInput}
+                        />
+                        <HStack gap={2} flexWrap="wrap">
+                          <Button
+                            type="button"
+                            h="40px"
+                            px={4}
+                            gap={2}
+                            bg="brand.500"
+                            color="white"
+                            borderRadius="full"
+                            disabled={uploadingFeaturedWork}
+                            _hover={{ bg: 'brand.600' }}
+                            onClick={() => featuredWorkInputRef.current?.click()}
+                          >
+                            {uploadingFeaturedWork ? <Spinner size="sm" /> : <ImagePlus size={16} />}
+                            Upload
+                          </Button>
+                          <Button
+                            type="button"
+                            h="40px"
+                            px={4}
+                            gap={2}
+                            bg="whiteAlpha.100"
+                            color="white"
+                            border="1px solid"
+                            borderColor="whiteAlpha.200"
+                            borderRadius="full"
+                            disabled={existingWorkChoices.length === 0}
+                            _hover={{ bg: 'whiteAlpha.200' }}
+                            onClick={() => setShowArtworkPicker((current) => !current)}
+                          >
+                            <Images size={16} />
+                            Choose existing
+                          </Button>
+                          {featuredWorkImageUrl && (
+                            <Button
+                              type="button"
+                              h="40px"
+                              px={3}
+                              gap={2}
+                              bg="transparent"
+                              color="whiteAlpha.600"
+                              borderRadius="full"
+                              _hover={{ bg: 'red.500/15', color: 'red.200' }}
+                              onClick={() => {
+                                setField('featuredWorkUrl', '')
+                                setFeaturedWorkUploadError(null)
+                              }}
+                            >
+                              <Trash2 size={16} />
+                              Remove
+                            </Button>
+                          )}
+                        </HStack>
+                      </VStack>
+                    </Flex>
+                    {featuredWorkUploadError && (
+                      <Text color="red.300" fontSize="sm" mt={3}>
+                        {featuredWorkUploadError}
+                      </Text>
+                    )}
+                    {showArtworkPicker && (
+                      <Box mt={4} pt={4} borderTop="1px solid" borderColor="whiteAlpha.100">
+                        <Text color="whiteAlpha.600" fontSize="sm" mb={3}>
+                          Choose from your published Subversions
+                        </Text>
+                        <SimpleGrid columns={{ base: 3, md: 5 }} gap={2}>
+                          {existingWorkChoices.map((work) => (
+                            <Button
+                              type="button"
+                              key={`${work.id}-${work.imageUrl}`}
+                              onClick={() => selectExistingWork(work.title, work.imageUrl)}
+                              position="relative"
+                              aspectRatio={1}
+                              h="auto"
+                              minW={0}
+                              p={0}
+                              overflow="hidden"
+                              borderRadius="lg"
+                              border="2px solid"
+                              borderColor={featuredWorkImageUrl === work.imageUrl ? 'brand.500' : 'transparent'}
+                              bg="gray.800"
+                              _hover={{ borderColor: 'brand.400' }}
+                              aria-label={`Use ${work.title} as featured work`}
+                            >
+                              <Image src={work.imageUrl} alt={work.title} w="full" h="full" objectFit="cover" />
+                            </Button>
+                          ))}
+                        </SimpleGrid>
+                      </Box>
+                    )}
+                  </Box>
                   <SimpleGrid columns={{ base: 1, md: 2 }} gap={5}>
                     <Field label="Portfolio URL">
                       <Input
@@ -985,22 +1039,6 @@ export default function ArtistCreate() {
                         value={form.website}
                         onChange={(event) => setField('website', event.target.value)}
                         placeholder="your-site.com"
-                        {...fieldStyles}
-                      />
-                    </Field>
-                    <Field label="Featured work title">
-                      <Input
-                        value={form.featuredWorkTitle}
-                        onChange={(event) => setField('featuredWorkTitle', event.target.value)}
-                        placeholder="Work title"
-                        {...fieldStyles}
-                      />
-                    </Field>
-                    <Field label="Featured work image URL">
-                      <Input
-                        value={form.featuredWorkUrl}
-                        onChange={(event) => setField('featuredWorkUrl', event.target.value)}
-                        placeholder="Image URL"
                         {...fieldStyles}
                       />
                     </Field>
@@ -1031,224 +1069,6 @@ export default function ArtistCreate() {
                   </SimpleGrid>
                 </Box>
 
-                <Box>
-                  <Flex justify="space-between" align={{ base: 'start', md: 'center' }} gap={4} mb={5} direction={{ base: 'column', md: 'row' }}>
-                    <Box>
-                      <Heading as="h2" color="white" fontSize="xl" mb={2}>
-                        Upload Work
-                      </Heading>
-                      <Text color="whiteAlpha.500" fontSize="sm">
-                        Add work to your public artist profile and the global artwork discovery wall.
-                      </Text>
-                    </Box>
-                    <Badge bg="whiteAlpha.100" color="whiteAlpha.700" borderRadius="full" px={3} py={1}>
-                      {sortedArtistArtworks.length} work{sortedArtistArtworks.length === 1 ? '' : 's'}
-                    </Badge>
-                  </Flex>
-
-                  {!existingArtist ? (
-                    <Box p={5} borderRadius="xl" bg="whiteAlpha.50" border="1px solid" borderColor="whiteAlpha.100">
-                      <Text color="whiteAlpha.600" fontSize="sm">
-                        Save your artist profile first, then come back here to upload your work.
-                      </Text>
-                    </Box>
-                  ) : (
-                    <Box p={{ base: 4, md: 5 }} borderRadius="2xl" bg="blackAlpha.200" border="1px solid" borderColor="whiteAlpha.100">
-                      <Grid templateColumns={{ base: '1fr', lg: '260px minmax(0, 1fr)' }} gap={5}>
-                        <Box>
-                          <Box
-                            aspectRatio={1}
-                            borderRadius="xl"
-                            overflow="hidden"
-                            bg="gray.800"
-                            border="1px solid"
-                            borderColor="whiteAlpha.200"
-                            display="flex"
-                            alignItems="center"
-                            justifyContent="center"
-                            mb={4}
-                          >
-                            {artworkImageUrl ? (
-                              <Image src={artworkImageUrl} alt={artworkForm.title || 'Artwork preview'} w="full" h="full" objectFit="cover" />
-                            ) : (
-                              <VStack gap={2} color="whiteAlpha.400">
-                                <ImagePlus size={28} />
-                                <Text fontSize="sm">Artwork preview</Text>
-                              </VStack>
-                            )}
-                          </Box>
-                          <Input
-                            ref={artworkInputRef}
-                            type="file"
-                            accept="image/jpeg,image/png,image/webp,image/gif"
-                            display="none"
-                            onChange={handleArtworkInput}
-                          />
-                          <HStack gap={3} flexWrap="wrap">
-                            <Button
-                              type="button"
-                              h="42px"
-                              px={4}
-                              gap={2}
-                              bg="whiteAlpha.100"
-                              color="white"
-                              border="1px solid"
-                              borderColor="whiteAlpha.200"
-                              borderRadius="full"
-                              disabled={uploadingArtwork}
-                              _hover={{ bg: 'whiteAlpha.200' }}
-                              onClick={() => artworkInputRef.current?.click()}
-                            >
-                              {uploadingArtwork ? <Spinner size="sm" /> : <ImagePlus size={17} />}
-                              Upload
-                            </Button>
-                            {artworkForm.imageUrl && (
-                              <Button
-                                type="button"
-                                h="42px"
-                                px={4}
-                                gap={2}
-                                bg="transparent"
-                                color="whiteAlpha.700"
-                                border="1px solid"
-                                borderColor="whiteAlpha.200"
-                                borderRadius="full"
-                                _hover={{ bg: 'red.500/15', color: 'red.200', borderColor: 'red.400' }}
-                                onClick={() => setArtworkField('imageUrl', '')}
-                              >
-                                <Trash2 size={16} />
-                                Clear
-                              </Button>
-                            )}
-                          </HStack>
-                          {artworkUploadError && (
-                            <Text color="red.300" fontSize="sm" mt={3}>
-                              {artworkUploadError}
-                            </Text>
-                          )}
-                        </Box>
-
-                        <VStack align="stretch" gap={4}>
-                          <SimpleGrid columns={{ base: 1, md: 2 }} gap={4}>
-                            <Field label="Artwork title">
-                              <Input
-                                value={artworkForm.title}
-                                onChange={(event) => setArtworkField('title', event.target.value)}
-                                placeholder="Untitled study"
-                                {...fieldStyles}
-                              />
-                            </Field>
-                            <Field label="Art type">
-                              <select
-                                value={artworkForm.medium}
-                                onChange={(event) => setArtworkField('medium', event.target.value as ArtMedium)}
-                                style={selectStyle}
-                              >
-                                {mediumOptions.map((medium) => (
-                                  <option key={medium.value} value={medium.value}>
-                                    {medium.label}
-                                  </option>
-                                ))}
-                              </select>
-                            </Field>
-                          </SimpleGrid>
-                          <Field label="Artwork image URL">
-                            <Input
-                              value={artworkForm.imageUrl}
-                              onChange={(event) => {
-                                setArtworkUploadError(null)
-                                setArtworkField('imageUrl', event.target.value)
-                              }}
-                              placeholder="https://example.com/work.jpg"
-                              {...fieldStyles}
-                            />
-                          </Field>
-                          <Field label="Description">
-                            <Textarea
-                              value={artworkForm.description}
-                              onChange={(event) => setArtworkField('description', event.target.value)}
-                              placeholder="Short note about this work"
-                              rows={3}
-                              resize="vertical"
-                              {...fieldStyles}
-                            />
-                          </Field>
-                          <SimpleGrid columns={{ base: 1, md: 3 }} gap={4}>
-                            <Field label="Genres / tags">
-                              <Input
-                                value={artworkForm.genres}
-                                onChange={(event) => setArtworkField('genres', event.target.value)}
-                                placeholder="portrait, surreal, ink"
-                                {...fieldStyles}
-                              />
-                            </Field>
-                            <Field label="Location">
-                              <Input
-                                value={artworkForm.location}
-                                onChange={(event) => setArtworkField('location', event.target.value)}
-                                placeholder="Lusaka"
-                                {...fieldStyles}
-                              />
-                            </Field>
-                            <Field label="Date">
-                              <Input
-                                type="date"
-                                value={artworkForm.artworkDate}
-                                onChange={(event) => setArtworkField('artworkDate', event.target.value)}
-                                {...fieldStyles}
-                              />
-                            </Field>
-                          </SimpleGrid>
-                          {artworkFeedback && (
-                            <Box
-                              p={3}
-                              borderRadius="xl"
-                              bg={artworkFeedback.type === 'success' ? 'green.500/10' : 'red.500/10'}
-                              border="1px solid"
-                              borderColor={artworkFeedback.type === 'success' ? 'green.500/30' : 'red.500/30'}
-                            >
-                              <Text color={artworkFeedback.type === 'success' ? 'green.200' : 'red.200'} fontSize="sm">
-                                {artworkFeedback.message}
-                              </Text>
-                            </Box>
-                          )}
-                          <Flex justify="flex-end">
-                            <Button
-                              type="button"
-                              h="48px"
-                              px={6}
-                              bg="brand.500"
-                              color="white"
-                              borderRadius="full"
-                              disabled={savingArtwork || uploadingArtwork}
-                              _hover={{ bg: 'brand.600' }}
-                              onClick={handleArtworkSubmit}
-                            >
-                              {savingArtwork ? <Spinner size="sm" /> : <ImagePlus size={18} />}
-                              Add Work
-                            </Button>
-                          </Flex>
-                        </VStack>
-                      </Grid>
-                    </Box>
-                  )}
-
-                  {sortedArtistArtworks.length > 0 && (
-                    <SimpleGrid columns={{ base: 2, md: 4 }} gap={3} mt={5}>
-                      {sortedArtistArtworks.slice(0, 8).map((artwork) => (
-                        <Box key={artwork.id} borderRadius="xl" overflow="hidden" bg="whiteAlpha.50" border="1px solid" borderColor="whiteAlpha.100">
-                          <Box aspectRatio={1} bg="gray.800">
-                            <Image src={artwork.imageUrl} alt={artwork.title} w="full" h="full" objectFit="cover" />
-                          </Box>
-                          <Box p={3}>
-                            <Text color="white" fontSize="sm" fontWeight="semibold" lineClamp={1}>{artwork.title}</Text>
-                            <Text color="whiteAlpha.500" fontSize="xs" textTransform="capitalize">{artwork.medium.replace(/_/g, ' ')}</Text>
-                          </Box>
-                        </Box>
-                      ))}
-                    </SimpleGrid>
-                  )}
-                </Box>
               </VStack>
 
               <Flex

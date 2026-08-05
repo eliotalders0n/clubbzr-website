@@ -18,7 +18,7 @@ import {
   VStack,
 } from '@chakra-ui/react'
 import { motion } from 'framer-motion'
-import { Eye, Pencil, Search, Shuffle, SlidersHorizontal, UserRound, X } from 'lucide-react'
+import { ImagePlus, Search, Shuffle, SlidersHorizontal, UserRound, X } from 'lucide-react'
 
 import { Header } from '@/components/layout/Header'
 import { Footer } from '@/components/layout/Footer'
@@ -36,14 +36,12 @@ import type { ArtMedium } from '../../lib/schema'
 
 const MotionBox = motion.create(Box)
 
-const CARD_RATIOS = ['4 / 5', '1 / 1', '3 / 4', '5 / 4', '2 / 3', '4 / 3']
-const MOBILE_DISCOVERY_MEDIUMS: ArtMedium[] = ['painting', 'photography', 'digital', 'illustration']
 const createDiscoverySeed = () =>
   `${DISCOVERY_SHUFFLE_SEED}:${Date.now()}:${Math.random().toString(36).slice(2)}`
 
 function ArtworkCard({ artwork, index }: { artwork: DiscoveryArtwork; index: number }) {
   return (
-    <Link to={artwork.detailHref}>
+    <Link to={artwork.detailHref} aria-label={`View ${artwork.title} by ${artwork.credit.name}`}>
       <MotionBox
         initial={{ opacity: 0, y: 18 }}
         animate={{ opacity: 1, y: 0 }}
@@ -51,55 +49,106 @@ function ArtworkCard({ artwork, index }: { artwork: DiscoveryArtwork; index: num
         role="group"
         cursor="pointer"
       >
-        <Box
-          bg="gray.900"
-          border="1px solid"
-          borderColor="whiteAlpha.100"
-          borderRadius="2xl"
-          overflow="hidden"
-          _hover={{ borderColor: 'whiteAlpha.300' }}
-        >
-          <Box position="relative" aspectRatio={CARD_RATIOS[index % CARD_RATIOS.length]} bg="gray.800" overflow="hidden">
-            <Image
-              src={artwork.imageUrl}
-              alt={artwork.title}
-              w="full"
-              h="full"
-              objectFit="cover"
-              transition="transform 0.35s ease"
-              _groupHover={{ transform: 'scale(1.025)' }}
-            />
+        <Box display={{ base: 'block', md: 'none' }} bg="gray.950" borderBottom="1px solid" borderColor="whiteAlpha.100">
+          <HStack gap={3} minW={0} px={4} py={3}>
             <Box
-              position="absolute"
-              inset={0}
-              bgGradient="linear(to-t, blackAlpha.800, blackAlpha.100, transparent)"
-              opacity={0}
-              transition="opacity 0.25s ease"
-              _groupHover={{ opacity: 1 }}
-            />
+              w={10}
+              h={10}
+              borderRadius="lg"
+              bg="brand.500"
+              overflow="hidden"
+              display="flex"
+              alignItems="center"
+              justifyContent="center"
+              flexShrink={0}
+            >
+              {artwork.credit.avatarUrl ? (
+                <Image src={artwork.credit.avatarUrl} alt={artwork.credit.name} w="full" h="full" objectFit="cover" />
+              ) : (
+                <Text color="white" fontSize="sm" fontWeight="bold">
+                  {artwork.credit.name.charAt(0)}
+                </Text>
+              )}
+            </Box>
+            <Box minW={0} flex={1}>
+              <Heading as="h3" color="white" fontSize="md" fontFamily="heading" lineClamp={1}>
+                {artwork.title}
+              </Heading>
+              <Text color="whiteAlpha.600" fontSize="sm" lineClamp={1}>
+                By {artwork.credit.name}
+              </Text>
+            </Box>
             <Badge
-              position="absolute"
-              top={3}
-              left={3}
-              bg="blackAlpha.600"
-              color="white"
+              bg="whiteAlpha.100"
+              color="whiteAlpha.800"
               borderRadius="full"
-              px={3}
+              px={2.5}
               py={1}
+              fontSize="2xs"
               textTransform="capitalize"
+              flexShrink={0}
             >
               {formatMedium(artwork.medium)}
             </Badge>
+          </HStack>
+          <Box position="relative" aspectRatio="5 / 4" bg="gray.900" overflow="hidden">
+            <Image src={artwork.imageUrl} alt={artwork.title} w="full" h="full" objectFit="cover" />
           </Box>
+        </Box>
 
-          <Box p={4}>
-            <Heading as="h3" color="white" fontSize="md" fontFamily="heading" lineClamp={1} mb={2}>
+        <Box
+          display={{ base: 'none', md: 'block' }}
+          position="relative"
+          aspectRatio="4 / 5"
+          bg="gray.900"
+          border="1px solid"
+          borderColor="whiteAlpha.100"
+          borderRadius={{ base: 'lg', md: 'xl' }}
+          overflow="hidden"
+          _hover={{ borderColor: 'whiteAlpha.400', transform: 'translateY(-2px)' }}
+          transition="border-color 0.25s ease, transform 0.25s ease"
+        >
+          <Image
+            src={artwork.imageUrl}
+            alt={artwork.title}
+            w="full"
+            h="full"
+            objectFit="cover"
+            transition="transform 0.45s ease"
+            _groupHover={{ transform: 'scale(1.035)' }}
+          />
+          <Box
+            position="absolute"
+            inset={0}
+            bg="linear-gradient(180deg, rgba(0,0,0,0.04) 42%, rgba(0,0,0,0.88) 100%)"
+          />
+          <Badge
+            position="absolute"
+            top={{ base: 2.5, md: 3 }}
+            left={{ base: 2.5, md: 3 }}
+            bg="rgba(8, 8, 8, 0.68)"
+            backdropFilter="blur(8px)"
+            color="whiteAlpha.900"
+            border="1px solid"
+            borderColor="whiteAlpha.200"
+            borderRadius="full"
+            px={2.5}
+            py={1}
+            fontSize="xs"
+            fontWeight="medium"
+            textTransform="capitalize"
+          >
+            {formatMedium(artwork.medium)}
+          </Badge>
+
+          <Box position="absolute" left={0} right={0} bottom={0} p={{ base: 3, md: 4 }}>
+            <Heading as="h3" color="white" fontSize={{ base: 'sm', md: 'md' }} fontFamily="heading" lineClamp={1} mb={1}>
               {artwork.title}
             </Heading>
-            <HStack gap={3} minW={0}>
+            <HStack gap={2} minW={0}>
               <Box
-                w={8}
-                h={8}
+                w={6}
+                h={6}
                 borderRadius="full"
                 bg="brand.500"
                 overflow="hidden"
@@ -116,34 +165,10 @@ function ArtworkCard({ artwork, index }: { artwork: DiscoveryArtwork; index: num
                   </Text>
                 )}
               </Box>
-              <Box minW={0}>
-                <Text color="whiteAlpha.800" fontSize="sm" fontWeight="semibold" lineClamp={1}>
-                  {artwork.credit.name}
-                </Text>
-                <Text color="whiteAlpha.500" fontSize="xs" lineClamp={1}>
-                  {[artwork.location, artwork.year].filter(Boolean).join(' - ') || 'Artwork'}
-                </Text>
-              </Box>
+              <Text color="whiteAlpha.800" fontSize="xs" fontWeight="medium" lineClamp={1}>
+                {artwork.credit.name}
+              </Text>
             </HStack>
-
-            {artwork.genres.length > 0 && (
-              <HStack gap={2} flexWrap="wrap" mt={3}>
-                {artwork.genres.slice(0, 3).map((genre) => (
-                  <Badge
-                    key={genre}
-                    bg="whiteAlpha.100"
-                    color="whiteAlpha.700"
-                    px={2}
-                    py={0.5}
-                    borderRadius="full"
-                    fontSize="xs"
-                    textTransform="capitalize"
-                  >
-                    {genre}
-                  </Badge>
-                ))}
-              </HStack>
-            )}
           </Box>
         </Box>
       </MotionBox>
@@ -235,7 +260,6 @@ export default function Artists() {
   }, [allArtworks, dateFilter, discoverySeed, genreFilter, locationFilter, search, selectedMediums])
 
   const hasCurrentArtistProfile = !!currentArtist
-  const artistProfileHref = hasCurrentArtistProfile && firebaseUser?.uid ? `/artists/${firebaseUser.uid}` : '/artists/create'
   const artistActionLabel = currentArtistLoading
     ? 'Checking Profile'
     : hasCurrentArtistProfile
@@ -295,67 +319,120 @@ export default function Artists() {
     <Box bg="gray.950" minH="100vh">
       <Header />
 
-      <Box as="main" pt={32} pb={20}>
-        <Container maxW="1440px" px={{ base: 5, md: 12, lg: 16, xl: 20 }}>
+      <Box as="main" pt={{ base: '76px', md: '112px' }} pb={20}>
+        <Container maxW="1680px" px={{ base: 0, md: 8, lg: 10 }}>
           <MotionBox
             initial={{ opacity: 0, y: 24 }}
             animate={{ opacity: 1, y: 0 }}
             transition={{ duration: 0.5 }}
-            mb={10}
+            mb={{ base: 5, md: 6 }}
+            display={{ base: 'none', md: 'block' }}
           >
-            <Flex justify="space-between" align={{ base: 'start', lg: 'end' }} gap={8} direction={{ base: 'column', lg: 'row' }}>
-              <Box>
-                <Text color="brand.500" fontSize="sm" textTransform="uppercase" letterSpacing="0.2em" mb={4}>
+            <Flex justify="space-between" align={{ base: 'start', md: 'center' }} gap={{ base: 4, md: 8 }} direction={{ base: 'column', md: 'row' }}>
+              <Box maxW="3xl">
+                <Text color="brand.500" fontSize="xs" fontWeight="semibold" textTransform="uppercase" letterSpacing="0.18em" mb={2}>
                   Artwork Discovery
                 </Text>
                 <Heading
                   as="h1"
-                  fontSize={{ base: '3rem', md: '4rem', lg: '5rem' }}
-                  lineHeight={1}
+                  fontSize={{ base: '2.35rem', md: '3rem', lg: '3.5rem' }}
+                  lineHeight={0.98}
                   color="white"
                   fontFamily="heading"
-                  mb={5}
+                  mb={3}
                 >
                   Discover Work
                 </Heading>
-                <Text color="whiteAlpha.500" fontSize={{ base: 'md', md: 'lg' }} maxW="2xl">
+                <Text color="whiteAlpha.500" fontSize={{ base: 'sm', md: 'md' }} maxW="2xl">
                   Browse artwork from Club BZR artists. Search by artist, art type, genre, location, or date.
                 </Text>
               </Box>
 
-              {firebaseUser && (
-                <HStack gap={3} flexWrap="wrap" display={{ base: 'none', md: 'flex' }}>
-                  {hasCurrentArtistProfile && (
-                    <Link to={artistProfileHref}>
-                      <Button
-                        borderRadius="full"
-                        px={5}
-                        bg="whiteAlpha.50"
-                        color="white"
-                        border="1px solid"
-                        borderColor="whiteAlpha.200"
-                        _hover={{ bg: 'whiteAlpha.100' }}
-                      >
-                        <Eye size={18} />
-                        View Profile
-                      </Button>
-                    </Link>
-                  )}
-                  <Link to="/artists/create">
-                    <Button
-                      borderRadius="full"
-                      px={6}
-                      bg="brand.500"
-                      color="white"
-                      _hover={{ bg: 'brand.600' }}
-                      disabled={currentArtistLoading}
-                    >
-                      {hasCurrentArtistProfile ? <Pencil size={18} /> : <UserRound size={18} />}
-                      {artistActionLabel}
-                    </Button>
-                  </Link>
-                </HStack>
-              )}
+            </Flex>
+          </MotionBox>
+
+          <MotionBox
+            initial={{ opacity: 0, y: 12 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ duration: 0.35 }}
+            display={{ base: 'block', md: 'none' }}
+            mx={4}
+            mb={4}
+          >
+            <HStack
+              gap={2}
+              overflowX="auto"
+              flexWrap="nowrap"
+              pb={2}
+              css={{ scrollbarWidth: 'none', '&::-webkit-scrollbar': { display: 'none' } }}
+            >
+              <Button
+                onClick={() => setSelectedMediums([])}
+                flexShrink={0}
+                h="40px"
+                px={4}
+                bg={selectedMediums.length === 0 ? 'brand.500' : 'whiteAlpha.50'}
+                color={selectedMediums.length === 0 ? 'white' : 'whiteAlpha.800'}
+                border="1px solid"
+                borderColor={selectedMediums.length === 0 ? 'brand.500' : 'whiteAlpha.200'}
+                borderRadius="lg"
+                _hover={{ bg: selectedMediums.length === 0 ? 'brand.600' : 'whiteAlpha.100' }}
+              >
+                All
+              </Button>
+              {DISCOVERY_MEDIUMS.map((medium) => (
+                <Button
+                  key={medium}
+                  onClick={() => toggleMedium(medium)}
+                  flexShrink={0}
+                  h="40px"
+                  px={4}
+                  bg={selectedMediums.includes(medium) ? 'brand.500' : 'whiteAlpha.50'}
+                  color={selectedMediums.includes(medium) ? 'white' : 'whiteAlpha.800'}
+                  border="1px solid"
+                  borderColor={selectedMediums.includes(medium) ? 'brand.500' : 'whiteAlpha.200'}
+                  borderRadius="lg"
+                  _hover={{ bg: selectedMediums.includes(medium) ? 'brand.600' : 'whiteAlpha.100' }}
+                >
+                  {formatMedium(medium)}
+                </Button>
+              ))}
+            </HStack>
+
+            <Flex gap={2} mt={1}>
+              <Box flex={1} position="relative">
+                <Box position="absolute" left={3.5} top="50%" transform="translateY(-50%)" color="whiteAlpha.500" zIndex={1}>
+                  <Search size={17} />
+                </Box>
+                <Input
+                  value={search}
+                  onChange={(event) => setSearch(event.target.value)}
+                  placeholder="Search artwork or artists"
+                  bg="gray.900"
+                  border="1px solid"
+                  borderColor="whiteAlpha.200"
+                  borderRadius="lg"
+                  color="white"
+                  h="42px"
+                  pl={10}
+                  _placeholder={{ color: 'whiteAlpha.400' }}
+                  _focus={{ borderColor: 'brand.500', boxShadow: '0 0 0 1px var(--chakra-colors-brand-500)' }}
+                />
+              </Box>
+              <Button
+                onClick={() => setDiscoverySeed(createDiscoverySeed())}
+                aria-label="Shuffle artwork"
+                h="42px"
+                px={3.5}
+                bg="gray.900"
+                color="whiteAlpha.800"
+                border="1px solid"
+                borderColor="whiteAlpha.200"
+                borderRadius="lg"
+                _hover={{ bg: 'whiteAlpha.100', color: 'white' }}
+              >
+                <Shuffle size={18} />
+              </Button>
             </Flex>
           </MotionBox>
 
@@ -363,15 +440,16 @@ export default function Artists() {
             initial={{ opacity: 0, y: 18 }}
             animate={{ opacity: 1, y: 0 }}
             transition={{ duration: 0.45, delay: 0.1 }}
-            mb={{ base: 7, md: 10 }}
-            p={{ base: 3, md: 5 }}
-            bg="gray.900"
+            mb={{ base: 5, md: 6 }}
+            p={{ base: 3, md: 3.5 }}
+            bg="rgba(20, 20, 20, 0.78)"
             border="1px solid"
             borderColor="whiteAlpha.100"
-            borderRadius="2xl"
+            borderRadius="xl"
+            display={{ base: 'none', md: 'block' }}
           >
-            <VStack align="stretch" gap={{ base: 3, md: 4 }}>
-              <Flex gap={4} direction={{ base: 'column', lg: 'row' }}>
+            <VStack align="stretch" gap={3}>
+              <Flex gap={2.5} direction={{ base: 'column', lg: 'row' }}>
                 <Box flex={1} position="relative">
                   <Box position="absolute" left={4} top="50%" transform="translateY(-50%)" color="whiteAlpha.500">
                     <Search size={18} />
@@ -385,7 +463,7 @@ export default function Artists() {
                     borderColor="whiteAlpha.200"
                     borderRadius={{ base: 'lg', md: 'xl' }}
                     color="white"
-                    h={{ base: '46px', md: '52px' }}
+                    h="44px"
                     pl={11}
                     _placeholder={{ color: 'whiteAlpha.400' }}
                     _focus={{ borderColor: 'brand.500', boxShadow: '0 0 0 1px var(--chakra-colors-brand-500)' }}
@@ -401,8 +479,8 @@ export default function Artists() {
                   borderColor="whiteAlpha.200"
                   borderRadius="xl"
                   color="white"
-                  h="52px"
-                  maxW={{ lg: '220px' }}
+                  h="44px"
+                  maxW={{ lg: '190px' }}
                   _placeholder={{ color: 'whiteAlpha.400' }}
                   _focus={{ borderColor: 'brand.500', boxShadow: '0 0 0 1px var(--chakra-colors-brand-500)' }}
                 />
@@ -416,8 +494,8 @@ export default function Artists() {
                   borderColor="whiteAlpha.200"
                   borderRadius="xl"
                   color="white"
-                  h="52px"
-                  maxW={{ lg: '220px' }}
+                  h="44px"
+                  maxW={{ lg: '180px' }}
                   _placeholder={{ color: 'whiteAlpha.400' }}
                   _focus={{ borderColor: 'brand.500', boxShadow: '0 0 0 1px var(--chakra-colors-brand-500)' }}
                 />
@@ -431,36 +509,13 @@ export default function Artists() {
                   borderColor="whiteAlpha.200"
                   borderRadius="xl"
                   color="white"
-                  h="52px"
-                  maxW={{ lg: '180px' }}
+                  h="44px"
+                  maxW={{ lg: '170px' }}
                   _focus={{ borderColor: 'brand.500', boxShadow: '0 0 0 1px var(--chakra-colors-brand-500)' }}
                 />
               </Flex>
 
               <Flex justify="space-between" align={{ base: 'stretch', xl: 'center' }} gap={{ base: 3, md: 4 }} direction={{ base: 'column', xl: 'row' }}>
-                <HStack display={{ base: 'flex', md: 'none' }} gap={2} flexWrap="wrap">
-                  {MOBILE_DISCOVERY_MEDIUMS.map((medium) => (
-                    <Button
-                      key={medium}
-                      onClick={() => toggleMedium(medium)}
-                      size="sm"
-                      px={3}
-                      h="34px"
-                      bg={selectedMediums.includes(medium) ? 'brand.500' : 'whiteAlpha.50'}
-                      color={selectedMediums.includes(medium) ? 'white' : 'whiteAlpha.700'}
-                      border="1px solid"
-                      borderColor={selectedMediums.includes(medium) ? 'brand.500' : 'whiteAlpha.200'}
-                      borderRadius="full"
-                      _hover={{
-                        bg: selectedMediums.includes(medium) ? 'brand.600' : 'whiteAlpha.100',
-                        color: 'white',
-                      }}
-                    >
-                      {formatMedium(medium)}
-                    </Button>
-                  ))}
-                </HStack>
-
                 <HStack display={{ base: 'none', md: 'flex' }} gap={2} flexWrap="wrap">
                   {DISCOVERY_MEDIUMS.map((medium) => (
                     <Button
@@ -468,7 +523,7 @@ export default function Artists() {
                       onClick={() => toggleMedium(medium)}
                       size="sm"
                       px={4}
-                      h="38px"
+                      h="34px"
                       bg={selectedMediums.includes(medium) ? 'brand.500' : 'whiteAlpha.50'}
                       color={selectedMediums.includes(medium) ? 'white' : 'whiteAlpha.700'}
                       border="1px solid"
@@ -494,7 +549,7 @@ export default function Artists() {
                   <Button
                     onClick={() => setDiscoverySeed(createDiscoverySeed())}
                     size="sm"
-                    h="38px"
+                    h="34px"
                     px={4}
                     bg="whiteAlpha.50"
                     color="whiteAlpha.800"
@@ -510,7 +565,7 @@ export default function Artists() {
                     <Button
                       onClick={clearFilters}
                       size="sm"
-                      h="38px"
+                      h="34px"
                       px={4}
                       bg="transparent"
                       color="whiteAlpha.700"
@@ -530,7 +585,7 @@ export default function Artists() {
 
           <Box mb={16}>
             {visibleArtworks.length > 0 ? (
-              <SimpleGrid columns={{ base: 1, sm: 2, lg: 3, xl: 4 }} gap={{ base: 5, md: 6 }}>
+              <SimpleGrid columns={{ base: 1, md: 3, lg: 4, xl: 5 }} gap={{ base: 0, md: 4 }}>
                 {visibleArtworks.map((artwork, index) => (
                   <ArtworkCard key={artwork.id} artwork={artwork} index={index} />
                 ))}
@@ -570,10 +625,10 @@ export default function Artists() {
             </Heading>
             <Text color="whiteAlpha.500" mb={8} maxW="lg" mx="auto">
               {hasCurrentArtistProfile
-                ? 'Upload your latest work so it appears on your profile and in discovery.'
+                ? 'Publish your latest Subversion to your profile and the discovery wall.'
                 : 'Create a profile, upload your work, and make it discoverable by the Club BZR community.'}
             </Text>
-            <Link to="/artists/create">
+            <Link to={hasCurrentArtistProfile ? '/subversions/create' : '/artists/create'}>
               <Button
                 bg="brand.500"
                 color="white"
@@ -583,8 +638,8 @@ export default function Artists() {
                 _hover={{ bg: 'brand.600' }}
                 disabled={currentArtistLoading}
               >
-                {hasCurrentArtistProfile ? <Pencil size={18} /> : <UserRound size={18} />}
-                {artistActionLabel}
+                {hasCurrentArtistProfile ? <ImagePlus size={18} /> : <UserRound size={18} />}
+                {hasCurrentArtistProfile ? 'Add Subversion' : artistActionLabel}
               </Button>
             </Link>
           </MotionBox>
