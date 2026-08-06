@@ -2,6 +2,9 @@ import { lazy, Suspense, type ReactNode } from 'react'
 import { Navigate, Routes, Route, useLocation } from 'react-router-dom'
 import { Spinner, Center } from '@chakra-ui/react'
 import { AuthProvider, useAuth } from '@/contexts/AuthContext'
+import { WalletProvider } from '@/contexts/WalletContext'
+import { NotificationProvider } from '@/contexts/NotificationContext'
+import { TradingProvider } from '@/contexts/TradingContext'
 
 // Lazy load pages for code splitting
 const Landing = lazy(() => import('@/pages/Landing'))
@@ -27,6 +30,7 @@ const MemberProfile = lazy(() => import('@/pages/MemberProfile'))
 const Auth = lazy(() => import('@/pages/Auth'))
 const Terms = lazy(() => import('@/pages/Terms'))
 const Privacy = lazy(() => import('@/pages/Privacy'))
+const Wallet = lazy(() => import('@/pages/Wallet'))
 
 // Admin pages
 const AdminDashboard = lazy(() => import('@/pages/admin/Dashboard'))
@@ -38,6 +42,9 @@ const Payments = lazy(() => import('@/pages/admin/Payments'))
 const ManageRadio = lazy(() => import('@/pages/admin/ManageRadio'))
 const ManageCommunity = lazy(() => import('@/pages/admin/ManageCommunity'))
 const ManageMap = lazy(() => import('@/pages/admin/ManageMap'))
+const Economy = lazy(() => import('@/pages/admin/Economy'))
+const Ledger = lazy(() => import('@/pages/admin/Ledger'))
+const EconomyAnalytics = lazy(() => import('@/pages/admin/EconomyAnalytics'))
 
 function PageLoader() {
   return (
@@ -83,6 +90,9 @@ function AdminRoute({ children }: { children: ReactNode }) {
 function App() {
   return (
     <AuthProvider>
+      <WalletProvider>
+      <NotificationProvider>
+      <TradingProvider>
       <Suspense fallback={<PageLoader />}>
         <Routes>
           {/* Public Routes */}
@@ -119,6 +129,7 @@ function App() {
           {/* User Routes */}
           <Route path="/passport" element={<Passport />} />
           <Route path="/profile" element={<Profile />} />
+          <Route path="/wallet" element={<Wallet />} />
           <Route path="/members/:id" element={<MemberProfile />} />
           <Route path="/auth" element={<Auth />} />
           <Route path="/auth/login" element={<Auth />} />
@@ -140,8 +151,14 @@ function App() {
           <Route path="/admin/radio" element={<AdminRoute><ManageRadio /></AdminRoute>} />
           <Route path="/admin/community" element={<AdminRoute><ManageCommunity /></AdminRoute>} />
           <Route path="/admin/map" element={<AdminRoute><ManageMap /></AdminRoute>} />
+          <Route path="/admin/economy" element={<AdminRoute><Economy /></AdminRoute>} />
+          <Route path="/admin/ledger" element={<AdminRoute><Ledger /></AdminRoute>} />
+          <Route path="/admin/economy-analytics" element={<AdminRoute><EconomyAnalytics /></AdminRoute>} />
         </Routes>
       </Suspense>
+      </TradingProvider>
+      </NotificationProvider>
+      </WalletProvider>
     </AuthProvider>
   )
 }

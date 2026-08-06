@@ -6,7 +6,9 @@ import {onDocumentCreated, onDocumentUpdated} from "firebase-functions/v2/firest
 import {HttpsError, onCall, onRequest} from "firebase-functions/v2/https";
 import * as logger from "firebase-functions/logger";
 
-admin.initializeApp();
+if (admin.apps.length === 0) {
+  admin.initializeApp();
+}
 setGlobalOptions({maxInstances: 10});
 
 const db = admin.firestore();
@@ -2267,6 +2269,61 @@ export const whatsappWebhook = onRequest(
     response.status(405).send("Method Not Allowed");
   }
 );
+
+// Economy functions are implemented in focused modules and re-exported here
+// so their deployed names remain part of the primary Functions entry point.
+export {
+  adminCreditPoints,
+  adminDebitPoints,
+  getWalletTransactions,
+  getWalletSummary,
+  transferPoints,
+} from "./wallet/callables";
+export {createWalletOnUserCreated} from "./wallet/triggers";
+export {
+  adminReconcileWallet,
+  scheduledWalletReconciliation,
+} from "./wallet/reconciliation";
+export {
+  adminCreateInviteProfile,
+  adminUpdateUserProfile,
+  setUserAccess,
+  setUserAccountStatus,
+  updateEconomySettings,
+} from "./admin/callables";
+export {
+  adminRecordPointPurchaseRefund,
+  checkPointPurchaseStatus,
+  initiatePointPurchase,
+  lencoPointsWebhook,
+  reconcilePendingPointPayments,
+} from "./payments/lenco";
+export {
+  activityFromArtwork,
+  activityFromApprovedQuestSubmission,
+  activityFromComment,
+  activityFromFollow,
+  activityFromProfileCompletion,
+  activityFromQuestSubmission,
+  activityFromSessionAttendance,
+  evaluateQuestActivity,
+  processQuestReward,
+  recordDailyLogin,
+} from "./quests/engine";
+export {
+  acceptTrade,
+  cancelTrade,
+  completeTrade,
+  createTrade,
+  disputeTrade,
+  expireStaleTrades,
+  markTradeDelivered,
+  resolveTradeDispute,
+} from "./trading/callables";
+export {
+  calculateDailyEconomyAnalytics,
+  detectLedgerRisk,
+} from "./analytics/triggers";
 
 export const adminSearchLocations = onCall(
   {

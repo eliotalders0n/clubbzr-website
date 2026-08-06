@@ -58,6 +58,34 @@ const NAV_ITEMS = [
     ),
   },
   {
+    label: 'Economy',
+    href: '/admin/economy',
+    icon: (
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+        <circle cx="12" cy="12" r="9" />
+        <path d="M8 12h8M12 8v8" />
+      </svg>
+    ),
+  },
+  {
+    label: 'Points Ledger',
+    href: '/admin/ledger',
+    icon: (
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+        <path d="M4 5h16v14H4zM8 9h8M8 13h5" />
+      </svg>
+    ),
+  },
+  {
+    label: 'Economy Analytics',
+    href: '/admin/economy-analytics',
+    icon: (
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+        <path d="M4 19V9M10 19V5M16 19v-7M22 19V2" />
+      </svg>
+    ),
+  },
+  {
     label: 'Quests',
     href: '/admin/quests',
     icon: (

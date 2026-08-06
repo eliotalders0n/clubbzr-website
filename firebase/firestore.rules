@@ -18,16 +18,23 @@ service cloud.firestore {
 
     // Check if user has admin role
     function isAdmin() {
-      return isAuthenticated() &&
-        exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
-        get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin';
+      return isAuthenticated() && request.auth.token.admin == true;
     }
 
     // Check if user has curator role or higher
     function isCuratorOrAdmin() {
-      return isAuthenticated() &&
-        exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
-        get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role in ['admin', 'curator'];
+      return isAuthenticated() && (
+        request.auth.token.admin == true || request.auth.token.curator == true
+      );
+    }
+
+    function isActiveAccount() {
+      return isAuthenticated()
+        && exists(/databases/$(database)/documents/users/$(request.auth.uid))
+        && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.isActive != false
+        && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.accountStatus != 'frozen'
+        && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.accountStatus != 'suspended'
+        && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.accountStatus != 'closed';
     }
 
     // Validate that required fields exist
@@ -108,13 +115,22 @@ service cloud.firestore {
       allow read: if isAuthenticated();
 
       // Users can create their own profile; admins can create pending invite profiles
-      allow create: if isOwner(userId) || isAdmin();
+      allow create: if isOwner(userId)
+        && request.resource.data.uid == userId
+        && request.resource.data.role == 'user'
+        && request.resource.data.isActive == true;
 
       // Users can update their own profile, admins can update any
-      allow update: if isOwner(userId) || isAdmin();
+      allow update: if isOwner(userId)
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+          'displayName', 'photoURL', 'phone', 'whatsappPhone', 'gender', 'bio',
+          'location', 'website', 'socialLinks', 'preferences', 'isOnboarded',
+          'lastActiveAt', 'lovedArtworkKeys', 'bookmarkedArtworkKeys', 'email',
+          'updatedAt'
+        ]);
 
       // Only admins can delete users
-      allow delete: if isAdmin();
+      allow delete: if false;
     }
 
     // ========================================
@@ -352,12 +368,19 @@ service cloud.firestore {
 
       // Authenticated users can create submissions
       allow create: if isAuthenticated() &&
-        request.resource.data.userId == request.auth.uid;
+        request.resource.data.userId == request.auth.uid
+        && request.resource.data.approved == false
+        && request.resource.data.pointsAwarded == 0;
 
       // Users can update their own submissions, admins can update any.
       // Any authenticated member can update only the aggregate vote fields.
       allow update: if isAuthenticated() && (
-        isOwner(resource.data.userId) ||
+        (
+          isOwner(resource.data.userId)
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+            'title', 'content', 'mediaUrls', 'mediaType', 'thumbnailUrl', 'updatedAt'
+          ])
+        ) ||
         isAdmin() ||
         request.resource.data.diff(resource.data).affectedKeys().hasOnly([
           'upvotes',
@@ -487,10 +510,23 @@ service cloud.firestore {
       allow read: if isOwner(passportId) || isAdmin();
 
       // Users can create/update their own passport
-      allow create, update: if isOwner(passportId);
+      allow create: if isOwner(passportId)
+        && request.resource.data.userId == passportId
+        && request.resource.data.points == 0
+        && request.resource.data.level == 1
+        && request.resource.data.badges.size() == 0
+        && request.resource.data.questsCompleted.size() == 0
+        && request.resource.data.eventsAttended.size() == 0;
+
+      // Points, XP, badges, progress, streaks, timeline and statistics are
+      // authoritative server projections. Members may edit profile interests.
+      allow update: if isOwner(passportId)
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+          'mediums', 'interests', 'updatedAt'
+        ]);
 
       // Only admins can delete passports
-      allow delete: if isAdmin();
+      allow delete: if false;
     }
 
     // ========================================
@@ -525,14 +561,119 @@ service cloud.firestore {
       allow read: if isOwner(resource.data.userId);
 
       // System creates notifications
-      allow create: if isAuthenticated();
+      allow create: if false;
 
       // Users can mark their notifications as read
       allow update: if isOwner(resource.data.userId) &&
-        request.resource.data.diff(resource.data).affectedKeys().hasOnly(['isRead', 'readAt']);
+        request.resource.data.diff(resource.data).affectedKeys().hasOnly(['read', 'readAt'])
+        && request.resource.data.read == true;
 
       // Users can delete their own notifications
       allow delete: if isOwner(resource.data.userId);
+    }
+
+    // ========================================
+    // AUTHORITATIVE ECONOMY COLLECTIONS
+    // ========================================
+    match /wallets/{walletId} {
+      allow read: if isOwner(walletId) || isAdmin();
+      allow write: if false;
+    }
+
+    match /balances/{walletId} {
+      allow read: if isOwner(walletId) || isAdmin();
+      allow write: if false;
+    }
+
+    match /transactions/{transactionId} {
+      allow read: if isAdmin() || (
+        isAuthenticated() && request.auth.uid in resource.data.participants
+      );
+      allow write: if false;
+    }
+
+    match /ledgerEntries/{entryId} {
+      allow read: if isAdmin() || (
+        isAuthenticated() && resource.data.accountId == request.auth.uid
+      );
+      allow write: if false;
+    }
+
+    match /payments/{paymentId} {
+      allow read: if isAdmin() || isOwner(resource.data.userId);
+      allow write: if false;
+    }
+
+    match /paymentEvents/{eventId} {
+      allow read: if isAdmin();
+      allow write: if false;
+    }
+
+    match /trades/{tradeId} {
+      allow read: if isAdmin() || (
+        isAuthenticated() && request.auth.uid in resource.data.participants
+      );
+      allow write: if false;
+    }
+
+    match /escrows/{escrowId} {
+      allow read: if isAdmin() || (
+        isAuthenticated() && request.auth.uid in resource.data.participants
+      );
+      allow write: if false;
+    }
+
+    match /settings/{settingId} {
+      allow read: if isAuthenticated();
+      allow write: if false;
+    }
+
+    match /auditLogs/{auditId} {
+      allow read: if isAdmin();
+      allow write: if false;
+    }
+
+    match /walletUsage/{usageId} {
+      allow read, write: if false;
+    }
+
+    match /userInvites/{inviteId} {
+      allow read: if isAdmin();
+      allow write: if false;
+    }
+
+    match /questProgress/{progressId} {
+      allow read: if isAdmin() || isOwner(resource.data.userId);
+      allow write: if false;
+    }
+
+    match /rewardGrants/{grantId} {
+      allow read: if isAdmin() || isOwner(resource.data.userId);
+      allow write: if false;
+    }
+
+    match /activity/{activityId} {
+      allow read: if isAdmin() || isOwner(resource.data.userId);
+      allow write: if false;
+    }
+
+    match /analytics/{analyticsId} {
+      allow read: if isAdmin();
+      allow write: if false;
+    }
+
+    match /reconciliationIssues/{issueId} {
+      allow read: if isAdmin();
+      allow write: if false;
+    }
+
+    match /fraudAlerts/{alertId} {
+      allow read: if isAdmin();
+      allow write: if false;
+    }
+
+    match /systemState/{stateId} {
+      allow read, write: if false;
     }
 
     // ========================================

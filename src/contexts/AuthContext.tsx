@@ -1,3 +1,4 @@
+/* eslint-disable react-refresh/only-export-components */
 /**
  * Authentication Context
  * Club BZR - Experimental Art Community
@@ -27,8 +28,6 @@ import {
   reauthenticate,
   deleteAccount,
   getUserDocument,
-  getUserRole,
-  hasRole,
   type AuthResult,
   type SignUpData,
   type SignInData,
@@ -36,6 +35,7 @@ import {
   type AuthErrorInfo,
 } from '../../lib/authentication';
 import type { User, UserRole } from '../../lib/schema';
+import { recordDailyLogin } from '../../lib/quests';
 
 // =============================================================================
 // TYPES
@@ -52,6 +52,8 @@ export interface AuthState {
   initialized: boolean;
   /** Current error if any */
   error: AuthErrorInfo | null;
+  /** Authoritative Firebase custom claims used for privileged UI gates. */
+  claims: { admin: boolean; curator: boolean };
 }
 
 export interface AuthActions {
@@ -101,6 +103,7 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
   const [loading, setLoading] = useState(false);
   const [initialized, setInitialized] = useState(false);
   const [error, setError] = useState<AuthErrorInfo | null>(null);
+  const [claims, setClaims] = useState({ admin: false, curator: false });
 
   // Fetch user document from Firestore
   const fetchUserDocument = useCallback(async (uid: string): Promise<User | null> => {
@@ -118,10 +121,21 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
       setFirebaseUser(fbUser);
 
       if (fbUser) {
-        const userDoc = await fetchUserDocument(fbUser.uid);
+        const [userDoc, tokenResult] = await Promise.all([
+          fetchUserDocument(fbUser.uid),
+          fbUser.getIdTokenResult(true),
+        ]);
         setUser(userDoc);
+        setClaims({
+          admin: tokenResult.claims.admin === true,
+          curator: tokenResult.claims.curator === true,
+        });
+        void recordDailyLogin().catch(() => {
+          // Login remains successful if quest activity is temporarily unavailable.
+        });
       } else {
         setUser(null);
+        setClaims({ admin: false, curator: false });
       }
 
       setInitialized(true);
@@ -150,7 +164,7 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
         }
 
         return result;
-      } catch (err) {
+      } catch {
         const errorInfo: AuthErrorInfo = {
           code: 'unknown',
           message: 'An unexpected error occurred.',
@@ -223,8 +237,15 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
   const refreshUser = useCallback(async () => {
     if (firebaseUser) {
       setLoading(true);
-      const userDoc = await fetchUserDocument(firebaseUser.uid);
+      const [userDoc, tokenResult] = await Promise.all([
+        fetchUserDocument(firebaseUser.uid),
+        firebaseUser.getIdTokenResult(true),
+      ]);
       setUser(userDoc);
+      setClaims({
+        admin: tokenResult.claims.admin === true,
+        curator: tokenResult.claims.curator === true,
+      });
       setLoading(false);
     }
   }, [firebaseUser, fetchUserDocument]);
@@ -236,10 +257,11 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
   const checkHasRole = useCallback(
     (roles: UserRole[]): boolean => {
       if (!user) return false;
-      if (user.role === 'admin') return true;
-      return roles.includes(user.role);
+      if (claims.admin) return true;
+      if (roles.includes('curator') && claims.curator) return true;
+      return roles.includes(user.role) && !['admin', 'curator'].includes(user.role);
     },
-    [user]
+    [claims, user]
   );
 
   // Memoize context value
@@ -251,6 +273,7 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
       loading,
       initialized,
       error,
+      claims,
       // Actions
       signInWithGoogle: handleSignInWithGoogle,
       signInWithEmail: handleSignInWithEmail,
@@ -270,6 +293,7 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
       loading,
       initialized,
       error,
+      claims,
       handleSignInWithGoogle,
       handleSignInWithEmail,
       handleSignUpWithEmail,

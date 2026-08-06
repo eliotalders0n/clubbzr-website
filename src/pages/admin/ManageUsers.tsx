@@ -27,6 +27,7 @@ import {
   GridItem,
 } from '@chakra-ui/react'
 import { motion, AnimatePresence } from 'framer-motion'
+import { httpsCallable } from 'firebase/functions'
 import {
   AlertTriangle,
   Ban,
@@ -49,18 +50,21 @@ import {
 
 import { AdminLayout } from '@/components/layout/AdminLayout'
 import { useCollection } from '@/hooks'
-import { createDocumentWithId, deleteDocument, updateDocument } from '../../../lib/firestore'
+import { functions } from '../../../lib/config'
 import type {
-  CreateDocument,
   CreativePassport,
   QuestSubmission,
-  UpdateDocument,
   User as FirestoreUser,
   UserRole,
 } from '../../../lib/schema'
 
 const MotionBox = motion.create(Box)
 const MotionFlex = motion.create(Flex)
+
+const setUserAccessFn = httpsCallable(functions, 'setUserAccess')
+const setUserAccountStatusFn = httpsCallable(functions, 'setUserAccountStatus')
+const adminUpdateUserProfileFn = httpsCallable(functions, 'adminUpdateUserProfile')
+const adminCreateInviteProfileFn = httpsCallable(functions, 'adminCreateInviteProfile')
 
 type UserStatus = 'active' | 'suspended' | 'pending'
 type FeedbackType = 'success' | 'error' | 'info' | 'warning'
@@ -239,11 +243,6 @@ const roleLabel = (role: UserRole): string => {
   return role.replace('_', ' ')
 }
 
-const statusToProfileFields = (status: UserStatus): Pick<FirestoreUser, 'isActive' | 'isOnboarded'> => ({
-  isActive: status !== 'suspended',
-  isOnboarded: status === 'active',
-})
-
 const deriveStatus = (user: FirestoreUser): UserStatus => {
   if (user.isActive === false) return 'suspended'
   if (!user.isOnboarded) return 'pending'
@@ -421,17 +420,14 @@ export default function ManageUsers() {
       return
     }
 
-    const payload = {
-      displayName,
-      email,
-      role: editForm.role,
-      ...statusToProfileFields(editForm.status),
-      username,
-    } as UpdateDocument<FirestoreUser> & { username: string }
-
-    const result = await updateDocument('users', selectedUser.id, payload)
-    if (!result.success) {
-      notify('error', 'User update failed', result.error?.message || 'Could not update the Firestore user profile.')
+    try {
+      await Promise.all([
+        adminUpdateUserProfileFn({ userId: selectedUser.id, displayName, email, username }),
+        setUserAccessFn({ userId: selectedUser.id, role: editForm.role }),
+        setUserAccountStatusFn({ userId: selectedUser.id, status: editForm.status === 'pending' ? 'frozen' : editForm.status }),
+      ])
+    } catch (error) {
+      notify('error', 'User update failed', error instanceof Error ? error.message : 'Could not update the user profile.')
       return
     }
 
@@ -460,21 +456,10 @@ export default function ManageUsers() {
       return
     }
 
-    const invitedUserId = `invited-${Date.now()}`
-    const invitedUser = {
-      uid: invitedUserId,
-      displayName,
-      email,
-      photoURL: null,
-      role: inviteForm.role,
-      isOnboarded: false,
-      isActive: true,
-      username,
-    } as CreateDocument<FirestoreUser> & { username: string }
-
-    const result = await createDocumentWithId('users', invitedUserId, invitedUser)
-    if (!result.success) {
-      notify('error', 'Invite was not created', result.error?.message || 'Could not create the pending Firestore user profile.')
+    try {
+      await adminCreateInviteProfileFn({ displayName, email, username, role: inviteForm.role })
+    } catch (error) {
+      notify('error', 'Invite was not created', error instanceof Error ? error.message : 'Could not create the pending invite.')
       return
     }
 
@@ -515,9 +500,10 @@ export default function ManageUsers() {
 
   const handleToggleStatus = async (user: ManagedUser) => {
     const nextStatus: UserStatus = user.status === 'suspended' ? 'active' : 'suspended'
-    const result = await updateDocument('users', user.id, statusToProfileFields(nextStatus))
-    if (!result.success) {
-      notify('error', 'Status update failed', result.error?.message || 'Could not update this Firestore user profile.')
+    try {
+      await setUserAccountStatusFn({ userId: user.id, status: nextStatus })
+    } catch (error) {
+      notify('error', 'Status update failed', error instanceof Error ? error.message : 'Could not update this user.')
       return
     }
     await refetchUsers()
@@ -530,25 +516,24 @@ export default function ManageUsers() {
 
   const handleDeleteUser = async () => {
     if (!selectedUser) return
-    const result = await deleteDocument('users', selectedUser.id)
-    if (!result.success) {
-      notify('error', 'Delete failed', result.error?.message || 'Could not delete this Firestore user profile.')
+    try {
+      await setUserAccountStatusFn({ userId: selectedUser.id, status: 'closed' })
+    } catch (error) {
+      notify('error', 'Close failed', error instanceof Error ? error.message : 'Could not close this user.')
       return
     }
     await refetchUsers()
     setSelectedUsers((previous) => previous.filter((id) => id !== selectedUser.id))
-    notify('warning', 'User removed', `${selectedUser.displayName} was removed from Firestore users.`)
+    notify('warning', 'User closed', `${selectedUser.displayName}'s account was closed without deleting audit history.`)
     closeModal()
   }
 
   const handleBulkSuspend = async () => {
     if (selectedUsers.length === 0) return
-    const results = await Promise.all(
-      selectedUsers.map((id) => updateDocument('users', id, statusToProfileFields('suspended')))
-    )
-    const failed = results.filter((result) => !result.success)
-    if (failed.length > 0) {
-      notify('error', 'Some users were not suspended', failed[0].error?.message || 'One or more Firestore updates failed.')
+    try {
+      await Promise.all(selectedUsers.map((userId) => setUserAccountStatusFn({ userId, status: 'suspended' })))
+    } catch (error) {
+      notify('error', 'Some users were not suspended', error instanceof Error ? error.message : 'One or more updates failed.')
       return
     }
     await refetchUsers()
@@ -559,10 +544,10 @@ export default function ManageUsers() {
   const handleBulkDelete = async () => {
     if (selectedUsers.length === 0) return
     const count = selectedUsers.length
-    const results = await Promise.all(selectedUsers.map((id) => deleteDocument('users', id)))
-    const failed = results.filter((result) => !result.success)
-    if (failed.length > 0) {
-      notify('error', 'Some users were not deleted', failed[0].error?.message || 'One or more Firestore deletes failed.')
+    try {
+      await Promise.all(selectedUsers.map((userId) => setUserAccountStatusFn({ userId, status: 'closed' })))
+    } catch (error) {
+      notify('error', 'Some users were not closed', error instanceof Error ? error.message : 'One or more updates failed.')
       return
     }
     await refetchUsers()
@@ -573,12 +558,10 @@ export default function ManageUsers() {
   const handleBulkRoleChange = async () => {
     if (selectedUsers.length === 0) return
     const count = selectedUsers.length
-    const results = await Promise.all(
-      selectedUsers.map((id) => updateDocument('users', id, { role: bulkRole }))
-    )
-    const failed = results.filter((result) => !result.success)
-    if (failed.length > 0) {
-      notify('error', 'Some roles were not updated', failed[0].error?.message || 'One or more Firestore updates failed.')
+    try {
+      await Promise.all(selectedUsers.map((userId) => setUserAccessFn({ userId, role: bulkRole })))
+    } catch (error) {
+      notify('error', 'Some roles were not updated', error instanceof Error ? error.message : 'One or more updates failed.')
       return
     }
     await refetchUsers()

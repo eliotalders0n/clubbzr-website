@@ -630,6 +630,22 @@ export interface Quest extends BaseDocument {
   featured: boolean;
   createdBy: string; // User ID
   tags: string[];
+  /** Server-side, data-driven quest engine configuration. */
+  eventTypes?: string[];
+  criteria?: Record<string, unknown>;
+  targetCount?: number;
+  cadence?: 'daily' | 'weekly' | 'monthly' | 'seasonal' | 'lifetime';
+  approvalMode?: 'auto' | 'manual';
+  status?: 'active' | 'draft';
+  startsAt?: FirestoreTimestamp;
+  endsAt?: FirestoreTimestamp;
+  rewards?: Array<{
+    type: 'points' | 'xp' | 'badge' | 'achievement' | 'title' | 'unlockable' | string;
+    amount?: number;
+    id?: string;
+    name?: string;
+    metadata?: Record<string, unknown>;
+  }>;
 }
 
 /** Quest constraint */

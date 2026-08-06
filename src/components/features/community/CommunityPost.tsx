@@ -660,32 +660,34 @@ export const CommunityPost: React.FC<CommunityPostProps> = ({
       {/* Header */}
       <div style={{ padding: '20px', paddingBottom: '12px' }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
-          <Link
-            to={getMemberHref(post.userId)}
+          <div
             style={{
               display: 'flex',
               gap: '12px',
-              alignItems: 'center',
+              alignItems: 'flex-start',
               minWidth: 0,
-              textDecoration: 'none',
             }}
           >
             {/* Avatar */}
-            <CommentAvatar name={post.userName} photoURL={post.userPhotoURL} size={44} />
+            <Link to={getMemberHref(post.userId)} aria-label={`View ${post.userName}'s profile`}>
+              <CommentAvatar name={post.userName} photoURL={post.userPhotoURL} size={44} />
+            </Link>
 
             {/* User info */}
             <div style={{ minWidth: 0 }}>
-              <h3 style={{ color: '#fff', fontWeight: 500, fontSize: '15px', marginBottom: '2px' }}>
-                {post.userName}
-              </h3>
-              <p style={{ fontSize: '13px', color: '#6B7280' }}>
-                {formatTimestamp(post.createdAt)}
-                {post.prompt && (
-                  <span style={{ marginLeft: '8px' }}>
-                    responding to <span style={{ color: '#A78BFA' }}>{post.prompt}</span>
-                  </span>
-                )}
-              </p>
+              <Link to={getMemberHref(post.userId)} style={{ textDecoration: 'none' }}>
+                <h3 style={{ color: '#fff', fontWeight: 500, fontSize: '15px', marginBottom: '2px' }}>
+                  {post.userName}
+                </h3>
+                <p style={{ fontSize: '13px', color: '#6B7280' }}>
+                  {formatTimestamp(post.createdAt)}
+                  {post.prompt && (
+                    <span style={{ marginLeft: '8px' }}>
+                      responding to <span style={{ color: '#A78BFA' }}>{post.prompt}</span>
+                    </span>
+                  )}
+                </p>
+              </Link>
               {post.location?.coordinates && (
                 <a
                   href={`https://www.google.com/maps/search/?api=1&query=${post.location.coordinates.latitude},${post.location.coordinates.longitude}`}
@@ -699,7 +701,7 @@ export const CommunityPost: React.FC<CommunityPostProps> = ({
                 </a>
               )}
             </div>
-          </Link>
+          </div>
 
           {/* Menu */}
           <PostMenu

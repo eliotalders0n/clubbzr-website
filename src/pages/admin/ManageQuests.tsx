@@ -18,6 +18,7 @@ import {
   Spinner,
 } from '@chakra-ui/react'
 import { motion, AnimatePresence } from 'framer-motion'
+import { Timestamp } from 'firebase/firestore'
 import {
   AlertTriangle,
   Archive,
@@ -72,6 +73,16 @@ interface QuestForm {
   tags: string
   badges: string
   status: 'active' | 'draft'
+  eventTypes: string
+  targetCount: string
+  cadence: 'daily' | 'weekly' | 'monthly' | 'seasonal' | 'lifetime'
+  approvalMode: 'auto' | 'manual'
+  xp: string
+  achievements: string
+  titles: string
+  unlockables: string
+  startsAt: string
+  endsAt: string
 }
 
 const CATEGORIES: Array<{ id: QuestCategory | 'all'; label: string }> = [
@@ -175,6 +186,16 @@ const emptyForm: QuestForm = {
   tags: '',
   badges: '',
   status: 'draft',
+  eventTypes: 'quest.submitted',
+  targetCount: '1',
+  cadence: 'lifetime',
+  approvalMode: 'auto',
+  xp: '50',
+  achievements: '',
+  titles: '',
+  unlockables: '',
+  startsAt: '',
+  endsAt: '',
 }
 
 const toDate = (value: unknown): Date | null => {
@@ -238,6 +259,16 @@ const questToForm = (quest: Quest): QuestForm => ({
   tags: (quest.tags || []).join(', '),
   badges: (quest.badges || []).join(', '),
   status: quest.isActive ? 'active' : 'draft',
+  eventTypes: (quest.eventTypes || ['quest.submitted']).join(', '),
+  targetCount: String(quest.targetCount || 1),
+  cadence: quest.cadence || 'lifetime',
+  approvalMode: quest.approvalMode || 'auto',
+  xp: String(quest.rewards?.find((reward) => reward.type === 'xp')?.amount || quest.points || 0),
+  achievements: (quest.rewards || []).filter((reward) => reward.type === 'achievement').map((reward) => reward.id || '').filter(Boolean).join(', '),
+  titles: (quest.rewards || []).filter((reward) => reward.type === 'title').map((reward) => reward.id || '').filter(Boolean).join(', '),
+  unlockables: (quest.rewards || []).filter((reward) => reward.type === 'unlockable').map((reward) => reward.id || '').filter(Boolean).join(', '),
+  startsAt: toDate(quest.startsAt)?.toISOString().slice(0, 16) || '',
+  endsAt: toDate(quest.endsAt)?.toISOString().slice(0, 16) || '',
 })
 
 const buildQuestPayload = (
@@ -261,6 +292,21 @@ const buildQuestPayload = (
   featured: existing?.featured || false,
   createdBy: existing?.createdBy || currentUserId,
   tags: splitList(form.tags),
+  eventTypes: splitList(form.eventTypes),
+  targetCount: Math.max(1, Number.parseInt(form.targetCount, 10) || 1),
+  cadence: form.cadence,
+  approvalMode: form.approvalMode,
+  status: form.status,
+  startsAt: form.startsAt ? Timestamp.fromDate(new Date(form.startsAt)) : undefined,
+  endsAt: form.endsAt ? Timestamp.fromDate(new Date(form.endsAt)) : undefined,
+  rewards: [
+    ...(Number(form.points) > 0 ? [{ type: 'points', amount: Number(form.points) }] : []),
+    ...(Number(form.xp) > 0 ? [{ type: 'xp', amount: Number(form.xp) }] : []),
+    ...splitList(form.badges).map((id) => ({ type: 'badge', id })),
+    ...splitList(form.achievements).map((id) => ({ type: 'achievement', id })),
+    ...splitList(form.titles).map((id) => ({ type: 'title', id })),
+    ...splitList(form.unlockables).map((id) => ({ type: 'unlockable', id })),
+  ],
 })
 
 function FeedbackBanner({ feedback }: { feedback: Feedback | null }) {
@@ -495,6 +541,24 @@ function QuestFormFields({
             />
           </Box>
         </SimpleGrid>
+
+        <Box border="1px solid" borderColor="whiteAlpha.100" borderRadius="2xl" p={4}>
+          <Text color="brand.300" fontWeight="semibold" mb={4}>Quest engine</Text>
+          <SimpleGrid columns={{ base: 1, md: 3 }} gap={4}>
+            <Box><Text color="whiteAlpha.600" fontSize="sm" mb={2}>Event types</Text><Input value={form.eventTypes} onChange={(event) => updateForm({ eventTypes: event.target.value })} placeholder="artwork.created, comment.created" {...fieldControlProps} required /></Box>
+            <Box><Text color="whiteAlpha.600" fontSize="sm" mb={2}>Target count</Text><Input type="number" min={1} value={form.targetCount} onChange={(event) => updateForm({ targetCount: event.target.value })} {...fieldControlProps} /></Box>
+            <Box><Text color="whiteAlpha.600" fontSize="sm" mb={2}>Cadence</Text><select style={selectStyle} value={form.cadence} onChange={(event) => updateForm({ cadence: event.target.value as QuestForm['cadence'] })}><option value="daily">Daily</option><option value="weekly">Weekly</option><option value="monthly">Monthly</option><option value="seasonal">Seasonal</option><option value="lifetime">Lifetime</option></select></Box>
+            <Box><Text color="whiteAlpha.600" fontSize="sm" mb={2}>Approval</Text><select style={selectStyle} value={form.approvalMode} onChange={(event) => updateForm({ approvalMode: event.target.value as QuestForm['approvalMode'] })}><option value="auto">Automatic</option><option value="manual">Manual review</option></select></Box>
+            <Box><Text color="whiteAlpha.600" fontSize="sm" mb={2}>Starts at</Text><Input type="datetime-local" value={form.startsAt} onChange={(event) => updateForm({ startsAt: event.target.value })} {...fieldControlProps} /></Box>
+            <Box><Text color="whiteAlpha.600" fontSize="sm" mb={2}>Ends at</Text><Input type="datetime-local" value={form.endsAt} onChange={(event) => updateForm({ endsAt: event.target.value })} {...fieldControlProps} /></Box>
+          </SimpleGrid>
+          <SimpleGrid columns={{ base: 1, md: 2 }} gap={4} mt={4}>
+            <Box><Text color="whiteAlpha.600" fontSize="sm" mb={2}>XP reward</Text><Input type="number" min={0} value={form.xp} onChange={(event) => updateForm({ xp: event.target.value })} {...fieldControlProps} /></Box>
+            <Box><Text color="whiteAlpha.600" fontSize="sm" mb={2}>Achievements</Text><Input value={form.achievements} onChange={(event) => updateForm({ achievements: event.target.value })} placeholder="achievement IDs" {...fieldControlProps} /></Box>
+            <Box><Text color="whiteAlpha.600" fontSize="sm" mb={2}>Titles</Text><Input value={form.titles} onChange={(event) => updateForm({ titles: event.target.value })} placeholder="title IDs" {...fieldControlProps} /></Box>
+            <Box><Text color="whiteAlpha.600" fontSize="sm" mb={2}>Unlockables</Text><Input value={form.unlockables} onChange={(event) => updateForm({ unlockables: event.target.value })} placeholder="unlockable IDs" {...fieldControlProps} /></Box>
+          </SimpleGrid>
+        </Box>
 
         <Box>
           <Text color="whiteAlpha.600" fontSize="sm" mb={2}>Constraints</Text>

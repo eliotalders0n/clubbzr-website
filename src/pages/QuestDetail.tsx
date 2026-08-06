@@ -20,18 +20,17 @@ import {
   Image,
 } from '@chakra-ui/react'
 import { AnimatePresence, motion } from 'framer-motion'
-import { doc } from 'firebase/firestore'
 
 import { Header } from '@/components/layout/Header'
 import { Footer } from '@/components/layout/Footer'
 import { useDocument, useCollection, useMutation } from '@/hooks/useFirestore'
 import { useAuth } from '@/contexts/AuthContext'
 import { SubmissionVoteButtons, type SubmissionVoteValue } from '@/components/features/quests'
-import { createQuestCompletionBadges, getBadgeVisual } from '../../lib/badges'
+import { getBadgeVisual } from '../../lib/badges'
 import { uploadMultiple, STORAGE_PATHS } from '../../lib/storage'
-import { addToArray, removeFromArray, incrementField, db, executeTransaction, serverTimestamp } from '../../lib/firestore'
+import { addToArray, removeFromArray, incrementField } from '../../lib/firestore'
 import { updateQuestSubmissionVote } from '../../lib/submissionVotes'
-import type { Badge as PassportBadge, CreativePassport, Quest, QuestSubmission, ReactionType } from '../../lib/schema'
+import type { Badge as PassportBadge, QuestSubmission, ReactionType } from '../../lib/schema'
 import { Timestamp } from 'firebase/firestore'
 
 const MotionBox = motion.create(Box)
@@ -45,8 +44,6 @@ const REACTION_TYPES: { type: ReactionType; emoji: string }[] = [
 ]
 
 const IMAGE_URL_PATTERN = /\.(avif|gif|jpe?g|png|webp)(?:$|[?#])/i
-
-const getLevelForPoints = (points: number) => Math.max(1, Math.floor(points / 100) + 1)
 
 const isImageUrl = (url: string): boolean => {
   const value = url.trim()
@@ -254,113 +251,6 @@ function SubmissionCard({
   )
 }
 
-async function awardQuestCompletion({
-  quest,
-  questId,
-  userId,
-}: {
-  quest: Quest
-  questId: string
-  userId: string
-}): Promise<PassportBadge[]> {
-  const earnedAt = Timestamp.now()
-  const awardableBadges = createQuestCompletionBadges(quest, earnedAt)
-
-  const result = await executeTransaction(async (transaction) => {
-    const passportRef = doc(db, 'creativePassports', userId)
-    const passportSnapshot = await transaction.get(passportRef)
-    const existingPassport = passportSnapshot.exists()
-      ? (passportSnapshot.data() as CreativePassport)
-      : null
-
-    const existingBadges = existingPassport?.badges || []
-    const existingBadgeIds = new Set(existingBadges.map((badge) => badge.id))
-    const newBadges = awardableBadges.filter((badge) => !existingBadgeIds.has(badge.id))
-    const completedQuestIds = existingPassport?.questsCompleted || []
-    const nextCompletedQuestIds = completedQuestIds.includes(questId)
-      ? completedQuestIds
-      : [...completedQuestIds, questId]
-    const nextBadges = [...existingBadges, ...newBadges]
-    const nextPoints = (existingPassport?.points || 0) + (quest.points || 0)
-    const nextLevel = getLevelForPoints(nextPoints)
-    const timeline = existingPassport?.timeline || []
-    const completionEventId = `quest_completed_${questId}_${earnedAt.toMillis()}`
-    const badgeEvents = newBadges.map((badge) => ({
-      id: `badge_earned_${badge.id}_${earnedAt.toMillis()}`,
-      type: 'badge_earned' as const,
-      title: `Earned ${badge.name}`,
-      description: badge.description,
-      referenceId: badge.id,
-      timestamp: earnedAt,
-    }))
-
-    const nextTimeline = [
-      {
-        id: completionEventId,
-        type: 'quest_completed' as const,
-        title: `Completed ${quest.title}`,
-        description: quest.description,
-        referenceId: questId,
-        timestamp: earnedAt,
-      },
-      ...badgeEvents,
-      ...timeline,
-    ]
-
-    if (existingPassport) {
-      transaction.update(passportRef, {
-        questsCompleted: nextCompletedQuestIds,
-        questsInProgress: (existingPassport.questsInProgress || []).filter((activeQuestId) => activeQuestId !== questId),
-        badges: nextBadges,
-        points: nextPoints,
-        level: Math.max(existingPassport.level || 1, nextLevel),
-        timeline: nextTimeline,
-        'stats.totalQuestsCompleted': nextCompletedQuestIds.length,
-        updatedAt: serverTimestamp(),
-      })
-    } else {
-      transaction.set(passportRef, {
-        userId,
-        level: nextLevel,
-        points: nextPoints,
-        badges: nextBadges,
-        questsCompleted: nextCompletedQuestIds,
-        questsInProgress: [],
-        eventsAttended: [],
-        mediums: [],
-        interests: [],
-        collaborations: [],
-        timeline: nextTimeline,
-        streaks: {
-          current: 1,
-          longest: 1,
-          lastActivityDate: earnedAt,
-          weeklyGoal: 3,
-          weeklyProgress: 1,
-        },
-        stats: {
-          totalQuestsCompleted: nextCompletedQuestIds.length,
-          totalEventsAttended: 0,
-          totalCollaborations: 0,
-          totalPostsCreated: 0,
-          totalReactionsReceived: 0,
-          joinedAt: earnedAt,
-        },
-        createdAt: serverTimestamp(),
-        updatedAt: serverTimestamp(),
-      })
-    }
-
-    return newBadges
-  })
-
-  if (!result.success) {
-    throw new Error(result.error?.message || 'Failed to award quest badge')
-  }
-
-  return result.data || []
-}
-
 export default function QuestDetail() {
   const { id } = useParams()
   const { user } = useAuth()
@@ -370,7 +260,7 @@ export default function QuestDetail() {
   const [selectedFiles, setSelectedFiles] = useState<File[]>([])
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [submitError, setSubmitError] = useState<string | null>(null)
-  const [awardedBadges, setAwardedBadges] = useState<PassportBadge[]>([])
+  const [awardedBadges] = useState<PassportBadge[]>([])
   const [showAwardModal, setShowAwardModal] = useState(false)
   const fileInputRef = useRef<HTMLInputElement>(null)
 
@@ -449,29 +339,19 @@ export default function QuestDetail() {
         downvotesCount: 0,
         voteScore: 0,
         featured: false,
-        approved: true,
+        approved: false,
         showOnWall: true,
-        pointsAwarded: quest.points || 0,
+        pointsAwarded: 0,
         questTitle: quest.title,
       })
 
       if (result.success) {
-        // Update quest submission count
-        await incrementField('quests', id, 'submissionCount', 1)
-        await addToArray('quests', id, 'submissions', result.data?.id)
-        const newBadges = await awardQuestCompletion({
-          quest: quest as Quest,
-          questId: id,
-          userId: user.uid,
-        })
-
         // Reset form
         setShowSubmitForm(false)
         setSubmissionContent('')
         setSubmissionTitle('')
         setSelectedFiles([])
-        setAwardedBadges(newBadges)
-        setShowAwardModal(newBadges.length > 0)
+        // The server-side quest engine evaluates progress and grants rewards.
         refetchSubmissions()
       } else {
         throw new Error(result.error?.message || 'Failed to create submission')

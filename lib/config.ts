@@ -9,6 +9,7 @@ import { getFirestore, connectFirestoreEmulator, type Firestore } from 'firebase
 import { getFunctions, connectFunctionsEmulator, type Functions } from 'firebase/functions';
 import { getStorage, connectStorageEmulator, type FirebaseStorage } from 'firebase/storage';
 import { getAnalytics, type Analytics } from 'firebase/analytics';
+import { initializeAppCheck, ReCaptchaV3Provider, type AppCheck } from 'firebase/app-check';
 
 // Firebase configuration
 const firebaseConfig = {
@@ -27,6 +28,26 @@ const db: Firestore = getFirestore(app);
 const functions: Functions = getFunctions(app, import.meta.env.VITE_FIREBASE_FUNCTIONS_REGION || 'us-central1');
 const storage: FirebaseStorage = getStorage(app);
 let analytics: Analytics | null = null;
+let appCheck: AppCheck | null = null;
+
+const appCheckSiteKey = import.meta.env.VITE_FIREBASE_APPCHECK_SITE_KEY;
+const appCheckDebugToken = import.meta.env.VITE_FIREBASE_APPCHECK_DEBUG_TOKEN;
+if (typeof window !== 'undefined' && import.meta.env.DEV && appCheckDebugToken) {
+  const debugGlobal = globalThis as typeof globalThis & {
+    FIREBASE_APPCHECK_DEBUG_TOKEN?: string | boolean;
+  };
+  debugGlobal.FIREBASE_APPCHECK_DEBUG_TOKEN = appCheckDebugToken;
+}
+if (
+  typeof window !== 'undefined' &&
+  appCheckSiteKey &&
+  (!import.meta.env.DEV || Boolean(appCheckDebugToken))
+) {
+  appCheck = initializeAppCheck(app, {
+    provider: new ReCaptchaV3Provider(appCheckSiteKey),
+    isTokenAutoRefreshEnabled: true,
+  });
+}
 
 // Initialize Analytics (client-side only)
 export function initializeAnalytics(): Analytics | null {
@@ -94,4 +115,4 @@ export const STORAGE_PATHS = {
   RADIO: 'radio',
 } as const;
 
-export { app, auth, db, functions, storage, analytics };
+export { app, auth, db, functions, storage, analytics, appCheck };

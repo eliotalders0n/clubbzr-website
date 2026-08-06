@@ -13,6 +13,7 @@ import {
   Settings,
   UserRound,
   UsersRound,
+  WalletCards,
   type LucideIcon,
 } from 'lucide-react'
 import {
@@ -197,6 +198,25 @@ export function Header({ activeLink }: HeaderProps) {
                         >
                           <UserRound size={18} />
                           <Text as="span">My Passport</Text>
+                        </Menu.Item>
+                        <Menu.Item
+                          value="wallet"
+                          onClick={() => navigate('/wallet')}
+                          display="flex"
+                          alignItems="center"
+                          gap={3}
+                          minH="44px"
+                          px={3}
+                          py={2}
+                          borderRadius="12px"
+                          bg="transparent"
+                          color="whiteAlpha.800"
+                          fontSize="sm"
+                          fontWeight="medium"
+                          _hover={{ bg: 'whiteAlpha.100', color: 'white' }}
+                        >
+                          <WalletCards size={18} />
+                          <Text as="span">Points Wallet</Text>
                         </Menu.Item>
                         <Menu.Item
                           value="profile"
