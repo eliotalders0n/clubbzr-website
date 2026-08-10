@@ -115,24 +115,27 @@ export function Header({ activeLink }: HeaderProps) {
             </HStack>
 
             <HStack gap={3}>
-              <Link to="/subversions/create">
-                <Button
-                  display={{ base: 'inline-flex', md: 'none' }}
-                  alignItems="center"
-                  gap={2}
-                  h={10}
-                  px={4}
-                  borderRadius="full"
-                  bg="brand.500"
-                  color="white"
-                  fontSize="xs"
-                  fontWeight="semibold"
-                  _hover={{ bg: 'brand.600' }}
-                >
-                  <Plus size={17} strokeWidth={2.5} />
-                  Add Subversion
-                </Button>
-              </Link>
+              {artistProfile && (
+                <Link to="/subversions/create">
+                  <Button
+                    display="inline-flex"
+                    alignItems="center"
+                    gap={{ base: 1.5, lg: 2 }}
+                    h={{ base: 10, lg: 11 }}
+                    px={{ base: 4, lg: 5 }}
+                    borderRadius="full"
+                    bg="brand.500"
+                    color="white"
+                    fontSize={{ base: 'xs', lg: 'sm' }}
+                    fontWeight="semibold"
+                    whiteSpace="nowrap"
+                    _hover={{ bg: 'brand.600' }}
+                  >
+                    <Plus size={17} strokeWidth={2.5} />
+                    Add Subversion
+                  </Button>
+                </Link>
+              )}
 
               {isLoggedIn ? (
                 <Menu.Root>

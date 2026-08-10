@@ -1,8 +1,8 @@
-import {onCall} from "firebase-functions/v2/https";
+import {HttpsError, onCall} from "firebase-functions/v2/https";
 import {onDocumentCreated, onDocumentUpdated} from "firebase-functions/v2/firestore";
 import * as logger from "firebase-functions/logger";
 
-import {requireActiveUser} from "../core/auth";
+import {requireActiveUser, requireAdmin} from "../core/auth";
 import {admin, db} from "../core/firebase";
 import {deterministicId} from "../core/idempotency";
 import {getSystemAccount, postLedgerTransaction} from "../wallet/ledger";
@@ -304,6 +304,247 @@ export const activityFromSessionAttendance = onDocumentUpdated(
     const after = event.data?.after.data();
     if (before?.status !== "confirmed" && after?.status === "confirmed" && after.userId) {
       await writeActivity({type: "event.attended", userId: after.userId, sourceType: "sessionRegistration", sourceId: event.params.id, metadata: {sessionId: after.sessionId}});
+    }
+  }
+);
+
+const PAID_SESSION_STATUSES = new Set(["paid_online", "paid_external"]);
+
+async function rewardPaidSessionRegistration(
+  registrationId: string,
+  registration: FirebaseFirestore.DocumentData,
+  configuredPoints?: number
+): Promise<{transactionId: string; duplicate: boolean} | null> {
+  const userId = String(registration.userId || "").trim();
+  const sessionId = String(registration.sessionId || "").trim();
+  if (!userId || !sessionId || !PAID_SESSION_STATUSES.has(registration.paymentStatus)) {
+    return null;
+  }
+
+  const settings = configuredPoints === undefined ? await getEconomySettings() : null;
+  const points = configuredPoints ?? Number(settings?.pointsPerPaidSession || 0);
+  if (
+    (settings && !settings.economyEnabled) ||
+    !Number.isSafeInteger(points) ||
+    points <= 0
+  ) {
+    return null;
+  }
+
+  const transactionId = deterministicId(
+    "session_payment_reward",
+    userId,
+    registrationId
+  );
+  return postLedgerTransaction({
+    transactionId,
+    type: "session_payment_reward",
+    status: "completed",
+    senderWalletId: null,
+    receiverWalletId: userId,
+    participants: [userId],
+    amount: points,
+    fee: 0,
+    referenceType: "sessionRegistration",
+    referenceId: registrationId,
+    createdBy: "session_payment_reward",
+    idempotencyKey: registrationId,
+    entries: [
+      {
+        accountId: getSystemAccount("rewards", transactionId),
+        bucket: "available",
+        amount: -points,
+      },
+      {accountId: userId, bucket: "available", amount: points},
+    ],
+    metadata: {
+      sessionId,
+      registrationId,
+      paymentStatus: registration.paymentStatus,
+    },
+    linkedWrites: [
+      {
+        collection: "creativePassports",
+        id: userId,
+        mode: "set",
+        data: {
+          userId,
+          xp: admin.firestore.FieldValue.increment(points),
+          points: admin.firestore.FieldValue.increment(points),
+          updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+        },
+      },
+      {
+        collection: "sessionRegistrations",
+        id: registrationId,
+        mode: "set",
+        data: {
+          paymentRewardPoints: points,
+          paymentRewardTransactionId: transactionId,
+          paymentRewardedAt: admin.firestore.FieldValue.serverTimestamp(),
+          updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+        },
+      },
+      {
+        collection: "notifications",
+        id: transactionId,
+        mode: "create",
+        data: {
+          userId,
+          type: "session_payment_reward",
+          title: "Session payment reward",
+          body: `You earned ${points} points and ${points} XP.`,
+          referenceType: "session",
+          referenceId: sessionId,
+          read: false,
+          createdAt: admin.firestore.FieldValue.serverTimestamp(),
+        },
+      },
+    ],
+  });
+}
+
+interface PaidSessionRewardBackfillInput {
+  dryRun?: boolean;
+  cursor?: string;
+  limit?: number;
+}
+
+export const adminBackfillPaidSessionRewards = onCall({
+  cors: true,
+  invoker: "public",
+  enforceAppCheck: process.env.ENFORCE_APP_CHECK !== "false",
+  timeoutSeconds: 120,
+}, async (request) => {
+  const actor = await requireAdmin(request);
+  const input = (request.data || {}) as PaidSessionRewardBackfillInput;
+  const dryRun = input.dryRun !== false;
+  const pageSize = Math.min(Math.max(Math.floor(Number(input.limit) || 25), 1), 50);
+  const cursor = typeof input.cursor === "string" ? input.cursor.trim() : "";
+  const settings = await getEconomySettings();
+  const points = Number(settings.pointsPerPaidSession || 0);
+  if (!settings.economyEnabled || !Number.isSafeInteger(points) || points <= 0) {
+    throw new HttpsError(
+      "failed-precondition",
+      "Enable the economy and configure Points / XP per paid session before running the backfill."
+    );
+  }
+
+  let query = db.collection("sessionRegistrations")
+    .where("paymentStatus", "in", [...PAID_SESSION_STATUSES])
+    .orderBy(admin.firestore.FieldPath.documentId())
+    .limit(pageSize);
+  if (cursor) query = query.startAfter(cursor);
+  const snapshot = await query.get();
+
+  let eligible = 0;
+  let awarded = 0;
+  let alreadyRewarded = 0;
+  let skipped = 0;
+  const failures: Array<{registrationId: string; message: string}> = [];
+
+  for (const document of snapshot.docs) {
+    const registration = document.data();
+    const userId = String(registration.userId || "").trim();
+    const sessionId = String(registration.sessionId || "").trim();
+    if (!userId || !sessionId) {
+      skipped += 1;
+      failures.push({
+        registrationId: document.id,
+        message: "Registration is not linked to both a user and a session.",
+      });
+      continue;
+    }
+
+    const transactionId = deterministicId(
+      "session_payment_reward",
+      userId,
+      document.id
+    );
+    const existingTransaction = await db.collection("transactions")
+      .doc(transactionId)
+      .get();
+    if (registration.paymentRewardTransactionId || existingTransaction.exists) {
+      alreadyRewarded += 1;
+      continue;
+    }
+
+    eligible += 1;
+    if (dryRun) continue;
+    try {
+      const result = await rewardPaidSessionRegistration(
+        document.id,
+        registration,
+        points
+      );
+      if (!result || result.duplicate) {
+        alreadyRewarded += 1;
+      } else {
+        awarded += 1;
+      }
+    } catch (error) {
+      skipped += 1;
+      failures.push({
+        registrationId: document.id,
+        message: error instanceof Error ? error.message : "Reward could not be posted.",
+      });
+    }
+  }
+
+  const nextCursor = snapshot.size === pageSize ? snapshot.docs.at(-1)?.id || null : null;
+  if (!dryRun) {
+    await db.collection("auditLogs").add({
+      actorId: actor.uid,
+      action: "paid_session_rewards_backfilled",
+      targetType: "sessionRegistrations",
+      targetId: cursor || "start",
+      data: {
+        scanned: snapshot.size,
+        eligible,
+        awarded,
+        alreadyRewarded,
+        skipped,
+        pointsPerReward: points,
+        nextCursor,
+      },
+      createdAt: admin.firestore.FieldValue.serverTimestamp(),
+    });
+  }
+
+  return {
+    dryRun,
+    scanned: snapshot.size,
+    eligible,
+    awarded,
+    alreadyRewarded,
+    skipped,
+    pointsPerReward: points,
+    pointsAwarded: awarded * points,
+    potentialPoints: eligible * points,
+    nextCursor,
+    failures: failures.slice(0, 10),
+  };
+});
+
+export const rewardPaidSessionRegistrationOnCreate = onDocumentCreated(
+  "sessionRegistrations/{id}",
+  async (event) => {
+    const registration = event.data?.data();
+    if (registration) {
+      await rewardPaidSessionRegistration(event.params.id, registration);
+    }
+  }
+);
+
+export const rewardPaidSessionRegistrationOnUpdate = onDocumentUpdated(
+  "sessionRegistrations/{id}",
+  async (event) => {
+    const before = event.data?.before.data();
+    const after = event.data?.after.data();
+    const becamePaid = !PAID_SESSION_STATUSES.has(before?.paymentStatus) &&
+      PAID_SESSION_STATUSES.has(after?.paymentStatus);
+    if (becamePaid && after) {
+      await rewardPaidSessionRegistration(event.params.id, after);
     }
   }
 );

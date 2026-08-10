@@ -143,7 +143,7 @@ export function AdminLayout({ children }: AdminLayoutProps) {
 
   const isActive = (href: string) => {
     if (href === '/admin') return location.pathname === '/admin'
-    return location.pathname.startsWith(href)
+    return location.pathname === href || location.pathname.startsWith(`${href}/`)
   }
 
   return (

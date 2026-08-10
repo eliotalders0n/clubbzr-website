@@ -1,6 +1,7 @@
 'use client';
 
 import React, { useEffect, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { Link } from 'react-router-dom';
 import { motion, AnimatePresence } from 'framer-motion';
 import { clsx } from 'clsx';
@@ -14,6 +15,14 @@ const cn = (...inputs: (string | undefined | null | false)[]) => twMerge(clsx(in
 const getMemberHref = (userId: string) => `/members/${userId}`;
 const isVideoMedia = (mediaType: CommunityPostType['mediaType']): boolean => mediaType === 'video';
 const mobileMediaFrameClass = 'aspect-[9/16] sm:aspect-[9/14] md:aspect-[4/5]';
+const fullscreenMediaStyle: React.CSSProperties = {
+  display: 'block',
+  width: '100%',
+  height: '100%',
+  maxWidth: '100vw',
+  maxHeight: '100dvh',
+  objectFit: 'contain',
+};
 
 interface CommunityPostProps {
   post: CommunityPostType;
@@ -211,7 +220,7 @@ const MediaPreview: React.FC<{
   mediaType: CommunityPostType['mediaType'];
   className?: string;
   controls?: boolean;
-  onLoad?: () => void;
+  onLoad?: (aspectRatio: number) => void;
 }> = ({ url, mediaType, className, controls = false, onLoad }) => {
   if (isVideoMedia(mediaType)) {
     return (
@@ -219,7 +228,12 @@ const MediaPreview: React.FC<{
         src={url}
         className={cn('h-full w-full object-cover', className)}
         controls={controls}
-        onLoadedData={onLoad}
+        loop
+        playsInline
+        onLoadedMetadata={(event) => {
+          const video = event.currentTarget;
+          onLoad?.(video.videoWidth / video.videoHeight);
+        }}
       />
     );
   }
@@ -229,7 +243,10 @@ const MediaPreview: React.FC<{
       src={url}
       alt=""
       className={cn('h-full w-full object-cover', className)}
-      onLoad={onLoad}
+      onLoad={(event) => {
+        const image = event.currentTarget;
+        onLoad?.(image.naturalWidth / image.naturalHeight);
+      }}
     />
   );
 };
@@ -321,17 +338,28 @@ const FullscreenMediaViewer: React.FC<{
     };
   }, [currentIndex, hasMultipleMedia, mediaUrls.length, onClose, onNavigate]);
 
-  if (!currentUrl) return null;
+  if (!currentUrl || typeof document === 'undefined') return null;
 
-  return (
+  return createPortal(
     <motion.div
       initial={{ opacity: 0 }}
       animate={{ opacity: 1 }}
       exit={{ opacity: 0 }}
       transition={{ duration: 0.18 }}
-      className="fixed inset-0 z-[120] flex flex-col bg-black/95"
+      role="dialog"
+      aria-modal="true"
+      aria-label="Fullscreen media viewer"
+      className="fixed inset-0 flex h-[100dvh] w-screen items-center justify-center overflow-hidden bg-black"
+      style={{ zIndex: 2147483647 }}
     >
-      <div className="flex h-16 items-center justify-between border-b border-white/10 px-4 sm:px-6">
+      <div
+        className="pointer-events-none absolute inset-x-0 top-0 z-20 flex items-center justify-between p-3 sm:p-5"
+        style={{
+          paddingTop: 'max(12px, env(safe-area-inset-top))',
+          paddingLeft: 'max(12px, env(safe-area-inset-left))',
+          paddingRight: 'max(12px, env(safe-area-inset-right))',
+        }}
+      >
         <div className="rounded-full bg-white/10 px-3 py-1.5 text-sm font-semibold text-white">
           {currentIndex + 1} / {mediaUrls.length}
         </div>
@@ -339,24 +367,24 @@ const FullscreenMediaViewer: React.FC<{
           type="button"
           aria-label="Close fullscreen media"
           onClick={onClose}
-          className="flex h-10 w-10 items-center justify-center rounded-full bg-white/10 text-white transition hover:bg-white/20"
+          className="pointer-events-auto flex h-11 w-11 items-center justify-center rounded-full border border-white/15 bg-black/60 text-white backdrop-blur-md transition hover:bg-black/80 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white"
         >
-          <X size={20} strokeWidth={2.4} />
+          <X size={22} strokeWidth={2.4} />
         </button>
       </div>
 
-      <div className="relative flex min-h-0 flex-1 items-center justify-center px-3 py-5 sm:px-8">
+      <div className="relative flex h-full w-full items-center justify-center">
         {hasMultipleMedia && (
           <>
             <MediaNavButton
               direction="previous"
               onClick={() => onNavigate((currentIndex - 1 + mediaUrls.length) % mediaUrls.length)}
-              className="left-3 sm:left-6"
+              className="left-3 z-20 sm:left-6"
             />
             <MediaNavButton
               direction="next"
               onClick={() => onNavigate((currentIndex + 1) % mediaUrls.length)}
-              className="right-3 sm:right-6"
+              className="right-3 z-20 sm:right-6"
             />
           </>
         )}
@@ -364,19 +392,24 @@ const FullscreenMediaViewer: React.FC<{
         {isVideoMedia(mediaType) ? (
           <video
             src={currentUrl}
-            className="max-h-full max-w-full rounded-lg object-contain"
+            className="h-full w-full object-contain"
+            style={fullscreenMediaStyle}
             controls
             autoPlay
+            loop
+            playsInline
           />
         ) : (
           <img
             src={currentUrl}
             alt=""
-            className="max-h-full max-w-full rounded-lg object-contain"
+            className="h-full w-full select-none object-contain"
+            style={fullscreenMediaStyle}
           />
         )}
       </div>
-    </motion.div>
+    </motion.div>,
+    document.body
   );
 };
 
@@ -588,6 +621,7 @@ export const CommunityPost: React.FC<CommunityPostProps> = ({
 }) => {
   const [showComments, setShowComments] = useState(false);
   const [imageLoaded, setImageLoaded] = useState(false);
+  const [singleMediaAspectRatio, setSingleMediaAspectRatio] = useState<number | null>(null);
   const [activeMediaIndex, setActiveMediaIndex] = useState(0);
   const [lightboxIndex, setLightboxIndex] = useState<number | null>(null);
   const swipeStartRef = useRef<{ x: number; y: number } | null>(null);
@@ -724,7 +758,13 @@ export const CommunityPost: React.FC<CommunityPostProps> = ({
       {hasMedia && (
         <div className="relative z-0 overflow-hidden bg-black">
           {mediaUrls.length === 1 ? (
-            <div className={cn('relative', mobileMediaFrameClass)}>
+            <div
+              className={cn('relative w-full', !singleMediaAspectRatio && mobileMediaFrameClass)}
+              style={{
+                aspectRatio: singleMediaAspectRatio ?? undefined,
+                maxHeight: 'min(80vh, 900px)',
+              }}
+            >
               {!imageLoaded && (
                 <div className="absolute inset-0 bg-bzr-gray-800 animate-pulse" />
               )}
@@ -733,8 +773,12 @@ export const CommunityPost: React.FC<CommunityPostProps> = ({
                   <MediaPreview
                     url={mediaUrls[0]}
                     mediaType={post.mediaType}
+                    className="object-contain"
                     controls
-                    onLoad={() => setImageLoaded(true)}
+                    onLoad={(aspectRatio) => {
+                      setSingleMediaAspectRatio(aspectRatio);
+                      setImageLoaded(true);
+                    }}
                   />
                   <button
                     type="button"
@@ -755,8 +799,11 @@ export const CommunityPost: React.FC<CommunityPostProps> = ({
                   <MediaPreview
                     url={mediaUrls[0]}
                     mediaType={post.mediaType}
-                    className={cn('transition-opacity', imageLoaded ? 'opacity-100' : 'opacity-0')}
-                    onLoad={() => setImageLoaded(true)}
+                    className={cn('object-contain transition-opacity', imageLoaded ? 'opacity-100' : 'opacity-0')}
+                    onLoad={(aspectRatio) => {
+                      setSingleMediaAspectRatio(aspectRatio);
+                      setImageLoaded(true);
+                    }}
                   />
                   <span className="absolute right-3 top-3 flex h-9 w-9 items-center justify-center rounded-full border border-white/15 bg-black/55 text-white opacity-0 backdrop-blur-md transition group-hover:opacity-100">
                     <Expand size={17} strokeWidth={2.3} />

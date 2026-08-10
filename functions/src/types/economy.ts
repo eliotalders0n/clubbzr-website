@@ -7,6 +7,7 @@ export type LedgerTransactionType =
   | "point_purchase"
   | "point_purchase_refund"
   | "quest_reward"
+  | "session_payment_reward"
   | "escrow_lock"
   | "escrow_release"
   | "escrow_refund"

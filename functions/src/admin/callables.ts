@@ -26,6 +26,17 @@ function nullablePositiveInteger(value: unknown, field: string): number | null {
   return Number(value);
 }
 
+function nullableNonNegativeInteger(value: unknown, field: string): number | null {
+  if (value === null || value === undefined || value === "") return null;
+  if (!Number.isSafeInteger(value) || Number(value) < 0) {
+    throw new HttpsError(
+      "invalid-argument",
+      `${field} must be a non-negative integer.`
+    );
+  }
+  return Number(value);
+}
+
 export const updateEconomySettings = onCall(callableOptions, async (request) => {
   const actor = await requireAdmin(request);
   const input = request.data as Partial<EconomySettings>;
@@ -40,6 +51,10 @@ export const updateEconomySettings = onCall(callableOptions, async (request) => 
     ),
     tradingEnabled: booleanValue(input.tradingEnabled, "tradingEnabled"),
     pointsPerZmw: nullablePositiveInteger(input.pointsPerZmw, "pointsPerZmw"),
+    pointsPerPaidSession: nullableNonNegativeInteger(
+      input.pointsPerPaidSession,
+      "pointsPerPaidSession"
+    ),
     minPurchaseNgwee: nullablePositiveInteger(
       input.minPurchaseNgwee,
       "minPurchaseNgwee"

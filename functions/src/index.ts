@@ -2275,6 +2275,7 @@ export const whatsappWebhook = onRequest(
 export {
   adminCreditPoints,
   adminDebitPoints,
+  adminGetPointLedger,
   getWalletTransactions,
   getWalletSummary,
   transferPoints,
@@ -2299,6 +2300,7 @@ export {
   reconcilePendingPointPayments,
 } from "./payments/lenco";
 export {
+  adminBackfillPaidSessionRewards,
   activityFromArtwork,
   activityFromApprovedQuestSubmission,
   activityFromComment,
@@ -2309,6 +2311,8 @@ export {
   evaluateQuestActivity,
   processQuestReward,
   recordDailyLogin,
+  rewardPaidSessionRegistrationOnCreate,
+  rewardPaidSessionRegistrationOnUpdate,
 } from "./quests/engine";
 export {
   acceptTrade,
@@ -2321,6 +2325,7 @@ export {
   resolveTradeDispute,
 } from "./trading/callables";
 export {
+  adminGetEconomyAnalytics,
   calculateDailyEconomyAnalytics,
   detectLedgerRisk,
 } from "./analytics/triggers";

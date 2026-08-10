@@ -9,6 +9,7 @@ export interface EconomySettings {
   pointPurchasesEnabled: boolean;
   tradingEnabled: boolean;
   pointsPerZmw: number | null;
+  pointsPerPaidSession: number | null;
   minPurchaseNgwee: number | null;
   maxPurchaseNgwee: number | null;
   maxTransferPoints: number | null;
@@ -26,6 +27,7 @@ export const DISABLED_ECONOMY_SETTINGS: EconomySettings = {
   pointPurchasesEnabled: false,
   tradingEnabled: false,
   pointsPerZmw: null,
+  pointsPerPaidSession: null,
   minPurchaseNgwee: null,
   maxPurchaseNgwee: null,
   maxTransferPoints: null,

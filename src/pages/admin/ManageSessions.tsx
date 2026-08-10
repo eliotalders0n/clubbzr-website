@@ -15,9 +15,11 @@ import {
   Textarea,
   Image,
   Spinner,
+  Menu,
+  Portal,
 } from '@chakra-ui/react'
 import { motion, AnimatePresence } from 'framer-motion'
-import { CalendarDays, CheckCircle2, CreditCard, ImagePlus, Link as LinkIcon, MapPin, MessageCircle, Pencil, Plus, RotateCcw, Search, Send, Trash2, UserRoundMinus, Users, X } from 'lucide-react'
+import { BadgeCheck, CalendarDays, CheckCircle2, CreditCard, ImagePlus, Link as LinkIcon, MapPin, MessageCircle, MoreHorizontal, Pencil, Plus, RotateCcw, Search, Send, Trash2, UserRoundMinus, Users, X } from 'lucide-react'
 import { GeoPoint, Timestamp, arrayRemove, arrayUnion } from 'firebase/firestore'
 
 import { AdminLayout } from '@/components/layout/AdminLayout'
@@ -139,7 +141,7 @@ const paymentStatusLabels: Record<SessionRegistrationPaymentStatus, string> = {
   paid_online: 'Paid Online',
   paid_external: 'Paid Externally',
   refunded: 'Refunded',
-  waived: 'Waived',
+  waived: 'Exempt',
   failed: 'Failed',
 }
 
@@ -192,23 +194,6 @@ const filterButtonProps = {
   fontSize: 'sm',
   fontWeight: 'semibold',
   lineHeight: '1',
-  whiteSpace: 'nowrap',
-} as const
-
-const registrationActionButtonProps = {
-  h: '40px',
-  minW: { base: 0, lg: '132px' },
-  w: 'full',
-  px: 4,
-  borderRadius: 'lg',
-  fontSize: 'xs',
-  fontWeight: 'semibold',
-  lineHeight: '1',
-  gap: 2,
-  display: 'inline-flex',
-  alignItems: 'center',
-  justifyContent: 'center',
-  flexShrink: 0,
   whiteSpace: 'nowrap',
 } as const
 
@@ -740,6 +725,34 @@ export default function ManageSessions() {
     })()
   }
 
+  const handleExemptRegistration = (registration: SessionRegistration) => {
+    const reason = window.prompt(
+      `Why is ${registration.displayName} exempt from payment? This will be saved in the registration record.`
+    )?.trim()
+
+    if (!reason) return
+
+    void (async () => {
+      const now = Timestamp.now()
+      const success = await handleRegistrationUpdate(registration, {
+        status: 'confirmed',
+        paymentStatus: 'waived',
+        paymentWaivedAt: now,
+        paymentWaivedBy: firebaseUser?.uid || 'admin',
+        paymentWaiverReason: reason,
+        confirmedAt: now,
+        confirmedBy: firebaseUser?.uid || 'admin',
+      })
+      if (!success) return
+
+      await updateDocument('sessions', registration.sessionId, {
+        attendees: arrayUnion(registration.userId) as unknown as string[],
+        waitlist: arrayRemove(registration.userId) as unknown as string[],
+      })
+      void refetch()
+    })()
+  }
+
   const handleWaitlistRegistration = (registration: SessionRegistration) => {
     void (async () => {
       const success = await handleRegistrationUpdate(registration, {
@@ -1103,6 +1116,7 @@ export default function ManageSessions() {
                 onAddRegistration={handleAddRegistration}
                 onMarkPaid={handleMarkPaid}
                 onConfirm={handleConfirmRegistration}
+                onExempt={handleExemptRegistration}
                 onWaitlist={handleWaitlistRegistration}
                 onDecline={handleDeclineRegistration}
                 onReversePayment={handleReverseRegistrationPayment}
@@ -1203,6 +1217,7 @@ function RegistrationManager({
   onAddRegistration,
   onMarkPaid,
   onConfirm,
+  onExempt,
   onWaitlist,
   onDecline,
   onReversePayment,
@@ -1225,6 +1240,7 @@ function RegistrationManager({
   ) => Promise<boolean>
   onMarkPaid: (registration: SessionRegistration) => void
   onConfirm: (registration: SessionRegistration, markPaid?: boolean) => void
+  onExempt: (registration: SessionRegistration) => void
   onWaitlist: (registration: SessionRegistration) => void
   onDecline: (registration: SessionRegistration) => void
   onReversePayment: (registration: SessionRegistration) => void
@@ -1439,7 +1455,7 @@ function RegistrationManager({
         </Flex>
 
         <Box borderRadius="xl" overflow="hidden" bg="rgba(255,255,255,0.025)">
-          <Box display={{ base: 'none', lg: 'grid' }} gridTemplateColumns="minmax(205px,1.35fr) minmax(125px,.7fr) minmax(145px,.8fr) minmax(160px,.9fr) minmax(180px,1fr) minmax(230px,1.3fr)" gap={4} px={5} py={3.5} borderBottom="1px solid" borderColor="whiteAlpha.120" color="whiteAlpha.450" fontSize="xs" fontWeight="semibold" textTransform="uppercase" letterSpacing="0.08em">
+          <Box display={{ base: 'none', lg: 'grid' }} gridTemplateColumns="minmax(205px,1.35fr) minmax(125px,.7fr) minmax(145px,.8fr) minmax(160px,.9fr) minmax(180px,1fr) minmax(120px,.55fr)" gap={4} px={5} py={3.5} borderBottom="1px solid" borderColor="whiteAlpha.120" color="whiteAlpha.450" fontSize="xs" fontWeight="semibold" textTransform="uppercase" letterSpacing="0.08em">
             <Text>Guest</Text><Text>Requested</Text><Text>Signup status</Text><Text>Payment</Text><Text>WhatsApp</Text><Text textAlign="right">Actions</Text>
           </Box>
           {loading ? (
@@ -1449,7 +1465,7 @@ function RegistrationManager({
           ) : visibleRegistrations.length === 0 ? (
             <Flex minH="180px" align="center" justify="center" direction="column" textAlign="center" px={5}><Users size={24} color="rgba(255,255,255,0.3)" /><Text color="whiteAlpha.650" mt={3}>No registrations found</Text><Text color="whiteAlpha.400" fontSize="sm" mt={1}>Try another status tab or search term.</Text></Flex>
           ) : visibleRegistrations.map((registration) => (
-            <RegistrationRow key={registration.id} registration={registration} onMarkPaid={onMarkPaid} onConfirm={onConfirm} onWaitlist={onWaitlist} onDecline={onDecline} onReversePayment={onReversePayment} onRetryWhatsApp={onRetryWhatsApp} isRetryingWhatsApp={resendingWhatsAppId === registration.id} isReversingPayment={reversingRegistrationId === registration.id} />
+            <RegistrationRow key={registration.id} registration={registration} onMarkPaid={onMarkPaid} onConfirm={onConfirm} onExempt={onExempt} onWaitlist={onWaitlist} onDecline={onDecline} onReversePayment={onReversePayment} onRetryWhatsApp={onRetryWhatsApp} isRetryingWhatsApp={resendingWhatsAppId === registration.id} isReversingPayment={reversingRegistrationId === registration.id} />
           ))}
           {!loading && !error && visibleRegistrations.length > 0 && (
             <Flex px={5} py={3.5} borderTop="1px solid" borderColor="whiteAlpha.100" justify="space-between" color="whiteAlpha.450" fontSize="xs"><Text>Showing {visibleRegistrations.length} of {registrations.length} registrations</Text><Text>{queueTabs.find((tab) => tab.value === activeQueueTab)?.label}</Text></Flex>
@@ -1464,6 +1480,7 @@ function RegistrationRow({
   registration,
   onMarkPaid,
   onConfirm,
+  onExempt,
   onWaitlist,
   onDecline,
   onReversePayment,
@@ -1474,6 +1491,7 @@ function RegistrationRow({
   registration: SessionRegistration
   onMarkPaid: (registration: SessionRegistration) => void
   onConfirm: (registration: SessionRegistration, markPaid?: boolean) => void
+  onExempt: (registration: SessionRegistration) => void
   onWaitlist: (registration: SessionRegistration) => void
   onDecline: (registration: SessionRegistration) => void
   onReversePayment: (registration: SessionRegistration) => void
@@ -1488,6 +1506,7 @@ function RegistrationRow({
     registration.paymentStatus === 'pending' ||
     registration.paymentStatus === 'failed'
   const canMarkPaid = !isTerminal && !isConfirmed && needsPayment
+  const canExempt = !isTerminal && !isConfirmed && needsPayment
   const canConfirm = !isTerminal && !isConfirmed
   const canMoveToWaitlist = !isTerminal && registration.status !== 'waitlisted' && !isConfirmed
   const canDecline = !isTerminal && !isConfirmed
@@ -1528,7 +1547,7 @@ function RegistrationRow({
 
   return (
     <Box px={{ base: 4, md: 5 }} py={{ base: 4, lg: 4.5 }} borderBottom="1px solid" borderColor="whiteAlpha.100" _last={{ borderBottom: 0 }} _hover={{ bg: 'whiteAlpha.25' }} transition="background 160ms ease">
-      <Box display={{ base: 'flex', lg: 'grid' }} flexDirection="column" gridTemplateColumns="minmax(205px,1.35fr) minmax(125px,.7fr) minmax(145px,.8fr) minmax(160px,.9fr) minmax(180px,1fr) minmax(230px,1.3fr)" gap={{ base: 4, lg: 4 }} alignItems="center">
+      <Box display={{ base: 'flex', lg: 'grid' }} flexDirection="column" gridTemplateColumns="minmax(205px,1.35fr) minmax(125px,.7fr) minmax(145px,.8fr) minmax(160px,.9fr) minmax(180px,1fr) minmax(120px,.55fr)" gap={{ base: 4, lg: 4 }} alignItems="center">
         <HStack gap={3} minW={0}>
           {registration.photoURL ? (
             <Image src={registration.photoURL} alt={registration.displayName} boxSize="44px" borderRadius="full" objectFit="cover" flexShrink={0} />
@@ -1557,6 +1576,9 @@ function RegistrationRow({
           <Box>
             <Text color="whiteAlpha.800" fontSize="sm">{paymentStatusLabels[registration.paymentStatus]}</Text>
             <Text color={registration.paymentAmount ? 'brand.200' : 'whiteAlpha.400'} fontSize="xs" mt={0.5}>{paymentAmountText}</Text>
+            {registration.paymentStatus === 'waived' && registration.paymentWaiverReason && (
+              <Text color="blue.200" fontSize="xs" mt={1} lineClamp={2}>{registration.paymentWaiverReason}</Text>
+            )}
           </Box>
         </LedgerCell>
 
@@ -1568,70 +1590,7 @@ function RegistrationRow({
           </Box>
         </LedgerCell>
 
-        <Box
-          display="grid"
-          gridTemplateColumns={{ base: 'repeat(2, minmax(0, 1fr))', lg: 'repeat(2, 132px)' }}
-          gap={2}
-          justifyContent={{ lg: 'end' }}
-          w="full"
-          css={{ '& > :only-child': { gridColumn: '1 / -1', justifySelf: 'end', width: 'auto' } }}
-        >
-          {canRetryWhatsApp && (
-            <Button
-              {...registrationActionButtonProps}
-              bg="whiteAlpha.50"
-              color="whiteAlpha.800"
-              _hover={{ bg: 'whiteAlpha.100', color: 'white' }}
-              onClick={() => onRetryWhatsApp(registration)}
-              disabled={isRetryingWhatsApp}
-            >
-              {isRetryingWhatsApp ? <Spinner size="sm" /> : <Send size={14} />}
-              {whatsappActionLabel}
-            </Button>
-          )}
-          {canMarkPaid && (
-            <Button {...registrationActionButtonProps} bg="blue.500/15" color="blue.200" _hover={{ bg: 'blue.500/25' }} onClick={() => onMarkPaid(registration)}>
-              <CreditCard size={14} />
-              Mark Paid
-            </Button>
-          )}
-          {canMarkPaid && (
-            <Button {...registrationActionButtonProps} bg="green.500/15" color="green.200" _hover={{ bg: 'green.500/25' }} onClick={() => onConfirm(registration, true)}>
-              <CheckCircle2 size={14} />
-              Paid + Confirm
-            </Button>
-          )}
-          {canConfirm && !needsPayment && (
-            <Button {...registrationActionButtonProps} bg="green.500/15" color="green.200" _hover={{ bg: 'green.500/25' }} onClick={() => onConfirm(registration)}>
-              <CheckCircle2 size={14} />
-              Confirm
-            </Button>
-          )}
-          {canMoveToWaitlist && (
-            <Button {...registrationActionButtonProps} bg="orange.500/15" color="orange.200" _hover={{ bg: 'orange.500/25' }} onClick={() => onWaitlist(registration)}>
-              <Users size={14} />
-              Waitlist
-            </Button>
-          )}
-          {canDecline && (
-            <Button {...registrationActionButtonProps} bg="red.500/15" color="red.200" _hover={{ bg: 'red.500/25' }} onClick={() => onDecline(registration)}>
-              <UserRoundMinus size={14} />
-              Decline
-            </Button>
-          )}
-          {canReversePayment && (
-            <Button
-              {...registrationActionButtonProps}
-              bg="brand.500/15"
-              color="brand.200"
-              _hover={{ bg: 'brand.500/25' }}
-              onClick={() => onReversePayment(registration)}
-              disabled={isReversingPayment}
-            >
-              {isReversingPayment ? <Spinner size="sm" /> : <RotateCcw size={14} />}
-              Reverse payment
-            </Button>
-          )}
+        <Flex justify={{ base: 'flex-start', lg: 'flex-end' }} align="center" gap={2} w="full">
           {registration.returnStatus === 'pending' && (
             <Badge bg="orange.500/15" color="orange.200" borderRadius="full" px={3} py={2}>
               Return pending
@@ -1642,7 +1601,79 @@ function RegistrationRow({
               {registration.returnEffect === 'revenue_correction' ? 'Revenue corrected' : 'Payment returned'}
             </Badge>
           )}
-        </Box>
+          <Menu.Root positioning={{ placement: 'bottom-end' }}>
+            <Menu.Trigger
+              aria-label={`Actions for ${registration.displayName}`}
+              display="inline-flex"
+              alignItems="center"
+              justifyContent="center"
+              gap={2}
+              h="40px"
+              px={3.5}
+              borderRadius="lg"
+              bg="whiteAlpha.70"
+              color="whiteAlpha.850"
+              fontSize="sm"
+              fontWeight="semibold"
+              cursor="pointer"
+              _hover={{ bg: 'whiteAlpha.120', color: 'white' }}
+            >
+              <MoreHorizontal size={18} />
+              Actions
+            </Menu.Trigger>
+            <Portal>
+              <Menu.Positioner>
+                <Menu.Content minW="230px" p={2} bg="rgba(18,18,18,0.99)" border="1px solid" borderColor="whiteAlpha.200" borderRadius="14px" boxShadow="0 18px 48px rgba(0,0,0,.5)" zIndex={2000}>
+                  {canRetryWhatsApp && (
+                    <RegistrationActionMenuItem value="whatsapp" icon={isRetryingWhatsApp ? <Spinner size="sm" /> : <Send size={15} />} onClick={() => onRetryWhatsApp(registration)} disabled={isRetryingWhatsApp}>
+                      {whatsappActionLabel}
+                    </RegistrationActionMenuItem>
+                  )}
+                  {canMarkPaid && (
+                    <RegistrationActionMenuItem value="mark-paid" icon={<CreditCard size={15} />} onClick={() => onMarkPaid(registration)} color="blue.200">
+                      Mark paid
+                    </RegistrationActionMenuItem>
+                  )}
+                  {canMarkPaid && (
+                    <RegistrationActionMenuItem value="paid-confirm" icon={<CheckCircle2 size={15} />} onClick={() => onConfirm(registration, true)} color="green.200">
+                      Mark paid + confirm
+                    </RegistrationActionMenuItem>
+                  )}
+                  {canExempt && (
+                    <RegistrationActionMenuItem value="exempt-confirm" icon={<BadgeCheck size={15} />} onClick={() => onExempt(registration)} color="cyan.200">
+                      Exempt + confirm
+                    </RegistrationActionMenuItem>
+                  )}
+                  {canConfirm && !needsPayment && (
+                    <RegistrationActionMenuItem value="confirm" icon={<CheckCircle2 size={15} />} onClick={() => onConfirm(registration)} color="green.200">
+                      Confirm
+                    </RegistrationActionMenuItem>
+                  )}
+                  {canMoveToWaitlist && (
+                    <RegistrationActionMenuItem value="waitlist" icon={<Users size={15} />} onClick={() => onWaitlist(registration)} color="orange.200">
+                      Move to waitlist
+                    </RegistrationActionMenuItem>
+                  )}
+                  {canDecline && (
+                    <RegistrationActionMenuItem value="decline" icon={<UserRoundMinus size={15} />} onClick={() => onDecline(registration)} color="red.200">
+                      Decline
+                    </RegistrationActionMenuItem>
+                  )}
+                  {canReversePayment && (
+                    <RegistrationActionMenuItem value="reverse-payment" icon={isReversingPayment ? <Spinner size="sm" /> : <RotateCcw size={15} />} onClick={() => onReversePayment(registration)} disabled={isReversingPayment} color="brand.200">
+                      Reverse payment
+                    </RegistrationActionMenuItem>
+                  )}
+                  {!canRetryWhatsApp && !canMarkPaid && !canExempt && !(canConfirm && !needsPayment) && !canMoveToWaitlist && !canDecline && !canReversePayment && (
+                    <Menu.Item value="no-actions" disabled px={3} py={2.5} color="whiteAlpha.400" fontSize="sm">
+                      No actions available
+                    </Menu.Item>
+                  )}
+                </Menu.Content>
+              </Menu.Positioner>
+            </Portal>
+          </Menu.Root>
+        </Flex>
       </Box>
     </Box>
   )
@@ -1654,6 +1685,46 @@ function LedgerCell({ label, children }: { label: string; children: ReactNode })
       <Text display={{ base: 'block', lg: 'none' }} color="whiteAlpha.400" fontSize="2xs" textTransform="uppercase" letterSpacing="0.08em" mb={1}>{label}</Text>
       {children}
     </Box>
+  )
+}
+
+function RegistrationActionMenuItem({
+  value,
+  icon,
+  children,
+  onClick,
+  color = 'whiteAlpha.800',
+  disabled = false,
+}: {
+  value: string
+  icon: ReactNode
+  children: ReactNode
+  onClick: () => void
+  color?: string
+  disabled?: boolean
+}) {
+  return (
+    <Menu.Item
+      value={value}
+      onClick={onClick}
+      disabled={disabled}
+      display="flex"
+      alignItems="center"
+      gap={3}
+      minH="42px"
+      px={3}
+      py={2}
+      borderRadius="10px"
+      bg="transparent"
+      color={color}
+      fontSize="sm"
+      fontWeight="medium"
+      cursor={disabled ? 'not-allowed' : 'pointer'}
+      _hover={{ bg: 'whiteAlpha.100' }}
+    >
+      {icon}
+      <Text as="span">{children}</Text>
+    </Menu.Item>
   )
 }
 

@@ -260,6 +260,63 @@ const demoVenues: ExtendedVenue[] = [
   }),
 ]
 
+const curatedVenues: ExtendedVenue[] = [
+  createDemoLocation({
+    id: 'curated-37d-gallery',
+    name: '37d Gallery',
+    type: 'gallery',
+    latitude: -15.4307,
+    longitude: 28.3527,
+    address: '37d Middleway, Kabulonga',
+    neighborhood: 'Kabulonga',
+    description: 'A contemporary art gallery located on Middleway in Kabulonga.',
+    image: fallbackImageByType.gallery,
+    saves: 0,
+    visits: 0,
+  }),
+  createDemoLocation({
+    id: 'curated-lechwe-trust-art-gallery',
+    name: 'Lechwe Trust Art Gallery',
+    type: 'gallery',
+    latitude: -15.4083,
+    longitude: 28.2988,
+    address: 'Plot 4015, Lagos Road, Rhodes Park',
+    neighborhood: 'Rhodes Park',
+    description: 'An art gallery located on Lagos Road in Rhodes Park.',
+    image: fallbackImageByType.gallery,
+    saves: 0,
+    visits: 0,
+  }),
+  createDemoLocation({
+    id: 'curated-everyday-lusaka-gallery',
+    name: 'Everyday Lusaka Gallery',
+    type: 'gallery',
+    latitude: -15.4182,
+    longitude: 28.2845,
+    address: 'Shop #5, Kalundwe Road',
+    neighborhood: 'Kalundwe Road',
+    description: 'A Lusaka art gallery located at Shop #5 on Kalundwe Road.',
+    image: fallbackImageByType.gallery,
+    saves: 0,
+    visits: 0,
+  }),
+  createDemoLocation({
+    id: 'curated-lucac',
+    name: 'The Lusaka Contemporary Art Centre (LuCAC)',
+    type: 'gallery',
+    latitude: -15.3958,
+    longitude: 28.3414,
+    address: 'Intersection of Musekese & Makole Roads, Chamba Valley',
+    neighborhood: 'Chamba Valley',
+    description: 'A contemporary art centre at the intersection of Musekese and Makole Roads in Chamba Valley.',
+    image: fallbackImageByType.gallery,
+    saves: 0,
+    visits: 0,
+  }),
+]
+
+const normalizeVenueName = (name: string): string => name.trim().toLocaleLowerCase()
+
 function mapLocationTypeToVenueType(type: ArtLocationType): MapVenue['type'] {
   if (type === 'gallery' || type === 'museum' || type === 'studio') return type
   if (type === 'pop_up' || type === 'installation') return 'event'
@@ -450,7 +507,14 @@ export default function ArtMap() {
   } = useMutation('artLocations')
 
   const venues = useMemo<ExtendedVenue[]>(() => {
-    const places = artLocations.length > 0 ? artLocations.map(toVenue) : demoVenues
+    const livePlaces = artLocations.map(toVenue)
+    const livePlaceNames = new Set(livePlaces.map((venue) => normalizeVenueName(venue.name)))
+    const missingCuratedPlaces = curatedVenues.filter(
+      (venue) => !livePlaceNames.has(normalizeVenueName(venue.name))
+    )
+    const places = artLocations.length > 0
+      ? [...livePlaces, ...missingCuratedPlaces]
+      : [...demoVenues, ...curatedVenues]
     const sessionLocations = sessions
       .filter((session) => {
         const date = session.date instanceof Timestamp ? session.date.toMillis() : new Date(session.date as never).getTime()

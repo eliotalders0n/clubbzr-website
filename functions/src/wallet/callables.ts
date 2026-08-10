@@ -192,6 +192,23 @@ export const getWalletTransactions = onCall(callableOptions, async (request) => 
   };
 });
 
+export const adminGetPointLedger = onCall(callableOptions, async (request) => {
+  await requireAdmin(request);
+  const data = request.data as Record<string, unknown>;
+  const requestedLimit = typeof data.limit === "number" ? data.limit : 100;
+  const limit = Math.max(1, Math.min(250, Math.floor(requestedLimit)));
+  const snapshot = await db.collection("transactions")
+    .orderBy("createdAt", "desc")
+    .limit(limit)
+    .get();
+  return {
+    transactions: snapshot.docs.map((document) => ({
+      id: document.id,
+      ...document.data(),
+    })),
+  };
+});
+
 export const bootstrapWalletForUser = async (userId: string): Promise<void> => {
   const walletRef = db.collection("wallets").doc(userId);
   const balanceRef = db.collection("balances").doc(userId);

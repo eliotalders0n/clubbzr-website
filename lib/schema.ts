@@ -248,6 +248,7 @@ export interface CreativePassport extends BaseDocument {
   streaks: StreakData;
   badges: Badge[];
   points: number;
+  xp?: number;
   level: number;
 
   // Activity timeline
@@ -508,6 +509,12 @@ export interface SessionRegistration extends BaseDocument {
 
   requestedAt: FirestoreTimestamp;
   paidAt?: FirestoreTimestamp;
+  paymentWaivedAt?: FirestoreTimestamp;
+  paymentWaivedBy?: string;
+  paymentWaiverReason?: string;
+  paymentRewardPoints?: number;
+  paymentRewardTransactionId?: string;
+  paymentRewardedAt?: FirestoreTimestamp;
   confirmedAt?: FirestoreTimestamp;
   confirmedBy?: string;
   confirmationEmailSentAt?: FirestoreTimestamp;

@@ -13,6 +13,7 @@ interface EconomyForm {
   pointPurchasesEnabled: boolean
   tradingEnabled: boolean
   pointsPerZmw: string
+  pointsPerPaidSession: string
   minPurchaseNgwee: string
   maxPurchaseNgwee: string
   maxTransferPoints: string
@@ -25,6 +26,7 @@ interface EconomyForm {
 const defaults: EconomyForm = {
   economyEnabled: false, maintenanceMode: true, transfersEnabled: false,
   pointPurchasesEnabled: false, tradingEnabled: false, pointsPerZmw: '',
+  pointsPerPaidSession: '',
   minPurchaseNgwee: '', maxPurchaseNgwee: '', maxTransferPoints: '',
   dailyTransferLimitPoints: '', tradeFeeBasisPoints: '500',
   rewardMultiplierBasisPoints: '10000', escrowTimeoutHours: '168',
@@ -46,6 +48,7 @@ export default function Economy() {
         pointPurchasesEnabled: data.pointPurchasesEnabled === true,
         tradingEnabled: data.tradingEnabled === true,
         pointsPerZmw: data.pointsPerZmw?.toString() ?? '',
+        pointsPerPaidSession: data.pointsPerPaidSession?.toString() ?? '',
         minPurchaseNgwee: data.minPurchaseNgwee?.toString() ?? '',
         maxPurchaseNgwee: data.maxPurchaseNgwee?.toString() ?? '',
         maxTransferPoints: data.maxTransferPoints?.toString() ?? '',
@@ -67,6 +70,7 @@ export default function Economy() {
       await update({
         ...form,
         pointsPerZmw: numberOrNull(form.pointsPerZmw),
+        pointsPerPaidSession: numberOrNull(form.pointsPerPaidSession),
         minPurchaseNgwee: numberOrNull(form.minPurchaseNgwee),
         maxPurchaseNgwee: numberOrNull(form.maxPurchaseNgwee),
         maxTransferPoints: numberOrNull(form.maxTransferPoints),
@@ -90,6 +94,7 @@ export default function Economy() {
   ]
   const fields: Array<[keyof EconomyForm, string, string]> = [
     ['pointsPerZmw', 'Points per ZMW', 'Must be explicitly configured before purchases can open.'],
+    ['pointsPerPaidSession', 'Points / XP per paid session', 'Awarded once when a member payment is confirmed. Set 0 to disable.'],
     ['minPurchaseNgwee', 'Minimum purchase (ngwee)', '100 ngwee = ZMW 1.'],
     ['maxPurchaseNgwee', 'Maximum purchase (ngwee)', 'Hard limit for one payment.'],
     ['maxTransferPoints', 'Maximum peer transfer', 'Maximum points in one transfer.'],
