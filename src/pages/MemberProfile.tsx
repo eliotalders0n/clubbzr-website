@@ -1,8 +1,8 @@
 'use client'
 
-import { useMemo } from 'react'
-import { Link, useParams } from 'react-router-dom'
-import { Timestamp } from 'firebase/firestore'
+import { useMemo, useState } from 'react'
+import { Link, useNavigate, useParams } from 'react-router-dom'
+import { doc, Timestamp } from 'firebase/firestore'
 import {
   AspectRatio,
   Badge,
@@ -20,11 +20,13 @@ import {
   VStack,
 } from '@chakra-ui/react'
 import { motion } from 'framer-motion'
-import { Award, BadgeCheck, ExternalLink, ImageIcon, MessageCircle, Sparkles, UserRound } from 'lucide-react'
+import { Award, BadgeCheck, ExternalLink, ImageIcon, MessageCircle, Sparkles, UserCheck, UserPlus, UserRound } from 'lucide-react'
 
 import { Header } from '@/components/layout/Header'
 import { Footer } from '@/components/layout/Footer'
+import { useAuth } from '@/contexts/AuthContext'
 import { useCollection, useDocument } from '@/hooks/useFirestore'
+import { db, executeTransaction, serverTimestamp } from '../../lib/firestore'
 import type { Artwork, CommunityPost, Quest, QuestSubmission } from '../../lib/schema'
 
 const MotionBox = motion.create(Box)
@@ -166,6 +168,18 @@ function EmptySection({ title, description }: { title: string; description: stri
 
 export default function MemberProfile() {
   const { id } = useParams<{ id: string }>()
+  const navigate = useNavigate()
+  const { firebaseUser } = useAuth()
+  const [optimisticFollow, setOptimisticFollow] = useState<boolean | null>(null)
+  const [followLoading, setFollowLoading] = useState(false)
+  const isOwnProfile = Boolean(firebaseUser?.uid && id && firebaseUser.uid === id)
+  const followDocId = firebaseUser?.uid && id ? `${firebaseUser.uid}_${id}` : undefined
+  const {
+    data: followRecord,
+    loading: followRecordLoading,
+    refetch: refetchFollowRecord,
+  } = useDocument('artistFollows', followDocId, { skip: !followDocId || isOwnProfile })
+  const isFollowing = optimisticFollow ?? Boolean(followRecord)
   const {
     data: publicProfile,
     loading: publicProfileLoading,
@@ -240,6 +254,45 @@ export default function MemberProfile() {
   const isLoading = publicProfileLoading || artistLoading || postsLoading || submissionsLoading || questsLoading || artworksLoading
   const totalReactions = visiblePosts.reduce((sum, post) => sum + countPostReactions(post), 0)
   const worksCount = Math.max(publicProfile?.worksCount || 0, artist?.worksCount || 0, displayArtworks.length, artist?.portfolio?.length || 0)
+
+  const handleFollow = async () => {
+    if (!firebaseUser?.uid) {
+      navigate('/auth/login')
+      return
+    }
+    if (!id || !followDocId || isOwnProfile || followLoading) return
+
+    const nextFollowing = !isFollowing
+    setOptimisticFollow(nextFollowing)
+    setFollowLoading(true)
+
+    const result = await executeTransaction(async (transaction) => {
+      const followRef = doc(db, 'artistFollows', followDocId)
+      const snapshot = await transaction.get(followRef)
+
+      if (snapshot.exists()) {
+        transaction.delete(followRef)
+        return false
+      }
+
+      transaction.set(followRef, {
+        userId: firebaseUser.uid,
+        artistId: id,
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+      })
+      return true
+    })
+
+    if (result.success) {
+      setOptimisticFollow(result.data ?? nextFollowing)
+      await refetchFollowRecord()
+    } else {
+      setOptimisticFollow(null)
+      console.error('Failed to update follow status:', result.error)
+    }
+    setFollowLoading(false)
+  }
 
   if (isLoading && !hasAnyProfile) {
     return (
@@ -331,14 +384,35 @@ export default function MemberProfile() {
                   </HStack>
                 )}
               </Box>
-              {artist && (
-                <Link to={`/artists/${id}`}>
-                  <Button bg="brand.500" color="white" borderRadius="full" _hover={{ bg: 'brand.600' }}>
-                    <ExternalLink size={17} />
-                    Artist Profile
+              <HStack gap={3} flexWrap="wrap">
+                {!isOwnProfile && (
+                  <Button
+                    onClick={handleFollow}
+                    disabled={followLoading || followRecordLoading}
+                    bg={isFollowing ? 'whiteAlpha.100' : 'brand.500'}
+                    color="white"
+                    border="1px solid"
+                    borderColor={isFollowing ? 'whiteAlpha.300' : 'brand.500'}
+                    borderRadius="full"
+                    px={5}
+                    _hover={{
+                      bg: isFollowing ? 'whiteAlpha.200' : 'brand.600',
+                      borderColor: isFollowing ? 'whiteAlpha.400' : 'brand.600',
+                    }}
+                  >
+                    {isFollowing ? <UserCheck size={17} /> : <UserPlus size={17} />}
+                    {followLoading || followRecordLoading ? 'Updating...' : isFollowing ? 'Following' : 'Follow'}
                   </Button>
-                </Link>
-              )}
+                )}
+                {artist && (
+                  <Link to={`/artists/${id}`}>
+                    <Button bg="whiteAlpha.100" color="white" borderRadius="full" _hover={{ bg: 'whiteAlpha.200' }}>
+                      <ExternalLink size={17} />
+                      Artist Profile
+                    </Button>
+                  </Link>
+                )}
+              </HStack>
             </Flex>
           </MotionBox>
 

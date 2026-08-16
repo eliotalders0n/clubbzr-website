@@ -248,67 +248,62 @@ export default function Quests() {
     <Box bg="gray.950" minH="100vh">
       <Header />
 
-      <Box as="main" pt={32} pb={20}>
-        <Container maxW="1440px" px={{ base: 6, md: 12, lg: 16, xl: 20 }}>
+      <Box as="main" pt={{ base: '76px', md: '112px' }} pb={20}>
+        <Container maxW="1680px" px={{ base: 4, md: 8, lg: 10 }}>
           {/* Hero */}
           <MotionBox
-            initial={{ opacity: 0, y: 30 }}
+            initial={{ opacity: 0, y: 24 }}
             animate={{ opacity: 1, y: 0 }}
-            transition={{ duration: 0.6 }}
-            textAlign="center"
-            mb={16}
+            transition={{ duration: 0.5 }}
+            mb={{ base: 5, md: 6 }}
           >
-            <Badge
-              bg="green.500"
-              color="white"
-              px={4}
-              py={1}
-              borderRadius="full"
-              fontSize="sm"
-              mb={6}
-            >
-              Creative Challenges
-            </Badge>
+            <Flex justify="space-between" align={{ base: 'start', md: 'center' }} gap={{ base: 4, md: 8 }} direction={{ base: 'column', md: 'row' }}>
+              <Box maxW="3xl">
+                <Text color="brand.500" fontSize="xs" fontWeight="semibold" textTransform="uppercase" letterSpacing="0.18em" mb={2}>
+                  Creative Challenges
+                </Text>
+                <Heading
+                  as="h1"
+                  fontSize={{ base: '2.35rem', md: '3rem', lg: '3.5rem' }}
+                  lineHeight={0.98}
+                  color="white"
+                  fontFamily="heading"
+                  mb={3}
+                >
+                  Side Quests
+                </Heading>
+                <Text color="whiteAlpha.500" fontSize={{ base: 'sm', md: 'md' }} maxW="2xl">
+                  Creative challenges to inspire, challenge, and transform your artistic practice
+                </Text>
+              </Box>
 
-            <Heading
-              as="h1"
-              fontSize={{ base: '3rem', md: '4rem', lg: '5rem' }}
-              lineHeight={1.1}
-              color="white"
-              fontFamily="heading"
-              mb={6}
-            >
-              Side Quests
-            </Heading>
-
-            <Text color="whiteAlpha.500" fontSize={{ base: 'md', md: 'xl' }} maxW="2xl" mx="auto" mb={8}>
-              Creative challenges to inspire, challenge, and transform your artistic practice
-            </Text>
-
-            <HStack gap={4} justify="center">
-              <Button
-                bg="green.500"
-                color="white"
-                borderRadius="full"
-                px={8}
-                _hover={{ bg: 'green.600' }}
-                onClick={() => document.getElementById('quests-grid')?.scrollIntoView({ behavior: 'smooth' })}
-              >
-                Explore Quests
-              </Button>
-              <Button
-                bg="transparent"
-                color="white"
-                border="1px solid"
-                borderColor="whiteAlpha.300"
-                borderRadius="full"
-                px={8}
-                _hover={{ bg: 'whiteAlpha.50' }}
-                onClick={handleGetRandomPrompt}
-              >
-                Get Random Prompt
-              </Button>
-            </HStack>
+              <HStack gap={3} flexShrink={0}>
+                <Button
+                  size="sm"
+                  bg="green.500"
+                  color="white"
+                  borderRadius="full"
+                  px={5}
+                  _hover={{ bg: 'green.600' }}
+                  onClick={() => document.getElementById('quests-grid')?.scrollIntoView({ behavior: 'smooth' })}
+                >
+                  Explore Quests
+                </Button>
+                <Button
+                  size="sm"
+                  bg="transparent"
+                  color="whiteAlpha.800"
+                  border="1px solid"
+                  borderColor="whiteAlpha.300"
+                  borderRadius="full"
+                  px={5}
+                  _hover={{ bg: 'whiteAlpha.50' }}
+                  onClick={handleGetRandomPrompt}
+                >
+                  Random Prompt
+                </Button>
+              </HStack>
+            </Flex>
           </MotionBox>
 
           {/* Loading State */}

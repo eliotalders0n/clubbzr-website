@@ -214,6 +214,7 @@ export function Modal({
             {(title || showCloseButton) && (
               <div
                 className="flex items-start justify-between p-6 pb-0"
+                style={{ padding: '24px 24px 0' }}
                 data-modal-header
               >
                 {title && (

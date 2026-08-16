@@ -32,12 +32,16 @@ interface CommunityPostProps {
   currentUserId?: string;
   onReaction?: (reactionType: ReactionType) => void;
   onComment?: (content: string) => void | Promise<void>;
+  onReplyComment?: (commentId: string, content: string) => void | Promise<void>;
+  onEditComment?: (commentId: string, content: string) => void | Promise<void>;
   onAuthRequired?: () => void;
   onCommentsOpen?: () => void | Promise<void>;
   onLoadMoreComments?: () => void | Promise<void>;
   onEdit?: () => void;
   onDelete?: () => void;
   onShare?: () => void;
+  isFollowingAuthor?: boolean;
+  onToggleFollow?: () => void | Promise<void>;
   className?: string;
 }
 
@@ -89,7 +93,9 @@ const formatTimestamp = (timestamp: unknown): string => {
 const CommentInput: React.FC<{
   onSubmit: (content: string) => void | Promise<void>;
   placeholder?: string;
-}> = ({ onSubmit, placeholder = 'Write a comment...' }) => {
+  buttonLabel?: string;
+  autoFocus?: boolean;
+}> = ({ onSubmit, placeholder = 'Write a comment...', buttonLabel = 'Post', autoFocus = false }) => {
   const [content, setContent] = useState('');
   const [isFocused, setIsFocused] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -122,6 +128,7 @@ const CommentInput: React.FC<{
     >
       <input
         type="text"
+        autoFocus={autoFocus}
         value={content}
         onChange={(e) => setContent(e.target.value)}
         onFocus={() => setIsFocused(true)}
@@ -161,7 +168,7 @@ const CommentInput: React.FC<{
         whileHover={content.trim() && !isSubmitting ? { scale: 1.02 } : {}}
         whileTap={content.trim() && !isSubmitting ? { scale: 0.98 } : {}}
       >
-        {isSubmitting ? 'Posting' : 'Post'}
+        {isSubmitting ? 'Posting' : buttonLabel}
       </motion.button>
     </form>
   );
@@ -416,76 +423,206 @@ const FullscreenMediaViewer: React.FC<{
 // Single comment component
 const CommentItem: React.FC<{
   comment: Comment;
-}> = ({ comment }) => (
-  <motion.div
-    initial={{ opacity: 0, y: 10 }}
-    animate={{ opacity: 1, y: 0 }}
-    style={{
-      display: 'flex',
-      gap: '12px',
-      alignItems: 'flex-start',
-      width: '100%',
-    }}
-  >
-    <Link to={getMemberHref(comment.userId)} style={{ textDecoration: 'none' }}>
-      <CommentAvatar name={comment.userName} photoURL={comment.userPhotoURL} />
-    </Link>
+  currentUserId?: string;
+  onReply?: (commentId: string, content: string) => void | Promise<void>;
+  onEdit?: (commentId: string, content: string) => void | Promise<void>;
+}> = ({ comment, currentUserId, onReply, onEdit }) => {
+  const [isReplying, setIsReplying] = useState(false);
+  const [isEditing, setIsEditing] = useState(false);
+  const [editContent, setEditContent] = useState(comment.content);
+  const [isSaving, setIsSaving] = useState(false);
+  const isOwner = currentUserId === comment.userId;
 
-    {/* Content */}
-    <div style={{ flex: 1, minWidth: 0 }}>
-      <div
-        style={{
-          backgroundColor: 'rgba(31, 31, 31, 0.92)',
-          borderRadius: '16px',
-          padding: '12px 14px',
-          border: '1px solid rgba(255, 255, 255, 0.03)',
-        }}
-      >
-        <Link
-          to={getMemberHref(comment.userId)}
+  const handleEditSubmit = async (event: React.FormEvent) => {
+    event.preventDefault();
+    const nextContent = editContent.trim();
+    if (!nextContent || nextContent === comment.content || !onEdit || isSaving) return;
+
+    setIsSaving(true);
+    try {
+      await onEdit(comment.id, nextContent);
+      setIsEditing(false);
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
+  return (
+    <motion.div
+      initial={{ opacity: 0, y: 10 }}
+      animate={{ opacity: 1, y: 0 }}
+      style={{ display: 'flex', gap: '12px', alignItems: 'flex-start', width: '100%' }}
+    >
+      <Link to={getMemberHref(comment.userId)} style={{ textDecoration: 'none' }}>
+        <CommentAvatar name={comment.userName} photoURL={comment.userPhotoURL} />
+      </Link>
+
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div
           style={{
-            display: 'block',
-            color: '#fff',
-            fontSize: '14px',
-            fontWeight: 600,
-            lineHeight: 1.25,
-            marginBottom: '6px',
-            textDecoration: 'none',
+            backgroundColor: 'rgba(31, 31, 31, 0.92)',
+            borderRadius: '16px',
+            padding: '12px 14px',
+            border: '1px solid rgba(255, 255, 255, 0.03)',
           }}
         >
-          {comment.userName}
-        </Link>
-        <p
-          style={{
-            color: '#D1D5DB',
-            fontSize: '14px',
-            lineHeight: 1.45,
-            wordBreak: 'break-word',
-            whiteSpace: 'pre-wrap',
-          }}
-        >
-          {comment.content}
-        </p>
-      </div>
-      <div
-        style={{
-          display: 'flex',
-          alignItems: 'center',
-          gap: '12px',
-          marginTop: '6px',
-          paddingLeft: '4px',
-        }}
-      >
-        <span style={{ color: '#737373', fontSize: '12px', lineHeight: 1 }}>
-          {formatTimestamp(comment.createdAt)}
-        </span>
-        {comment.isEdited && (
-          <span style={{ color: '#525252', fontSize: '12px', lineHeight: 1 }}>Edited</span>
+          <Link
+            to={getMemberHref(comment.userId)}
+            style={{
+              display: 'block',
+              color: '#fff',
+              fontSize: '14px',
+              fontWeight: 600,
+              lineHeight: 1.25,
+              marginBottom: '6px',
+              textDecoration: 'none',
+            }}
+          >
+            {comment.userName}
+          </Link>
+
+          {isEditing ? (
+            <form onSubmit={handleEditSubmit}>
+              <input
+                autoFocus
+                value={editContent}
+                onChange={(event) => setEditContent(event.target.value)}
+                style={{
+                  width: '100%',
+                  minHeight: '40px',
+                  padding: '0 12px',
+                  borderRadius: '10px',
+                  border: '1px solid rgba(255, 107, 53, 0.6)',
+                  backgroundColor: '#111',
+                  color: '#fff',
+                  outline: 'none',
+                  fontSize: '14px',
+                }}
+              />
+              <div style={{ display: 'flex', gap: '8px', marginTop: '10px' }}>
+                <button
+                  type="submit"
+                  disabled={!editContent.trim() || editContent.trim() === comment.content || isSaving}
+                  style={{ background: 'none', border: 'none', padding: 0, cursor: 'pointer', color: '#FF8A5F', fontSize: '12px', fontWeight: 600 }}
+                >
+                  {isSaving ? 'Saving...' : 'Save'}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setEditContent(comment.content);
+                    setIsEditing(false);
+                  }}
+                  style={{ background: 'none', border: 'none', padding: 0, cursor: 'pointer', color: '#9CA3AF', fontSize: '12px' }}
+                >
+                  Cancel
+                </button>
+              </div>
+            </form>
+          ) : (
+            <p
+              style={{
+                color: '#D1D5DB',
+                fontSize: '14px',
+                lineHeight: 1.45,
+                wordBreak: 'break-word',
+                whiteSpace: 'pre-wrap',
+              }}
+            >
+              {comment.content}
+            </p>
+          )}
+        </div>
+
+        <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginTop: '6px', paddingLeft: '4px' }}>
+          <span style={{ color: '#737373', fontSize: '12px', lineHeight: 1 }}>
+            {formatTimestamp(comment.createdAt)}
+          </span>
+          {comment.isEdited && (
+            <span style={{ color: '#525252', fontSize: '12px', lineHeight: 1 }}>Edited</span>
+          )}
+          {onReply && (
+            <button
+              type="button"
+              onClick={() => setIsReplying((value) => !value)}
+              style={{ background: 'none', border: 'none', padding: 0, cursor: 'pointer', color: isReplying ? '#FF8A5F' : '#9CA3AF', fontSize: '12px', fontWeight: 600 }}
+            >
+              Reply
+            </button>
+          )}
+          {isOwner && onEdit && !isEditing && (
+            <button
+              type="button"
+              onClick={() => setIsEditing(true)}
+              style={{ background: 'none', border: 'none', padding: 0, cursor: 'pointer', color: '#9CA3AF', fontSize: '12px', fontWeight: 600 }}
+            >
+              Edit
+            </button>
+          )}
+        </div>
+
+        {isReplying && onReply && (
+          <div style={{ marginTop: '10px' }}>
+            <CommentInput
+              autoFocus
+              buttonLabel="Reply"
+              placeholder={`Reply to ${comment.userName}...`}
+              onSubmit={async (content) => {
+                await onReply(comment.id, content);
+                setIsReplying(false);
+              }}
+            />
+          </div>
         )}
       </div>
+    </motion.div>
+  );
+};
+
+const CommentThread: React.FC<{
+  comment: Comment;
+  repliesByParent: Map<string, Comment[]>;
+  currentUserId?: string;
+  onReply?: (commentId: string, content: string) => void | Promise<void>;
+  onEdit?: (commentId: string, content: string) => void | Promise<void>;
+}> = ({ comment, repliesByParent, currentUserId, onReply, onEdit }) => {
+  const replies = repliesByParent.get(comment.id) || [];
+
+  return (
+    <div>
+      <CommentItem
+        comment={comment}
+        currentUserId={currentUserId}
+        onReply={onReply}
+        onEdit={onEdit}
+      />
+      {replies.length > 0 && (
+        <div
+          style={{
+            display: 'flex',
+            flexDirection: 'column',
+            gap: '14px',
+            marginTop: '14px',
+            marginLeft: '17px',
+            paddingLeft: '18px',
+            borderLeft: '1px solid rgba(255, 255, 255, 0.1)',
+          }}
+        >
+          {replies.map((reply) => (
+            <CommentThread
+              key={reply.id}
+              comment={reply}
+              repliesByParent={repliesByParent}
+              currentUserId={currentUserId}
+              onReply={onReply}
+              onEdit={onEdit}
+            />
+          ))}
+        </div>
+      )}
     </div>
-  </motion.div>
-);
+  );
+};
 
 // Post menu dropdown
 const PostMenu: React.FC<{
@@ -493,8 +630,11 @@ const PostMenu: React.FC<{
   onEdit?: () => void;
   onDelete?: () => void;
   onShare?: () => void;
-}> = ({ isOwner, onEdit, onDelete, onShare }) => {
+  isFollowingAuthor?: boolean;
+  onToggleFollow?: () => void | Promise<void>;
+}> = ({ isOwner, onEdit, onDelete, onShare, isFollowingAuthor = false, onToggleFollow }) => {
   const [isOpen, setIsOpen] = useState(false);
+  const [isFollowUpdating, setIsFollowUpdating] = useState(false);
 
   return (
     <div className="relative">
@@ -530,6 +670,33 @@ const PostMenu: React.FC<{
               exit={{ opacity: 0, scale: 0.9, y: -10 }}
               className="absolute right-0 top-full z-20 mt-2 w-52 overflow-hidden rounded-2xl border border-bzr-gray-700/80 bg-bzr-gray-800/95 py-1.5 pl-3 pr-1.5 shadow-xl backdrop-blur-md"
             >
+              {!isOwner && onToggleFollow && (
+                <button
+                  disabled={isFollowUpdating}
+                  onClick={async () => {
+                    setIsFollowUpdating(true);
+                    try {
+                      await onToggleFollow();
+                      setIsOpen(false);
+                    } finally {
+                      setIsFollowUpdating(false);
+                    }
+                  }}
+                  className="flex min-h-10 w-full items-center gap-3 rounded-xl py-2 pl-2 pr-3 text-left text-sm font-medium leading-none text-bzr-gray-200 transition-colors hover:bg-white/5 hover:text-bzr-white disabled:cursor-wait disabled:opacity-60"
+                >
+                  <span className="flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-lg bg-bzr-orange/10 text-bzr-orange">
+                    <svg className="h-4.5 w-4.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      {isFollowingAuthor ? (
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M16 21v-2a4 4 0 00-4-4H6a4 4 0 00-4 4v2m7-10a4 4 0 100-8 4 4 0 000 8zm7 0l2 2 4-4" />
+                      ) : (
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19a6 6 0 00-12 0m6-8a4 4 0 100-8 4 4 0 000 8zm10-3v6m3-3h-6" />
+                      )}
+                    </svg>
+                  </span>
+                  <span>{isFollowUpdating ? 'Updating...' : isFollowingAuthor ? 'Unfollow User' : 'Follow User'}</span>
+                </button>
+              )}
+
               {onShare && (
                 <button
                   onClick={() => {
@@ -611,12 +778,16 @@ export const CommunityPost: React.FC<CommunityPostProps> = ({
   currentUserId,
   onReaction,
   onComment,
+  onReplyComment,
+  onEditComment,
   onAuthRequired,
   onCommentsOpen,
   onLoadMoreComments,
   onEdit,
   onDelete,
   onShare,
+  isFollowingAuthor,
+  onToggleFollow,
   className,
 }) => {
   const [showComments, setShowComments] = useState(false);
@@ -631,6 +802,15 @@ export const CommunityPost: React.FC<CommunityPostProps> = ({
   const mediaUrls = post.mediaUrls || [];
   const hasMedia = mediaUrls.length > 0;
   const displayCommentsCount = Math.max(post.commentsCount || 0, comments.length);
+  const commentIds = new Set(comments.map((comment) => comment.id));
+  const rootComments = comments.filter((comment) => !comment.replyTo || !commentIds.has(comment.replyTo));
+  const repliesByParent = comments.reduce<Map<string, Comment[]>>((threads, comment) => {
+    if (!comment.replyTo || !commentIds.has(comment.replyTo)) return threads;
+    const replies = threads.get(comment.replyTo) || [];
+    replies.push(comment);
+    threads.set(comment.replyTo, replies);
+    return threads;
+  }, new Map());
   const safeActiveMediaIndex = mediaUrls.length === 0
     ? 0
     : Math.min(activeMediaIndex, mediaUrls.length - 1);
@@ -743,6 +923,8 @@ export const CommunityPost: React.FC<CommunityPostProps> = ({
             onEdit={onEdit}
             onDelete={onDelete}
             onShare={onShare}
+            isFollowingAuthor={isFollowingAuthor}
+            onToggleFollow={onToggleFollow}
           />
         </div>
       </div>
@@ -1120,10 +1302,14 @@ export const CommunityPost: React.FC<CommunityPostProps> = ({
                     paddingRight: '2px',
                   }}
                 >
-                  {comments.map((comment) => (
-                    <CommentItem
+                  {rootComments.map((comment) => (
+                    <CommentThread
                       key={comment.id}
                       comment={comment}
+                      repliesByParent={repliesByParent}
+                      currentUserId={currentUserId}
+                      onReply={onReplyComment}
+                      onEdit={onEditComment}
                     />
                   ))}
                   {(commentsHasMore || commentsLoading) && (

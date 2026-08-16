@@ -20,6 +20,7 @@ import {
   Image,
 } from '@chakra-ui/react'
 import { AnimatePresence, motion } from 'framer-motion'
+import { Send } from 'lucide-react'
 
 import { Header } from '@/components/layout/Header'
 import { Footer } from '@/components/layout/Footer'
@@ -44,6 +45,30 @@ const REACTION_TYPES: { type: ReactionType; emoji: string }[] = [
 ]
 
 const IMAGE_URL_PATTERN = /\.(avif|gif|jpe?g|png|webp)(?:$|[?#])/i
+
+const isUsableImageReference = (url: string): boolean => {
+  const value = url.trim()
+  if (!value) return false
+  if (value.startsWith('/') || value.startsWith('data:image/') || value.startsWith('blob:')) return true
+
+  try {
+    const parsed = new URL(value)
+    return parsed.protocol === 'http:' || parsed.protocol === 'https:'
+  } catch {
+    return false
+  }
+}
+
+const getQuestImageCandidates = (quest: {
+  inspirationLinks?: string[]
+  exampleImages?: string[]
+}) => {
+  const candidates = [...(quest.inspirationLinks || []), ...(quest.exampleImages || [])]
+    .map((url) => url.trim())
+    .filter(isUsableImageReference)
+
+  return [...new Set(candidates)]
+}
 
 const isImageUrl = (url: string): boolean => {
   const value = url.trim()
@@ -260,6 +285,7 @@ export default function QuestDetail() {
   const [selectedFiles, setSelectedFiles] = useState<File[]>([])
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [submitError, setSubmitError] = useState<string | null>(null)
+  const [failedQuestImages, setFailedQuestImages] = useState<Record<string, true>>({})
   const [awardedBadges] = useState<PassportBadge[]>([])
   const [showAwardModal, setShowAwardModal] = useState(false)
   const fileInputRef = useRef<HTMLInputElement>(null)
@@ -281,6 +307,8 @@ export default function QuestDetail() {
     () => [...rawSubmissions].sort((a, b) => toMillis(b.createdAt) - toMillis(a.createdAt)),
     [rawSubmissions]
   )
+  const questImageCandidates = useMemo(() => (quest ? getQuestImageCandidates(quest) : []), [quest])
+  const questImage = questImageCandidates.find((candidate) => !failedQuestImages[candidate])
 
   const { create: createSubmission } = useMutation('questSubmissions')
 
@@ -444,80 +472,114 @@ export default function QuestDetail() {
             transition={{ duration: 0.6 }}
             mb={{ base: 10, md: 16 }}
           >
-            <HStack gap={3} mb={{ base: 4, md: 6 }} flexWrap="wrap">
-              <Badge
-                bg="green.500"
-                color="white"
-                px={3}
-                py={1}
-                borderRadius="full"
-                fontSize="sm"
-                textTransform="capitalize"
-              >
-                {quest.category.replace('_', ' ')}
-              </Badge>
-              <Badge
-                bg={`${difficultyColor}.500`}
-                color="white"
-                px={3}
-                py={1}
-                borderRadius="full"
-                fontSize="sm"
-                textTransform="capitalize"
-              >
-                {quest.difficulty}
-              </Badge>
-            </HStack>
-
-            <Heading
-              as="h1"
-              fontSize={{ base: '2.35rem', md: '4rem', lg: '5rem' }}
-              lineHeight={1.1}
-              color="white"
-              fontFamily="heading"
-              mb={{ base: 4, md: 6 }}
-              overflowWrap="anywhere"
+            <Grid
+              templateColumns={{ base: '1fr', lg: questImage ? 'minmax(0, 1fr) minmax(420px, 0.9fr)' : '1fr' }}
+              gap={{ base: 8, md: 10, lg: 14 }}
+              alignItems="center"
             >
-              {quest.title}
-            </Heading>
+              <Box minW={0}>
+                <HStack gap={3} mb={{ base: 4, md: 6 }} flexWrap="wrap">
+                  <Badge
+                    bg="green.500"
+                    color="white"
+                    px={3}
+                    py={1}
+                    borderRadius="full"
+                    fontSize="sm"
+                    textTransform="capitalize"
+                  >
+                    {quest.category.replace('_', ' ')}
+                  </Badge>
+                  <Badge
+                    bg={`${difficultyColor}.500`}
+                    color="white"
+                    px={3}
+                    py={1}
+                    borderRadius="full"
+                    fontSize="sm"
+                    textTransform="capitalize"
+                  >
+                    {quest.difficulty}
+                  </Badge>
+                </HStack>
 
-            <Text color="whiteAlpha.600" fontSize={{ base: 'md', md: 'xl' }} maxW="2xl" mb={{ base: 6, md: 8 }} lineHeight="tall">
-              {quest.description}
-            </Text>
+                <Heading
+                  as="h1"
+                  fontSize={{ base: '2.35rem', md: '4rem', lg: '5rem' }}
+                  lineHeight={1.1}
+                  color="white"
+                  fontFamily="heading"
+                  mb={{ base: 4, md: 6 }}
+                  overflowWrap="anywhere"
+                >
+                  {quest.title}
+                </Heading>
 
-            <Flex direction={{ base: 'column', sm: 'row' }} gap={{ base: 4, sm: 6 }} align={{ base: 'stretch', sm: 'center' }}>
-              <Button
-                bg="green.500"
-                color="white"
-                px={8}
-                py={6}
-                borderRadius="full"
-                fontSize="md"
-                fontWeight="medium"
-                w={{ base: 'full', sm: 'auto' }}
-                _hover={{ bg: 'green.600' }}
-                onClick={() => {
-                  if (!user) {
-                    window.location.href = '/auth/login'
-                  } else {
-                    setShowSubmitForm(true)
-                  }
-                }}
-              >
-                {user ? 'Submit Response' : 'Sign in to Submit'}
-              </Button>
-              <HStack gap={6} justify={{ base: 'space-between', sm: 'flex-start' }}>
-                <Text color="whiteAlpha.500">
-                  <Text as="span" color="white" fontWeight="bold">
-                    {quest.submissionCount}
-                  </Text>{' '}
-                  submissions
+                <Text color="whiteAlpha.600" fontSize={{ base: 'md', md: 'xl' }} maxW="2xl" mb={{ base: 6, md: 8 }} lineHeight="tall">
+                  {quest.description}
                 </Text>
-                <Text color="green.400" fontWeight="medium">
-                  {quest.points} pts
-                </Text>
-              </HStack>
-            </Flex>
+
+                <Flex direction={{ base: 'column', sm: 'row' }} gap={{ base: 4, sm: 6 }} align={{ base: 'stretch', sm: 'center' }}>
+                  <Button
+                    bg="green.500"
+                    color="white"
+                    px={8}
+                    py={6}
+                    borderRadius="full"
+                    fontSize="md"
+                    fontWeight="medium"
+                    w={{ base: 'full', sm: 'auto' }}
+                    _hover={{ bg: 'green.600' }}
+                    onClick={() => {
+                      if (!user) {
+                        window.location.href = '/auth/login'
+                      } else {
+                        setShowSubmitForm(true)
+                      }
+                    }}
+                  >
+                    {user ? 'Submit Response' : 'Sign in to Submit'}
+                  </Button>
+                  <HStack gap={6} justify={{ base: 'space-between', sm: 'flex-start' }}>
+                    <Text color="whiteAlpha.500">
+                      <Text as="span" color="white" fontWeight="bold">
+                        {quest.submissionCount}
+                      </Text>{' '}
+                      submissions
+                    </Text>
+                    <Text color="green.400" fontWeight="medium">
+                      {quest.points} pts
+                    </Text>
+                  </HStack>
+                </Flex>
+              </Box>
+
+              {questImage && (
+                <Box
+                  minW={0}
+                  p={{ base: 2, md: 3 }}
+                  bg="gray.900"
+                  border="1px solid"
+                  borderColor="whiteAlpha.200"
+                  borderRadius={{ base: 'xl', md: '2xl' }}
+                  overflow="hidden"
+                  boxShadow="0 24px 70px rgba(0, 0, 0, 0.32)"
+                >
+                  <Image
+                    src={questImage}
+                    alt={`${quest.title} quest artwork`}
+                    display="block"
+                    w="full"
+                    h="auto"
+                    maxH={{ base: '70vh', lg: '560px' }}
+                    objectFit="contain"
+                    borderRadius={{ base: 'lg', md: 'xl' }}
+                    bg="black"
+                    onError={() => setFailedQuestImages((current) => ({ ...current, [questImage]: true }))}
+                  />
+                </Box>
+              )}
+            </Grid>
           </MotionBox>
 
           {/* Instructions & Sidebar */}
@@ -737,10 +799,27 @@ export default function QuestDetail() {
                   <Button
                     bg="green.500"
                     color="white"
+                    h="52px"
+                    px={{ base: 6, sm: 8 }}
+                    gap={2.5}
                     borderRadius="full"
-                    _hover={{ bg: 'green.600' }}
+                    border="1px solid"
+                    borderColor="green.400"
+                    fontSize="md"
+                    fontWeight="semibold"
+                    letterSpacing="-0.01em"
+                    boxShadow="0 10px 30px rgba(34, 197, 94, 0.2)"
+                    transition="transform 0.2s ease, box-shadow 0.2s ease, background-color 0.2s ease"
+                    _hover={{
+                      bg: 'green.400',
+                      transform: 'translateY(-2px)',
+                      boxShadow: '0 14px 34px rgba(34, 197, 94, 0.3)',
+                    }}
+                    _active={{ bg: 'green.600', transform: 'translateY(0)' }}
+                    _focusVisible={{ outline: '2px solid', outlineColor: 'green.200', outlineOffset: '3px' }}
                     onClick={() => setShowSubmitForm(true)}
                   >
+                    <Send size={17} />
                     Submit Your Response
                   </Button>
                 )}

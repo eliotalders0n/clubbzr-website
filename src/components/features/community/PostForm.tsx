@@ -150,12 +150,13 @@ export const PostForm: React.FC<PostFormProps> = ({
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [showSuccess, setShowSuccess] = useState(false);
   const [isFocused, setIsFocused] = useState(false);
-  const [shareLocation, setShareLocation] = useState(false);
+  const [shareLocation, setShareLocation] = useState(true);
   const [locationState, setLocationState] = useState<'idle' | 'loading' | 'ready' | 'error'>('idle');
   const [postCoordinates, setPostCoordinates] = useState<{ latitude: number; longitude: number } | null>(null);
   const [nearbyPlace, setNearbyPlace] = useState<ArtLocation | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const hasRequestedDefaultLocationRef = useRef(false);
   const selectedPrompt = initialPrompt && initialPrompt.trim().length > 0 ? initialPrompt : null;
 
   // Auto-resize textarea
@@ -193,7 +194,7 @@ export const PostForm: React.FC<PostFormProps> = ({
   // Validate form
   const isValid = content.trim().length > 0 || files.length > 0;
 
-  const toggleLocation = (checked: boolean) => {
+  const toggleLocation = useCallback((checked: boolean) => {
     setShareLocation(checked);
     if (!checked) {
       setPostCoordinates(null);
@@ -228,7 +229,13 @@ export const PostForm: React.FC<PostFormProps> = ({
       },
       { enableHighAccuracy: false, timeout: 10000 }
     );
-  };
+  }, [places]);
+
+  React.useEffect(() => {
+    if (hasRequestedDefaultLocationRef.current) return;
+    hasRequestedDefaultLocationRef.current = true;
+    toggleLocation(true);
+  }, [toggleLocation]);
 
   // Handle submit
   const handleSubmit = async (e: React.FormEvent) => {
@@ -372,18 +379,24 @@ export const PostForm: React.FC<PostFormProps> = ({
               adjustTextareaHeight();
             }}
             onFocus={() => setIsFocused(true)}
+            onBlur={() => setIsFocused(false)}
             placeholder="Share something with the community..."
             style={{
               flex: 1,
-              backgroundColor: 'transparent',
+              minWidth: 0,
+              boxSizing: 'border-box',
+              backgroundColor: '#0F0F0F',
               color: '#fff',
               resize: 'none',
               outline: 'none',
               minHeight: '100px',
               fontSize: '16px',
               lineHeight: 1.6,
-              paddingTop: '8px',
-              border: 'none',
+              padding: '14px 16px',
+              border: `1px solid ${isFocused ? 'rgba(255, 107, 53, 0.65)' : '#2A2A2A'}`,
+              borderRadius: '12px',
+              boxShadow: isFocused ? '0 0 0 3px rgba(255, 107, 53, 0.1)' : 'none',
+              transition: 'border-color 0.2s ease, box-shadow 0.2s ease',
             }}
             disabled={isSubmitting}
           />

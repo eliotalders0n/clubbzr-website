@@ -1,7 +1,7 @@
 'use client'
 
 import { useState, useMemo } from 'react'
-import { Link, useNavigate } from 'react-router-dom'
+import { Link } from 'react-router-dom'
 import {
   Box,
   Container,
@@ -23,7 +23,7 @@ import { Timestamp } from 'firebase/firestore'
 import { Header } from '@/components/layout/Header'
 import { Footer } from '@/components/layout/Footer'
 import { useCollection } from '@/hooks/useFirestore'
-import type { Session, SessionType, SessionStatus } from '../../lib/schema'
+import type { Session, SessionType } from '../../lib/schema'
 
 // Fallback image for sessions without cover
 import eventImgFallback from '@/assets/images/events/IMG_9074.jpeg'
@@ -135,7 +135,6 @@ function SessionCard({ session }: { session: Session }) {
 }
 
 export default function Sessions() {
-  const navigate = useNavigate()
   const [activeTab, setActiveTab] = useState<'upcoming' | 'past'>('upcoming')
 
   // Fetch sessions from Firebase - get all and filter client-side to avoid index requirements
@@ -197,37 +196,38 @@ export default function Sessions() {
     <Box bg="gray.950" minH="100vh">
       <Header />
 
-      <Box as="main" pt={32} pb={20}>
-        <Container maxW="1440px" px={{ base: 6, md: 12, lg: 16, xl: 20 }}>
+      <Box as="main" pt={{ base: '76px', md: '112px' }} pb={20}>
+        <Container maxW="1680px" px={{ base: 4, md: 8, lg: 10 }}>
           {/* Hero */}
           <MotionBox
-            initial={{ opacity: 0, y: 30 }}
+            initial={{ opacity: 0, y: 24 }}
             animate={{ opacity: 1, y: 0 }}
-            transition={{ duration: 0.6 }}
-            mb={16}
+            transition={{ duration: 0.5 }}
+            mb={{ base: 5, md: 6 }}
           >
             <Text
               color="brand.500"
-              fontSize="sm"
+              fontSize="xs"
+              fontWeight="semibold"
               textTransform="uppercase"
-              letterSpacing="0.3em"
-              mb={4}
+              letterSpacing="0.18em"
+              mb={2}
             >
               Sessions & Events
             </Text>
 
             <Heading
               as="h1"
-              fontSize={{ base: '3rem', md: '4rem', lg: '5rem' }}
-              lineHeight={1.1}
+              fontSize={{ base: '2.35rem', md: '3rem', lg: '3.5rem' }}
+              lineHeight={0.98}
               color="white"
               fontFamily="heading"
-              mb={6}
+              mb={3}
             >
               Come Create With Us
             </Heading>
 
-            <Text color="whiteAlpha.500" fontSize={{ base: 'md', md: 'lg' }} maxW="2xl">
+            <Text color="whiteAlpha.500" fontSize={{ base: 'sm', md: 'md' }} maxW="2xl">
               Join workshops, talks, gatherings, and creative adventures. Every session is an
               opportunity to explore, connect, and grow.
             </Text>

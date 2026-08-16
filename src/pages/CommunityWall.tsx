@@ -10,6 +10,7 @@ import {
   limit,
   orderBy,
   query,
+  serverTimestamp,
   startAfter,
   Timestamp,
   updateDoc,
@@ -29,15 +30,16 @@ import {
   Spinner,
 } from '@chakra-ui/react'
 import { motion } from 'framer-motion'
-import { ArrowUpRight, Image as ImageIcon, LockKeyhole, LogIn, MapPinned, UserPlus } from 'lucide-react'
+import { Image as ImageIcon, LockKeyhole, LogIn, MapPinned, UserPlus } from 'lucide-react'
 
 import { Header } from '@/components/layout/Header'
 import { Footer } from '@/components/layout/Footer'
 import { CommunityPost, CommunityPostSkeleton, PostForm, WallActivityCard, type WallActivityItem } from '@/components/features/community'
+import { Modal } from '@/components/ui/Modal'
 import { useCollection, useInfinitePagination } from '@/hooks'
 import { useAuth } from '@/contexts/AuthContext'
 import { db } from '../../lib/config'
-import { createDocument, deleteDocument, getDocumentCount, updateDocument } from '../../lib/firestore'
+import { createDocument, deleteDocument, executeTransaction, getDocumentCount, updateDocument } from '../../lib/firestore'
 import { createQuestCompletionBadges } from '../../lib/badges'
 import {
   getNextQuestSubmissionVoteState,
@@ -48,6 +50,7 @@ import {
 } from '../../lib/submissionVotes'
 import type {
   ArtLocation,
+  ArtistFollow,
   CommunityPost as CommunityPostType,
   Comment,
   CreateDocument,
@@ -442,6 +445,7 @@ export default function CommunityWall() {
   const { user, firebaseUser } = useAuth()
   const [activeTab, setActiveTab] = useState<'all' | 'following'>('all')
   const [selectedPrompt, setSelectedPrompt] = useState<string | null>(() => locationPrompt)
+  const [isPostComposerOpen, setIsPostComposerOpen] = useState(() => Boolean(locationPrompt))
   const [localPostReactions, setLocalPostReactions] = useState<Record<string, Reactions>>({})
   const [localSubmissionVotes, setLocalSubmissionVotes] = useState<Record<string, QuestSubmissionVoteState>>({})
   const [localCommentCountDeltas, setLocalCommentCountDeltas] = useState<Record<string, number>>({})
@@ -505,6 +509,14 @@ export default function CommunityWall() {
   const { data: communityPlaces } = useCollection('artLocations', {
     where: [{ field: 'isActive', operator: '==', value: true }],
     limit: 100,
+  })
+  const {
+    data: followingRecords,
+    loading: followingLoading,
+    refetch: refetchFollowingRecords,
+  } = useCollection('artistFollows', {
+    where: currentUserId ? [{ field: 'userId', operator: '==', value: currentUserId }] : [],
+    skip: !currentUserId,
   })
 
   const {
@@ -584,6 +596,23 @@ export default function CommunityWall() {
     return feedItems.filter((item) => item.type === 'badge_earned').length
   }, [feedItems])
 
+  const followedMemberIds = useMemo(
+    () => new Set((followingRecords as ArtistFollow[]).map((follow) => follow.artistId)),
+    [followingRecords]
+  )
+
+  const activeFeedItems = useMemo(() => {
+    if (activeTab === 'all') return feedItems
+
+    return feedItems.filter((item) => {
+      if (item.type === 'post') return followedMemberIds.has(item.post.userId)
+      if (item.type === 'quest_completed' || item.type === 'badge_earned') {
+        return followedMemberIds.has(item.submission.userId)
+      }
+      return followedMemberIds.has(item.exhibition.curator.userId)
+    })
+  }, [activeTab, feedItems, followedMemberIds])
+
   useEffect(() => {
     let cancelled = false
 
@@ -626,22 +655,22 @@ export default function CommunityWall() {
   }, [wallLoadedAtMs])
 
   const visibleFeedItems = useMemo(() => {
-    return feedItems.slice(0, renderedFeedCount)
-  }, [feedItems, renderedFeedCount])
+    return activeFeedItems.slice(0, renderedFeedCount)
+  }, [activeFeedItems, renderedFeedCount])
 
   const displayFeedItems = useMemo(() => {
-    return isGuest ? feedItems.slice(0, GUEST_READABLE_FEED_ITEM_COUNT) : visibleFeedItems
-  }, [feedItems, isGuest, visibleFeedItems])
+    return isGuest ? activeFeedItems.slice(0, GUEST_READABLE_FEED_ITEM_COUNT) : visibleFeedItems
+  }, [activeFeedItems, isGuest, visibleFeedItems])
 
-  const hasHiddenLoadedFeedItems = renderedFeedCount < feedItems.length
+  const hasHiddenLoadedFeedItems = renderedFeedCount < activeFeedItems.length
   const canLoadMorePosts = !isGuest && (hasHiddenLoadedFeedItems || hasMore)
-  const hasGuestLockedFeed = isGuest && (feedItems.length > GUEST_READABLE_FEED_ITEM_COUNT || hasMore)
+  const hasGuestLockedFeed = isGuest && (activeFeedItems.length > GUEST_READABLE_FEED_ITEM_COUNT || hasMore)
 
   const handleLoadMorePosts = useCallback(() => {
     if (postsLoading || postLoadInFlightRef.current) return
 
     if (hasHiddenLoadedFeedItems) {
-      setRenderedFeedCount((count) => Math.min(count + POST_RENDER_BATCH_SIZE, feedItems.length))
+      setRenderedFeedCount((count) => Math.min(count + POST_RENDER_BATCH_SIZE, activeFeedItems.length))
       return
     }
 
@@ -652,7 +681,7 @@ export default function CommunityWall() {
         postLoadInFlightRef.current = false
       })
     }
-  }, [feedItems.length, hasHiddenLoadedFeedItems, hasMore, loadMore, postsLoading])
+  }, [activeFeedItems.length, hasHiddenLoadedFeedItems, hasMore, loadMore, postsLoading])
 
   useEffect(() => {
     const sentinel = postLoadSentinelRef.current
@@ -780,6 +809,7 @@ export default function CommunityWall() {
       setRenderedFeedCount(POST_RENDER_BATCH_SIZE)
       void refetchPosts()
       setSelectedPrompt(null)
+      setIsPostComposerOpen(false)
     } else {
       console.error('Failed to create post:', result.error)
     }
@@ -816,6 +846,40 @@ export default function CommunityWall() {
     }
   }, [currentUserId, navigate, refetchQuestSubmissions])
 
+  const handleToggleFollow = useCallback(async (memberId: string) => {
+    if (!currentUserId) {
+      handleSignIn()
+      return
+    }
+    if (!memberId || memberId === currentUserId) return
+
+    const followDocId = `${currentUserId}_${memberId}`
+    const result = await executeTransaction(async (transaction) => {
+      const followRef = doc(db, 'artistFollows', followDocId)
+      const snapshot = await transaction.get(followRef)
+
+      if (snapshot.exists()) {
+        transaction.delete(followRef)
+        return false
+      }
+
+      transaction.set(followRef, {
+        userId: currentUserId,
+        artistId: memberId,
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+      })
+      return true
+    })
+
+    if (!result.success) {
+      console.error('Failed to update follow status:', result.error)
+      throw new Error(result.error?.message || 'Failed to update follow status')
+    }
+
+    await refetchFollowingRecords()
+  }, [currentUserId, handleSignIn, refetchFollowingRecords])
+
   // Handle reaction toggle
   const handleReaction = useCallback(async (postId: string, reactionType: ReactionType, currentReactions: CommunityPostType['reactions']) => {
     if (!currentUserId) {
@@ -848,7 +912,7 @@ export default function CommunityWall() {
   }, [currentUserId, navigate])
 
   // Handle adding a comment
-  const handleComment = useCallback(async (postId: string, content: string) => {
+  const handleComment = useCallback(async (postId: string, content: string, replyTo?: string) => {
     if (!currentUserId) return
 
     // Build comment data, omitting undefined/null optional fields
@@ -859,6 +923,7 @@ export default function CommunityWall() {
       userName: currentUserName,
       ...(currentUserPhoto ? { userPhotoURL: currentUserPhoto } : {}),
       content,
+      ...(replyTo ? { replyTo } : {}),
       reactions: {
         love: [],
         fire: [],
@@ -894,9 +959,17 @@ export default function CommunityWall() {
       }))
 
       try {
-        await updateDoc(doc(db, 'communityPosts', postId), {
-          commentsCount: increment(1),
-        })
+        const updates = [
+          updateDoc(doc(db, 'communityPosts', postId), {
+            commentsCount: increment(1),
+          }),
+        ]
+        if (replyTo) {
+          updates.push(updateDoc(doc(db, 'comments', replyTo), {
+            repliesCount: increment(1),
+          }))
+        }
+        await Promise.all(updates)
       } catch (error) {
         console.error('Failed to update comment count:', error)
       }
@@ -904,6 +977,37 @@ export default function CommunityWall() {
       console.error('Failed to create comment:', result.error)
     }
   }, [currentUserId, currentUserName, currentUserPhoto])
+
+  const handleEditComment = useCallback(async (postId: string, commentId: string, content: string) => {
+    const nextContent = content.trim()
+    if (!currentUserId || !nextContent) return
+
+    const result = await updateDocument('comments', commentId, {
+      content: nextContent,
+      isEdited: true,
+      editedAt: Timestamp.now(),
+    })
+
+    if (!result.success || !result.data) {
+      console.error('Failed to update comment:', result.error)
+      throw new Error(result.error?.message || 'Failed to update comment')
+    }
+
+    setCommentPages((prev) => {
+      const currentPage = prev[postId]
+      if (!currentPage) return prev
+
+      return {
+        ...prev,
+        [postId]: {
+          ...currentPage,
+          comments: currentPage.comments.map((comment) => (
+            comment.id === commentId ? result.data! : comment
+          )),
+        },
+      }
+    })
+  }, [currentUserId])
 
   // Handle deleting a post
   const handleDeletePost = useCallback(async (postId: string) => {
@@ -935,8 +1039,9 @@ export default function CommunityWall() {
   // Handle prompt selection
   const handlePromptSelect = (prompt: string) => {
     setSelectedPrompt(prompt)
-    // Scroll to top smoothly to show the post form
-    window.scrollTo({ top: 0, behavior: 'smooth' })
+    if (currentUserId) {
+      setIsPostComposerOpen(true)
+    }
   }
 
   const communityStatRows = [
@@ -953,94 +1058,127 @@ export default function CommunityWall() {
     <Box bg="gray.950" minH="100vh">
       <Header />
 
-      <Box as="main" pt={{ base: 20, md: 32 }} pb={20}>
+      <Box as="main" pt={{ base: 16, md: 24 }} pb={20}>
         <Container maxW="1440px" px={{ base: 4, md: 12, lg: 16, xl: 20 }}>
-          {/* Hero - More compact on mobile */}
+          {/* Compact composer toolbar */}
           <MotionBox
-            initial={{ opacity: 0, y: 30 }}
+            initial={{ opacity: 0, y: 12 }}
             animate={{ opacity: 1, y: 0 }}
-            transition={{ duration: 0.6 }}
-            mb={{ base: 6, md: 12 }}
+            transition={{ duration: 0.4 }}
+            mb={6}
           >
-            <Text
-              color="brand.500"
-              fontSize="xs"
-              textTransform="uppercase"
-              letterSpacing="0.3em"
-              mb={2}
-            >
-              Community
-            </Text>
+            <Flex align="center" gap={{ base: 2, md: 4 }}>
+              {currentUserId && (
+                <Button
+                  type="button"
+                  flex="1"
+                  minW={0}
+                  h={{ base: '60px', md: '68px' }}
+                  px={{ base: 3, md: 4 }}
+                  gap={3}
+                  justifyContent="flex-start"
+                  bg="gray.900"
+                  color="whiteAlpha.600"
+                  border="1px solid"
+                  borderColor="whiteAlpha.100"
+                  borderRadius="2xl"
+                  fontSize={{ base: 'sm', md: 'md' }}
+                  fontWeight="normal"
+                  overflow="hidden"
+                  aria-haspopup="dialog"
+                  onClick={() => setIsPostComposerOpen(true)}
+                  _hover={{
+                    bg: 'whiteAlpha.50',
+                    borderColor: 'whiteAlpha.200',
+                    color: 'whiteAlpha.800',
+                  }}
+                  _active={{ bg: 'whiteAlpha.100' }}
+                  _focusVisible={{
+                    outline: '2px solid',
+                    outlineColor: 'brand.400',
+                    outlineOffset: '2px',
+                  }}
+                >
+                  {currentUserPhoto ? (
+                    <Box
+                      w={{ base: '38px', md: '44px' }}
+                      h={{ base: '38px', md: '44px' }}
+                      flexShrink={0}
+                      borderRadius="full"
+                      overflow="hidden"
+                      border="1px solid"
+                      borderColor="whiteAlpha.200"
+                    >
+                      <img
+                        src={currentUserPhoto}
+                        alt=""
+                        className="h-full w-full object-cover"
+                      />
+                    </Box>
+                  ) : (
+                    <Flex
+                      w={{ base: '38px', md: '44px' }}
+                      h={{ base: '38px', md: '44px' }}
+                      flexShrink={0}
+                      align="center"
+                      justify="center"
+                      borderRadius="full"
+                      bg="brand.500"
+                      color="white"
+                      fontWeight="bold"
+                    >
+                      {currentUserName.charAt(0).toUpperCase()}
+                    </Flex>
+                  )}
+                  <Text as="span" color="inherit" overflow="hidden" textOverflow="ellipsis" whiteSpace="nowrap">
+                    Share something with the community...
+                  </Text>
+                </Button>
+              )}
 
-            <Heading
-              as="h1"
-              fontSize={{ base: '2rem', md: '4rem', lg: '5rem' }}
-              lineHeight={1.1}
-              color="white"
-              fontFamily="heading"
-              mb={{ base: 2, md: 6 }}
-            >
-              The Wall
-            </Heading>
-
-            <Text
-              color="whiteAlpha.500"
-              fontSize={{ base: 'sm', md: 'lg' }}
-              maxW="2xl"
-              display={{ base: 'none', md: 'block' }}
-            >
-              Share your creative journey, connect with fellow artists, and find inspiration.
-            </Text>
-
-            <RouterLink to="/community/map" style={{ display: 'inline-block' }}>
+              <RouterLink to="/community/map" style={{ display: 'block', flexShrink: 0, marginLeft: currentUserId ? 0 : 'auto' }}>
               <Button
-                mt={{ base: 5, md: 7 }}
-                size={{ base: 'sm', md: 'md' }}
-                bg="brand.500"
-                color="white"
-                borderRadius="full"
-                px={{ base: 4, md: 5 }}
+                h={{ base: '60px', md: '68px' }}
+                bg="whiteAlpha.50"
+                color="whiteAlpha.800"
+                borderRadius="2xl"
+                border="1px solid"
+                borderColor="whiteAlpha.200"
+                px={{ base: 3, sm: 5 }}
+                gap={2}
+                fontSize="sm"
                 fontWeight="semibold"
-                _hover={{ bg: 'brand.600', transform: 'translateY(-2px)' }}
-                _active={{ bg: 'brand.700' }}
+                _hover={{ bg: 'whiteAlpha.100', borderColor: 'brand.400', color: 'white' }}
+                _active={{ bg: 'whiteAlpha.200' }}
                 transition="all 0.2s ease"
               >
-                <MapPinned size={16} aria-hidden="true" />
-                Explore the Art Map
-                <ArrowUpRight size={16} aria-hidden="true" />
+                <MapPinned size={18} aria-hidden="true" />
+                <Text as="span" display={{ base: 'none', sm: 'inline' }}>
+                  Explore Art Map
+                </Text>
               </Button>
-            </RouterLink>
+              </RouterLink>
+            </Flex>
           </MotionBox>
 
           {/* Two column layout - stacks on mobile */}
           <Flex gap={8} direction={{ base: 'column', lg: 'row' }}>
             {/* Main Feed */}
             <Box flex={{ lg: 2 }}>
-              {/* Post Composer */}
-              <MotionBox
-                initial={{ opacity: 0, y: 20 }}
-                animate={{ opacity: 1, y: 0 }}
-                transition={{ duration: 0.6, delay: 0.2 }}
-                mb={6}
-              >
-                {currentUserId ? (
-                  <PostForm
-                    userId={currentUserId}
-                    userName={currentUserName}
-                    userPhotoURL={currentUserPhoto}
-                    places={communityPlaces as ArtLocation[]}
-                    onSubmit={handleCreatePost}
-                    initialPrompt={selectedPrompt || undefined}
-                    onPromptClear={() => setSelectedPrompt(null)}
-                  />
-                ) : (
+              {!currentUserId && (
+                <MotionBox
+                  initial={{ opacity: 0, y: 20 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  transition={{ duration: 0.6, delay: 0.2 }}
+                  mb={6}
+                >
                   <GuestPostComposer
                     selectedPrompt={selectedPrompt}
                     onSignIn={handleSignIn}
                     onSignUp={handleSignUp}
                   />
-                )}
-              </MotionBox>
+                </MotionBox>
+              )}
 
               {/* Quick Prompts - Mobile only, below composer */}
               <Box display={{ base: 'block', lg: 'none' }} mb={6}>
@@ -1076,7 +1214,7 @@ export default function CommunityWall() {
                     All Activity
                   </Button>
                   <Button
-                    onClick={() => setActiveTab('following')}
+                    onClick={() => currentUserId ? setActiveTab('following') : handleSignIn()}
                     bg={activeTab === 'following' ? 'brand.500' : 'transparent'}
                     color={activeTab === 'following' ? 'white' : 'whiteAlpha.600'}
                     border="1px solid"
@@ -1117,13 +1255,13 @@ export default function CommunityWall() {
 
               {/* Activity Feed */}
               <VStack align="stretch" gap={4}>
-                {(postsLoading || questSubmissionsLoading || exhibitionsLoading) && feedItems.length === 0 ? (
+                {(postsLoading || questSubmissionsLoading || exhibitionsLoading || (activeTab === 'following' && followingLoading)) && activeFeedItems.length === 0 ? (
                   <>
                     <CommunityPostSkeleton />
                     <CommunityPostSkeleton />
                     <CommunityPostSkeleton />
                   </>
-                ) : feedItems.length === 0 ? (
+                ) : activeFeedItems.length === 0 ? (
                   <Box
                     p={{ base: 6, md: 8 }}
                     borderRadius="2xl"
@@ -1148,10 +1286,12 @@ export default function CommunityWall() {
                       </svg>
                     </Box>
                     <Text color="whiteAlpha.700" fontSize="md" fontWeight="medium" mb={1}>
-                      No activity yet
+                      {activeTab === 'following' ? 'No followed activity yet' : 'No activity yet'}
                     </Text>
                     <Text color="whiteAlpha.400" fontSize="sm">
-                      Be the first to share a post, complete a quest, or publish an exhibition.
+                      {activeTab === 'following'
+                        ? 'Follow members from their profiles to see their posts and creative activity here.'
+                        : 'Be the first to share a post, complete a quest, or publish an exhibition.'}
                     </Text>
                   </Box>
                 ) : (
@@ -1206,11 +1346,15 @@ export default function CommunityWall() {
                           currentUserId={currentUserId || undefined}
                           onReaction={(reactionType) => handleReaction(post.id, reactionType, displayPost.reactions)}
                           onComment={currentUserId ? (content) => handleComment(post.id, content) : undefined}
+                          onReplyComment={currentUserId ? (commentId, content) => handleComment(post.id, content, commentId) : undefined}
+                          onEditComment={currentUserId ? (commentId, content) => handleEditComment(post.id, commentId, content) : undefined}
                           onAuthRequired={handleSignIn}
                           onCommentsOpen={() => handleCommentsOpen(post.id)}
                           onLoadMoreComments={() => loadPostComments(post.id)}
                           onEdit={() => handleEditPost(post.id, post.content)}
                           onDelete={() => handleDeletePost(post.id)}
+                          isFollowingAuthor={followedMemberIds.has(post.userId)}
+                          onToggleFollow={post.userId !== currentUserId ? () => handleToggleFollow(post.userId) : undefined}
                           onShare={() => {
                             const url = `${window.location.origin}/community/wall?post=${post.id}`
                             if (navigator.share) {
@@ -1235,7 +1379,7 @@ export default function CommunityWall() {
                 )}
 
                 {/* Load more button */}
-                {canLoadMorePosts && feedItems.length > 0 && (
+                {canLoadMorePosts && (activeFeedItems.length > 0 || (activeTab === 'following' && hasMore)) && (
                   <Flex ref={postLoadSentinelRef} justify="center" pt={4}>
                     <Button
                       onClick={handleLoadMorePosts}
@@ -1255,7 +1399,7 @@ export default function CommunityWall() {
                 )}
 
                 {/* Loading indicator */}
-                {(postsLoading || questSubmissionsLoading || exhibitionsLoading) && feedItems.length > 0 && (
+                {(postsLoading || questSubmissionsLoading || exhibitionsLoading || (activeTab === 'following' && followingLoading)) && activeFeedItems.length > 0 && (
                   <Flex justify="center" pt={4}>
                     <Spinner color="brand.500" size="sm" />
                   </Flex>
@@ -1343,6 +1487,29 @@ export default function CommunityWall() {
           </Flex>
         </Container>
       </Box>
+
+      {currentUserId && (
+        <Modal
+          isOpen={isPostComposerOpen}
+          onClose={() => setIsPostComposerOpen(false)}
+          title="Create a post"
+          description="Share your work, ideas, or inspiration with the community."
+          size="xl"
+          mobileSheet
+          className="max-h-[88dvh] overflow-y-auto"
+        >
+          <PostForm
+            userId={currentUserId}
+            userName={currentUserName}
+            userPhotoURL={currentUserPhoto}
+            places={communityPlaces as ArtLocation[]}
+            onSubmit={handleCreatePost}
+            initialPrompt={selectedPrompt || undefined}
+            onPromptClear={() => setSelectedPrompt(null)}
+            className="rounded-none border-0 bg-transparent"
+          />
+        </Modal>
+      )}
 
       <Footer />
     </Box>

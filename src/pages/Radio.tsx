@@ -782,28 +782,28 @@ export default function Radio() {
       <audio ref={audioRef} preload="metadata" />
       <Header />
 
-      <Box as="main" pt={{ base: 28, md: 32 }} pb={{ base: 16, md: 20 }}>
-        <Container maxW="1440px" px={{ base: 4, sm: 6, md: 12, lg: 16, xl: 20 }}>
+      <Box as="main" pt={{ base: '76px', md: '112px' }} pb={{ base: 16, md: 20 }}>
+        <Container maxW="1680px" px={{ base: 4, md: 8, lg: 10 }}>
           <MotionBox
-            initial={{ opacity: 0, y: 30 }}
+            initial={{ opacity: 0, y: 24 }}
             animate={{ opacity: 1, y: 0 }}
-            transition={{ duration: 0.6 }}
-            mb={{ base: 8, md: 12 }}
+            transition={{ duration: 0.5 }}
+            mb={{ base: 5, md: 6 }}
           >
-            <Text color="brand.500" fontSize="sm" textTransform="uppercase" letterSpacing="0.3em" mb={4}>
+            <Text color="brand.500" fontSize="xs" fontWeight="semibold" textTransform="uppercase" letterSpacing="0.18em" mb={2}>
               BZR Radio
             </Text>
             <Heading
               as="h1"
               color="white"
               fontFamily="heading"
-              fontSize={{ base: '3rem', md: '4rem', lg: '5rem' }}
-              lineHeight={1}
-              mb={5}
+              fontSize={{ base: '2.35rem', md: '3rem', lg: '3.5rem' }}
+              lineHeight={0.98}
+              mb={3}
             >
               Sounds From The Community
             </Heading>
-            <Text color="whiteAlpha.600" fontSize={{ base: 'md', md: 'lg' }} maxW="2xl">
+            <Text color="whiteAlpha.500" fontSize={{ base: 'sm', md: 'md' }} maxW="2xl">
               Mixes, interviews, ambient sessions, and artist-led audio from the Club BZR network.
             </Text>
           </MotionBox>
@@ -1034,37 +1034,6 @@ export default function Radio() {
             </Box>
           )}
 
-          <MotionBox
-            initial={{ opacity: 0, y: 24 }}
-            whileInView={{ opacity: 1, y: 0 }}
-            viewport={{ once: true }}
-            transition={{ duration: 0.55 }}
-            textAlign="center"
-            py={{ base: 12, md: 16 }}
-            px={6}
-            bg="gray.900"
-            border="1px solid"
-            borderColor="whiteAlpha.100"
-            borderRadius="2xl"
-          >
-            <Heading as="h2" color="white" fontFamily="heading" fontSize={{ base: 'xl', md: '2xl' }} mb={4}>
-              Never Miss a Drop
-            </Heading>
-            <Text color="whiteAlpha.600" maxW="xl" mx="auto" mb={8}>
-              New mixes, talks, and sound experiments will land here as the community publishes
-              them.
-            </Text>
-            <Button
-              bg="brand.500"
-              color="white"
-              borderRadius="full"
-              px={8}
-              h={12}
-              _hover={{ bg: 'brand.600' }}
-            >
-              Subscribe
-            </Button>
-          </MotionBox>
         </Container>
       </Box>
 
