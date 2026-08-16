@@ -91,6 +91,7 @@ const AUTH_ERROR_MESSAGES: Record<string, string> = {
   'auth/too-many-requests': 'Too many attempts. Please try again later.',
   'auth/popup-closed-by-user': 'Sign-in popup was closed before completion.',
   'auth/network-request-failed': 'Network error. Please check your connection.',
+  'auth/internal-error': 'Sign-in is temporarily unavailable. Please try again shortly.',
   'auth/requires-recent-login': 'Please sign in again to complete this action.',
   'auth/account-exists-with-different-credential':
     'An account already exists with the same email but different sign-in credentials.',
@@ -100,7 +101,8 @@ const AUTH_ERROR_MESSAGES: Record<string, string> = {
 const parseAuthError = (error: unknown): AuthErrorInfo => {
   const authError = error as AuthError;
   const code = authError?.code || 'auth/unknown';
-  const message = AUTH_ERROR_MESSAGES[code] || authError?.message || 'An unexpected error occurred.';
+  const message =
+    AUTH_ERROR_MESSAGES[code] || 'Sign-in is temporarily unavailable. Please try again shortly.';
 
   return { code, message };
 };

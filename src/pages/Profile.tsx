@@ -1,11 +1,12 @@
 'use client'
 
-import { useMemo, useState, type CSSProperties, type FormEvent, type ReactNode } from 'react'
+import { useMemo, useRef, useState, type ChangeEvent, type CSSProperties, type FormEvent, type ReactNode } from 'react'
 import { Link, Navigate } from 'react-router-dom'
 import {
   AlertTriangle,
   ArrowLeft,
   CheckCircle2,
+  ImagePlus,
   Mail,
   MessageCircle,
   Phone,
@@ -34,6 +35,7 @@ import { useDocument } from '@/hooks/useFirestore'
 import { createDefaultCreativePassport } from '@/lib/passportDefaults'
 import { createDocumentWithId, updateDocument } from '../../lib/firestore'
 import { upsertPublicProfile } from '../../lib/publicProfiles'
+import { STORAGE_PATHS, uploadFileSimple, validateFile, VALIDATION_PRESETS } from '../../lib/storage'
 import type { CreativePassport } from '../../lib/schema'
 
 type Feedback = { type: 'success' | 'error'; message: string } | null
@@ -224,7 +226,10 @@ function ProfileFormScreen({
 }) {
   const [form, setForm] = useState<ProfileForm>(initialForm)
   const [saving, setSaving] = useState(false)
+  const [uploadingAvatar, setUploadingAvatar] = useState(false)
+  const [avatarUrl, setAvatarUrl] = useState(user?.photoURL || firebaseUser.photoURL || '')
   const [feedback, setFeedback] = useState<Feedback>(null)
+  const avatarInputRef = useRef<HTMLInputElement>(null)
 
   const customInterests = useMemo(() => splitList(form.customInterests), [form.customInterests])
   const savedInterests = useMemo(
@@ -245,6 +250,60 @@ function ProfileFormScreen({
         ? current.interests.filter((item) => item.toLowerCase() !== interest.toLowerCase())
         : [...current.interests, interest],
     }))
+  }
+
+  const handleAvatarChange = async (event: ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0]
+    event.target.value = ''
+
+    if (!file) return
+
+    const validation = validateFile(file, VALIDATION_PRESETS.profileImage)
+    if (!validation.valid) {
+      setFeedback({ type: 'error', message: validation.error || 'Choose a JPG, PNG, or WebP image under 5MB.' })
+      return
+    }
+
+    setUploadingAvatar(true)
+    setFeedback(null)
+
+    try {
+      const uploadResult = await uploadFileSimple(file, `${STORAGE_PATHS.AVATARS}/${firebaseUser.uid}`, {
+        compress: true,
+        compressionOptions: {
+          maxWidth: 900,
+          maxHeight: 900,
+          quality: 0.82,
+          format: 'jpeg',
+        },
+      })
+
+      if (!uploadResult.success || !uploadResult.url) {
+        setFeedback({
+          type: 'error',
+          message: uploadResult.error?.message || 'Could not upload your profile picture.',
+        })
+        return
+      }
+
+      const profileResult = await updateProfile({ photoURL: uploadResult.url })
+      if (!profileResult.success) {
+        setFeedback({
+          type: 'error',
+          message: profileResult.error?.message || 'The picture uploaded, but your profile could not be updated.',
+        })
+        return
+      }
+
+      setAvatarUrl(uploadResult.url)
+      await refreshUser()
+      setFeedback({ type: 'success', message: 'Your profile picture has been updated.' })
+    } catch (error) {
+      console.error('Profile picture update failed:', error)
+      setFeedback({ type: 'error', message: 'Could not update your profile picture. Please try again.' })
+    } finally {
+      setUploadingAvatar(false)
+    }
   }
 
   const handleSubmit = async (event: FormEvent<HTMLFormElement>) => {
@@ -389,9 +448,9 @@ function ProfileFormScreen({
                     border="1px solid"
                     borderColor="whiteAlpha.200"
                   >
-                    {user?.photoURL || firebaseUser.photoURL ? (
+                    {avatarUrl ? (
                       <img
-                        src={user?.photoURL || firebaseUser.photoURL || undefined}
+                        src={avatarUrl}
                         alt={form.displayName || 'Profile'}
                         style={{ width: '100%', height: '100%', objectFit: 'cover' }}
                       />
@@ -401,6 +460,36 @@ function ProfileFormScreen({
                       </Text>
                     )}
                   </Flex>
+
+                  <Box>
+                    <Input
+                      ref={avatarInputRef}
+                      type="file"
+                      accept="image/jpeg,image/png,image/webp"
+                      display="none"
+                      onChange={handleAvatarChange}
+                    />
+                    <Button
+                      type="button"
+                      w="full"
+                      h="42px"
+                      gap={2}
+                      borderRadius="full"
+                      bg="whiteAlpha.50"
+                      color="white"
+                      border="1px solid"
+                      borderColor="whiteAlpha.200"
+                      disabled={uploadingAvatar}
+                      _hover={{ bg: 'whiteAlpha.100', borderColor: 'brand.400' }}
+                      onClick={() => avatarInputRef.current?.click()}
+                    >
+                      {uploadingAvatar ? <Spinner size="sm" /> : <ImagePlus size={17} />}
+                      {uploadingAvatar ? 'Uploading...' : avatarUrl ? 'Change photo' : 'Add photo'}
+                    </Button>
+                    <Text color="whiteAlpha.400" fontSize="xs" textAlign="center" mt={2}>
+                      JPG, PNG or WebP · max 5MB
+                    </Text>
+                  </Box>
 
                   <Box>
                     <Text color="white" fontWeight="bold" fontSize="lg" lineClamp={1}>
