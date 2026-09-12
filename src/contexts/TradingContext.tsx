@@ -27,7 +27,7 @@ export function TradingProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     if (!firebaseUser) return
     return onSnapshot(query(collection(db, 'trades'), where('participants', 'array-contains', firebaseUser.uid), orderBy('createdAt', 'desc'), limit(50)), (snapshot) => {
-      setTrades(snapshot.docs.map((item) => ({ id: item.id, ...item.data() } as TradeRecord)))
+      setTrades(snapshot.docs.filter((item) => item.data().storeOrder !== true).map((item) => ({ id: item.id, ...item.data() } as TradeRecord)))
       setLoading(false)
     }, () => setLoading(false))
   }, [firebaseUser])

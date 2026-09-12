@@ -7,7 +7,7 @@ export function calculateCommercialFee(amount: number, basisPoints: number): num
   if (!Number.isSafeInteger(basisPoints) || basisPoints < 0 || basisPoints > 10000) {
     throw new HttpsError("invalid-argument", "Fee basis points are invalid.");
   }
-  return Math.floor((amount * basisPoints) / 10000);
+  return Number((BigInt(amount) * BigInt(basisPoints)) / BigInt(10000));
 }
 
 export function calculatePurchasePoints(amountNgwee: number, pointsPerZmw: number): number {

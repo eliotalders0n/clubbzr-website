@@ -1,5 +1,11 @@
 # Economy testing and release gates
 
+## Store verification
+
+The Store adds unit tests plus an emulator suite using real Auth tokens, Firestore/Storage REST rules checks, and Admin SDK transactions without a new rules-testing dependency. It verifies all product kinds, authoritative price/fee snapshots, concurrency and inventory, refunds/disputes, private resources, seller payout accounting and the shared Points/Store callback. See [Store deployment](../STORE_DEPLOYMENT.md) for exact demo-stack, seed and browser commands; test data is restricted to `demo-clubbzr-store`.
+
+Lenco responses are mocked and signed URL generation is stubbed. Provider sandbox behavior, deployed signing IAM/CORS and composite-index readiness remain staging checks. The legacy matrix below remains useful for the broader economy and is not a claim that every non-Store path has emulator coverage.
+
 ## Automated checks
 
 - `npm run build` — React/TypeScript production build.

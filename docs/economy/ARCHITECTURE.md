@@ -1,5 +1,13 @@
 # Economy architecture
 
+## Store integration
+
+The [Store architecture](../STORE_ARCHITECTURE.md) extends these components without replacing legacy trade kinds. Store-marked trades use their own fulfilment state machine and are rejected by the old trade transition endpoints. `postLedgerTransaction` can join an outer transaction so checkout, inventory, settlement and download grants commit atomically.
+
+New journal entries carry `POINT` or `ZMW`. Points retain the existing `balances` and `escrows`; cash seller liabilities use `sellerPayables`, backed by the same immutable transactions and entries. No conversion links these projections. Points history/analytics exclude cash entries; reconciliation handles historical Points entries without a currency field. Full refunds append compensating entries and reverse recognized platform fees. Fee changes require an admin claim and reason, and apply only when an order is newly funded.
+
+The existing signed Lenco callback routes known Store references to the Store handler while preserving Points purchases. ZMW fulfilment follows verified collection; held seller payables become available only on completion. Transfers and refunds use separately verified outcomes. See [Lenco readiness](../LENCO_MARKETPLACE_READINESS.md) for the approval boundary and [Store deployment](../STORE_DEPLOYMENT.md) for rollback with outstanding obligations.
+
 ## Components
 
 ```mermaid

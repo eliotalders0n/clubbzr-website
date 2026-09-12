@@ -6,12 +6,16 @@ import {requireString} from "../core/errors";
 import {admin, db} from "../core/firebase";
 
 async function sumBucket(walletId: string, bucket: "available" | "locked" | "pending") {
-  const aggregate = await db.collection("ledgerEntries")
+  const query = db.collection("ledgerEntries")
     .where("accountId", "==", walletId)
-    .where("bucket", "==", bucket)
-    .aggregate({total: admin.firestore.AggregateField.sum("amount")})
-    .get();
-  return Number(aggregate.data().total || 0);
+    .where("bucket", "==", bucket);
+  // Legacy Points entries predate the currency field. Subtract the explicit
+  // ZMW subset rather than dropping those historical Points entries.
+  const [all, zmw] = await Promise.all([
+    query.aggregate({total: admin.firestore.AggregateField.sum("amount")}).get(),
+    query.where("currency", "==", "ZMW").aggregate({total: admin.firestore.AggregateField.sum("amount")}).get(),
+  ]);
+  return Number(all.data().total || 0) - Number(zmw.data().total || 0);
 }
 
 export async function reconcileWallet(walletId: string) {

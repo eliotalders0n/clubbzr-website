@@ -22,6 +22,7 @@ import {
 import { motion } from 'framer-motion'
 import { Award, BadgeCheck, ExternalLink, ImageIcon, MessageCircle, Sparkles, UserCheck, UserPlus, UserRound } from 'lucide-react'
 
+import { ArtistShop } from '@/components/features/store/StoreCatalog'
 import { Header } from '@/components/layout/Header'
 import { Footer } from '@/components/layout/Footer'
 import { useAuth } from '@/contexts/AuthContext'
@@ -423,6 +424,7 @@ export default function MemberProfile() {
             <StatCard label="Works" value={worksCount} icon={<ImageIcon size={20} />} />
           </SimpleGrid>
 
+          {id && <ArtistShop sellerId={id} />}
           <Grid templateColumns={{ base: '1fr', lg: 'minmax(0, 1.5fr) minmax(320px, 0.8fr)' }} gap={6} alignItems="start">
             <VStack align="stretch" gap={5}>
               <Flex justify="space-between" align="center" gap={4}>

@@ -22,6 +22,7 @@ import { Pencil } from 'lucide-react'
 
 import { Header } from '@/components/layout/Header'
 import { Footer } from '@/components/layout/Footer'
+import { ArtistShop } from '@/components/features/store/StoreCatalog'
 import { PortfolioGallery } from '@/components/features/artists'
 import { useAuth } from '@/contexts/AuthContext'
 import { useCollection, useDocument } from '@/hooks/useFirestore'
@@ -403,6 +404,7 @@ export default function ArtistProfile() {
 
             {/* Main Content */}
             <VStack align="stretch" gap={{ base: 5, md: 8 }} minW={0}>
+              <ArtistShop sellerId={artist.userId || artist.id} />
               {/* Portfolio Section */}
               {displayPortfolio.length > 0 && (
                 <MotionBox

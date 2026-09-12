@@ -24,6 +24,22 @@ interface QuestReward {
   metadata?: Record<string, unknown>;
 }
 
+function getQuestRewards(quest: FirebaseFirestore.DocumentData): QuestReward[] {
+  const rewards = (Array.isArray(quest.rewards) ? quest.rewards : [])
+    .filter((reward): reward is QuestReward =>
+      Boolean(reward) && typeof reward === "object"
+    );
+  const legacyPoints = Number(quest.points || 0);
+  if (
+    !rewards.some((reward) => reward.type === "points") &&
+    Number.isSafeInteger(legacyPoints) &&
+    legacyPoints > 0
+  ) {
+    rewards.push({type: "points", amount: legacyPoints});
+  }
+  return rewards;
+}
+
 function activityId(input: ActivityInput): string {
   return deterministicId(input.type, input.userId, `${input.sourceType}:${input.sourceId}`);
 }
@@ -118,7 +134,9 @@ export const evaluateQuestActivity = onDocumentCreated(
             userId: activity.userId,
             questId: questDocument.id,
             progressId,
-            rewards: Array.isArray(quest.rewards) ? quest.rewards : [],
+            rewards: getQuestRewards(quest),
+            completionSourceType: activity.sourceType,
+            completionSourceId: activity.sourceId,
             status: "pending",
             createdAt: admin.firestore.FieldValue.serverTimestamp(),
           });
@@ -134,15 +152,27 @@ export const processQuestReward = onDocumentCreated(
     if (!event.data) return;
     const grant = event.data?.data();
     if (!grant || grant.status === "processed") return;
-    const rewards = (Array.isArray(grant.rewards) ? grant.rewards : []) as QuestReward[];
+    const rewards = (Array.isArray(grant.rewards) ?
+      [...grant.rewards] : []) as QuestReward[];
+    if (!rewards.some((reward) => reward.type === "points") && grant.questId) {
+      const quest = await db.collection("quests").doc(String(grant.questId)).get();
+      const fallbackPointReward = getQuestRewards(quest.data() || {})
+        .find((reward) => reward.type === "points");
+      if (fallbackPointReward) rewards.push(fallbackPointReward);
+    }
     const settings = await getEconomySettings();
     const multiplier = settings.rewardMultiplierBasisPoints / 10000;
     const points = Math.floor(rewards
       .filter((reward) => reward.type === "points")
       .reduce((sum, reward) => sum + Number(reward.amount || 0), 0) * multiplier);
+    const rewardTransactionId = deterministicId(
+      "quest_reward",
+      grant.userId,
+      event.params.grantId
+    );
     if (points > 0) {
       await postLedgerTransaction({
-        transactionId: deterministicId("quest_reward", grant.userId, event.params.grantId),
+        transactionId: rewardTransactionId,
         type: "quest_reward",
         status: "completed",
         senderWalletId: null,
@@ -184,6 +214,9 @@ export const processQuestReward = onDocumentCreated(
       const unlockableRewards = arrayReward("unlockable");
       const passportUpdate: Record<string, unknown> = {
         userId: grant.userId,
+        ...(points > 0 ? {
+          points: admin.firestore.FieldValue.increment(points),
+        } : {}),
         ...(xp > 0 ? {xp: admin.firestore.FieldValue.increment(xp)} : {}),
         questsCompleted: admin.firestore.FieldValue.arrayUnion(grant.questId),
         updatedAt: admin.firestore.FieldValue.serverTimestamp(),
@@ -209,6 +242,22 @@ export const processQuestReward = onDocumentCreated(
         );
       }
       transaction.set(passportRef, passportUpdate, {merge: true});
+      if (
+        grant.completionSourceType === "questSubmission" &&
+        typeof grant.completionSourceId === "string" &&
+        grant.completionSourceId
+      ) {
+        transaction.set(
+          db.collection("questSubmissions").doc(grant.completionSourceId),
+          {
+            pointsAwarded: points,
+            rewardTransactionId,
+            rewardedAt: admin.firestore.FieldValue.serverTimestamp(),
+            updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+          },
+          {merge: true}
+        );
+      }
       transaction.update(grantRef, {
         status: "processed",
         processedAt: admin.firestore.FieldValue.serverTimestamp(),
@@ -410,6 +459,155 @@ interface PaidSessionRewardBackfillInput {
   limit?: number;
 }
 
+interface QuestRewardBackfillInput {
+  dryRun?: boolean;
+  cursor?: string;
+  limit?: number;
+}
+
+export const adminBackfillQuestRewards = onCall({
+  cors: true,
+  invoker: "public",
+  enforceAppCheck: process.env.ENFORCE_APP_CHECK !== "false",
+  timeoutSeconds: 120,
+}, async (request) => {
+  const actor = await requireAdmin(request);
+  const input = (request.data || {}) as QuestRewardBackfillInput;
+  const dryRun = input.dryRun !== false;
+  const pageSize = Math.min(
+    Math.max(Math.floor(Number(input.limit) || 25), 1),
+    50
+  );
+  const cursor = typeof input.cursor === "string" ? input.cursor.trim() : "";
+  const settings = await getEconomySettings();
+  const multiplier = settings.rewardMultiplierBasisPoints / 10000;
+  let query = db.collection("rewardGrants")
+    .orderBy(admin.firestore.FieldPath.documentId())
+    .limit(pageSize);
+  if (cursor) query = query.startAfter(cursor);
+  const snapshot = await query.get();
+
+  let eligible = 0;
+  let awarded = 0;
+  let alreadyRewarded = 0;
+  let skipped = 0;
+  let pointsAwarded = 0;
+  let potentialPoints = 0;
+  const failures: Array<{grantId: string; message: string}> = [];
+
+  for (const document of snapshot.docs) {
+    const grant = document.data();
+    const userId = String(grant.userId || "").trim();
+    const questId = String(grant.questId || "").trim();
+    if (!userId || !questId) {
+      skipped += 1;
+      failures.push({
+        grantId: document.id,
+        message: "Reward grant is not linked to both a user and a quest.",
+      });
+      continue;
+    }
+
+    const grantRewards = (Array.isArray(grant.rewards) ?
+      [...grant.rewards] : []) as QuestReward[];
+    if (!grantRewards.some((reward) => reward.type === "points")) {
+      const quest = await db.collection("quests").doc(questId).get();
+      const fallbackPointReward = getQuestRewards(quest.data() || {})
+        .find((reward) => reward.type === "points");
+      if (fallbackPointReward) grantRewards.push(fallbackPointReward);
+    }
+    const points = Math.floor(grantRewards
+      .filter((reward) => reward.type === "points")
+      .reduce((sum, reward) => sum + Number(reward.amount || 0), 0) *
+      multiplier);
+    if (!Number.isSafeInteger(points) || points <= 0) {
+      skipped += 1;
+      continue;
+    }
+
+    const transactionId = deterministicId(
+      "quest_reward",
+      userId,
+      document.id
+    );
+    const existing = await db.collection("transactions")
+      .doc(transactionId)
+      .get();
+    if (existing.exists) {
+      alreadyRewarded += 1;
+      continue;
+    }
+
+    eligible += 1;
+    potentialPoints += points;
+    if (dryRun) continue;
+
+    try {
+      const result = await postLedgerTransaction({
+        transactionId,
+        type: "quest_reward",
+        status: "completed",
+        senderWalletId: null,
+        receiverWalletId: userId,
+        participants: [userId],
+        amount: points,
+        fee: 0,
+        referenceType: "quest",
+        referenceId: questId,
+        createdBy: actor.uid,
+        idempotencyKey: document.id,
+        entries: [
+          {
+            accountId: getSystemAccount("rewards", document.id),
+            bucket: "available",
+            amount: -points,
+          },
+          {accountId: userId, bucket: "available", amount: points},
+        ],
+        metadata: {
+          rewardGrantId: document.id,
+          repairedBy: actor.uid,
+        },
+        auditData: {
+          rewardGrantId: document.id,
+          questId,
+          userId,
+          points,
+          reason: "Historical quest reward repair",
+        },
+      });
+      if (result.duplicate) {
+        alreadyRewarded += 1;
+      } else {
+        awarded += 1;
+        pointsAwarded += points;
+      }
+    } catch (error) {
+      skipped += 1;
+      failures.push({
+        grantId: document.id,
+        message: error instanceof Error ?
+          error.message : "Quest reward could not be posted.",
+      });
+    }
+  }
+
+  const nextCursor = snapshot.size === pageSize ?
+    snapshot.docs.at(-1)?.id || null : null;
+  return {
+    dryRun,
+    scanned: snapshot.size,
+    eligible,
+    awarded,
+    alreadyRewarded,
+    skipped,
+    pointsAwarded,
+    potentialPoints,
+    nextCursor,
+    failures: failures.slice(0, 10),
+  };
+});
+
 export const adminBackfillPaidSessionRewards = onCall({
   cors: true,
   invoker: "public",
@@ -568,7 +766,9 @@ export const activityFromProfileCompletion = onDocumentUpdated(
 export const recordDailyLogin = onCall({
   cors: true,
   invoker: "public",
-  enforceAppCheck: process.env.ENFORCE_APP_CHECK !== "false",
+  // This authenticated write has a deterministic daily ID and is safe to run
+  // before optional client App Check initialization completes.
+  enforceAppCheck: false,
 }, async (request) => {
   const actor = await requireActiveUser(request);
   const day = new Date().toISOString().slice(0, 10);

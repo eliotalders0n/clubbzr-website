@@ -27,7 +27,7 @@ function lusakaDayWindow(date: Date): {
 async function getEconomyMetrics(
   window: ReturnType<typeof lusakaDayWindow>
 ) {
-  const transactions = db.collection("transactions")
+  const transactions = db.collection("transactions").where("currency", "==", "POINT")
     .where("createdAt", ">=", window.start)
     .where("createdAt", "<", window.end);
   const payments = db.collection("payments")
@@ -41,6 +41,7 @@ async function getEconomyMetrics(
       count: admin.firestore.AggregateField.count(),
       volume: admin.firestore.AggregateField.sum("amount"),
       fees: admin.firestore.AggregateField.sum("fee"),
+      feeReversals: admin.firestore.AggregateField.sum("metadata.feeReversed"),
     }).get(),
     payments.aggregate({
       count: admin.firestore.AggregateField.count(),
@@ -50,7 +51,7 @@ async function getEconomyMetrics(
   ]);
   return {
     date: window.day,
-    transactions: transactionTotals.data(),
+    transactions: {...transactionTotals.data(), fees: transactionTotals.data().fees - transactionTotals.data().feeReversals},
     payments: paymentTotals.data(),
     questCompletions: questCompletions.data().count,
   };

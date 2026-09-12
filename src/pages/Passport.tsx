@@ -22,7 +22,7 @@ import { Footer } from '@/components/layout/Footer';
 import { Section } from '@/components/layout/Section';
 import { Button } from '@/components/ui/Button';
 import { useAuth } from '@/contexts/AuthContext';
-import { useCollection, useDocument } from '@/hooks/useFirestore';
+import { useCollection, useDocument, useRealtime } from '@/hooks/useFirestore';
 import { Timestamp } from 'firebase/firestore';
 import { createQuestCompletionBadges } from '../../lib/badges';
 import { createDocumentWithId, deleteDocument, updateDocument } from '../../lib/firestore';
@@ -197,6 +197,10 @@ const Passport: React.FC = () => {
     error: passportError,
     refetch: refetchPassport
   } = useDocument('creativePassports', firebaseUser?.uid);
+  const {
+    data: pointBalance,
+    loading: pointBalanceLoading,
+  } = useRealtime('balances', firebaseUser?.uid, { skip: !firebaseUser?.uid });
   const { data: artistProfile } = useDocument('artists', firebaseUser?.uid, { skip: !firebaseUser?.uid });
   const {
     data: questSubmissions,
@@ -259,18 +263,20 @@ const Passport: React.FC = () => {
     const attendedEventIds = new Set<string>(passport?.eventsAttended || []);
     const currentUserId = firebaseUser?.uid || '';
 
-    (questSubmissions as QuestSubmission[]).forEach((submission) => {
-      if (submission.questId) {
-        completedQuestIds.add(submission.questId);
-        const existing = submissionsByQuest.get(submission.questId);
-        const submissionTime = toMillis(submission.createdAt);
-        const existingTime = toMillis(existing?.lastSubmittedAt);
-        submissionsByQuest.set(submission.questId, {
-          count: (existing?.count || 0) + 1,
-          lastSubmittedAt: submissionTime >= existingTime ? submission.createdAt : existing?.lastSubmittedAt,
-        });
-      }
-    });
+    (questSubmissions as QuestSubmission[])
+      .filter((submission) => submission.approved === true)
+      .forEach((submission) => {
+        if (submission.questId) {
+          completedQuestIds.add(submission.questId);
+          const existing = submissionsByQuest.get(submission.questId);
+          const submissionTime = toMillis(submission.createdAt);
+          const existingTime = toMillis(existing?.lastSubmittedAt);
+          submissionsByQuest.set(submission.questId, {
+            count: (existing?.count || 0) + 1,
+            lastSubmittedAt: submissionTime >= existingTime ? submission.createdAt : existing?.lastSubmittedAt,
+          });
+        }
+      });
 
     const postReactions = (communityPosts as CommunityPost[]).reduce(
       (total, post) => total + numericValue(post.reactionsCount),
@@ -278,10 +284,6 @@ const Passport: React.FC = () => {
     );
     const submissionReactions = (questSubmissions as QuestSubmission[]).reduce(
       (total, submission) => total + numericValue(submission.reactionsCount),
-      0
-    );
-    const submissionPoints = (questSubmissions as QuestSubmission[]).reduce(
-      (total, submission) => total + numericValue(submission.pointsAwarded),
       0
     );
     const generatedBadges = Array.from(completedQuestIds).flatMap((questId) => {
@@ -342,7 +344,6 @@ const Passport: React.FC = () => {
       collaborations: passport?.collaborations || [],
       postsCreated: communityPosts.length,
       reactionsReceived: postReactions + submissionReactions,
-      points: submissionPoints,
       badges: Array.from(badgeMap.values()).sort((a, b) => toMillis(b.earnedAt) - toMillis(a.earnedAt)),
     };
   }, [communityPosts, firebaseUser?.uid, passport, questSubmissions, quests, sessionRegistrations, sessions]);
@@ -446,7 +447,7 @@ const Passport: React.FC = () => {
   const savedArtworkLoading = artistsLoading || uploadedArtworksLoading || exhibitionsLoading;
 
   // Loading state
-  const isLoading = authLoading || passportLoading || questSubmissionsLoading || communityPostsLoading || sessionRegistrationsLoading || sessionsLoading || questsLoading || !initialized;
+  const isLoading = authLoading || passportLoading || pointBalanceLoading || questSubmissionsLoading || communityPostsLoading || sessionRegistrationsLoading || sessionsLoading || questsLoading || !initialized;
 
   // If not authenticated, show login prompt
   if (initialized && !firebaseUser) {
@@ -676,6 +677,14 @@ const Passport: React.FC = () => {
     user: authUser,
     firebaseUser,
   });
+  const authoritativePoints = pointBalance
+    ? numericValue(pointBalance.available)
+    : numericValue(passport.points);
+  const progressionXp = Math.max(
+    numericValue(passport.xp),
+    numericValue(passport.points)
+  );
+  const calculatedLevel = Math.floor(progressionXp / 100) + 1;
   const displayUser = {
     id: passport.id,
     displayName: identity.accountName,
@@ -684,10 +693,10 @@ const Passport: React.FC = () => {
     bio: undefined, // Bio is in User doc, not passport
     location: undefined, // Location is in User doc
     joinedAt: passport.stats?.joinedAt as Timestamp | undefined,
-    level: Math.max(passport.level || 1, Math.floor(Math.max(passport.points || 0, liveActivity.points) / 100) + 1),
-    points: Math.max(passport.points || 0, liveActivity.points),
-    // Calculate XP progress (assuming 100 points per level)
-    xpToNextLevel: (passport.level + 1) * 100,
+    level: Math.max(passport.level || 1, calculatedLevel),
+    points: authoritativePoints,
+    // XP is lifetime progression; spendable point balance may go down.
+    xpToNextLevel: Math.max(passport.level || calculatedLevel, calculatedLevel) * 100,
     stats: passport.stats,
     badges: liveActivity.badges,
     timeline: passport.timeline || [],
@@ -814,7 +823,7 @@ const Passport: React.FC = () => {
                   </Box>
                   <Box textAlign="center">
                     <Text color="green.400" fontSize="2xl" fontWeight="bold">{displayUser.points}</Text>
-                    <Text color="whiteAlpha.500" fontSize="xs">Points</Text>
+                    <Text color="whiteAlpha.500" fontSize="xs">Available points</Text>
                   </Box>
                   <Box textAlign="center">
                     <Text color="purple.400" fontSize="2xl" fontWeight="bold">{displayUser.badges.length}</Text>

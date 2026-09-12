@@ -32,6 +32,14 @@ const Terms = lazy(() => import('@/pages/Terms'))
 const Privacy = lazy(() => import('@/pages/Privacy'))
 const Wallet = lazy(() => import('@/pages/Wallet'))
 
+const Store = lazy(() => import('@/pages/Store'))
+const StoreListing = lazy(() => import('@/pages/StoreListing'))
+const StorePurchases = lazy(() => import('@/pages/StorePurchases'))
+const StoreOrder = lazy(() => import('@/pages/StoreOrder'))
+const StoreManage = lazy(() => import('@/pages/StoreManage'))
+const StoreEditor = lazy(() => import('@/pages/StoreEditor'))
+const StoreAdmin = lazy(() => import('@/pages/admin/Store'))
+
 // Admin pages
 const AdminDashboard = lazy(() => import('@/pages/admin/Dashboard'))
 const ManageUsers = lazy(() => import('@/pages/admin/ManageUsers'))
@@ -98,6 +106,16 @@ function App() {
           {/* Public Routes */}
           <Route path="/" element={<RootRoute />} />
           <Route path="/about" element={<About />} />
+
+          <Route path="/store" element={<Store />} />
+          <Route path="/store/purchases" element={<StorePurchases />} />
+          <Route path="/store/library" element={<StorePurchases />} />
+          <Route path="/store/orders/:orderId" element={<StoreOrder />} />
+          <Route path="/store/manage" element={<StoreManage />} />
+          <Route path="/store/manage/new" element={<StoreEditor />} />
+          <Route path="/store/manage/:listingId/edit" element={<StoreEditor />} />
+          <Route path="/store/:listingId" element={<StoreListing />} />
+          <Route path="/admin/store" element={<AdminRoute><StoreAdmin /></AdminRoute>} />
 
           {/* Quests */}
           <Route path="/quests" element={<Quests />} />

@@ -11,6 +11,7 @@ import {
 } from '@chakra-ui/react'
 
 const NAV_ITEMS = [
+  { label: 'Store', href: '/admin/store', icon: <span aria-hidden="true">◇</span> },
   {
     label: 'Dashboard',
     href: '/admin',

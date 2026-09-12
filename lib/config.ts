@@ -11,6 +11,11 @@ import { getStorage, connectStorageEmulator, type FirebaseStorage } from 'fireba
 import { getAnalytics, type Analytics } from 'firebase/analytics';
 import { initializeAppCheck, ReCaptchaV3Provider, type AppCheck } from 'firebase/app-check';
 
+// A demo project can be selected only while explicitly using local emulators.
+// Production keeps the existing project configuration.
+const demoProjectId = import.meta.env.DEV && import.meta.env.VITE_USE_FIREBASE_EMULATORS === 'true'
+  && /^demo-[a-z0-9-]+$/.test(import.meta.env.VITE_FIREBASE_EMULATOR_PROJECT_ID || '')
+  ? import.meta.env.VITE_FIREBASE_EMULATOR_PROJECT_ID as string : null;
 // Firebase configuration
 const firebaseConfig = {
   apiKey: "AIzaSyAyaEBwqehRKoNWCmWSLklZuViP0_P2KGk",
@@ -18,7 +23,8 @@ const firebaseConfig = {
   projectId: "club-bzr",
   storageBucket: "club-bzr.firebasestorage.app",
   messagingSenderId: "272639933450",
-  appId: "1:272639933450:web:5d2b2241031c5f8e4533f3"
+  appId: "1:272639933450:web:5d2b2241031c5f8e4533f3",
+  ...(demoProjectId ? {apiKey: 'demo-key', authDomain: `${demoProjectId}.firebaseapp.com`, projectId: demoProjectId, storageBucket: `${demoProjectId}.appspot.com`} : {})
 };
 
 // Initialize Firebase (singleton pattern)
@@ -40,7 +46,7 @@ if (typeof window !== 'undefined' && import.meta.env.DEV && appCheckDebugToken) 
 }
 if (
   typeof window !== 'undefined' &&
-  appCheckSiteKey &&
+  appCheckSiteKey && !demoProjectId &&
   (!import.meta.env.DEV || Boolean(appCheckDebugToken))
 ) {
   appCheck = initializeAppCheck(app, {
@@ -101,6 +107,8 @@ export const COLLECTIONS = {
   MATCHES: 'matches',
   PROMPTS: 'prompts',
   NOTIFICATIONS: 'notifications',
+  USER_INVITES: 'userInvites',
+  AUDIT_LOGS: 'auditLogs',
 } as const;
 
 // Storage paths

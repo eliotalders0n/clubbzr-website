@@ -34,6 +34,7 @@ const defaults: EconomyForm = {
 
 export default function Economy() {
   const [form, setForm] = useState(defaults)
+  const [reason, setReason] = useState('')
   const [saving, setSaving] = useState(false)
   const [feedback, setFeedback] = useState<string | null>(null)
 
@@ -69,6 +70,7 @@ export default function Economy() {
       const update = httpsCallable(functions, 'updateEconomySettings')
       await update({
         ...form,
+        reason,
         pointsPerZmw: numberOrNull(form.pointsPerZmw),
         pointsPerPaidSession: numberOrNull(form.pointsPerPaidSession),
         minPurchaseNgwee: numberOrNull(form.minPurchaseNgwee),
@@ -124,6 +126,7 @@ export default function Economy() {
             {fields.map(([key, label, help]) => <Box as="label" key={key}><Text color="white" fontWeight="medium" mb={2}>{label}</Text><input className="economy-input" type="number" min="0" step="1" value={String(form[key])} onChange={(event) => setForm({ ...form, [key]: event.currentTarget.value })} /><Text color="whiteAlpha.400" fontSize="xs" mt={2}>{help}</Text></Box>)}
           </Box>
 
+          <Box as="label" display="block" mt={6}><Text mb={2}>Reason for changing the platform fee (required when the fee changes)</Text><input className="economy-input" value={reason} onChange={(event) => setReason(event.target.value)} minLength={10} maxLength={1000} /><Text mt={2} color="whiteAlpha.500" fontSize="sm">Allowed fee: 0–2,000 basis points. Existing orders retain their original fee. See Store administration for the immutable change history.</Text></Box>
           <Flex mt={6} align={{ base: 'stretch', sm: 'center' }} direction={{ base: 'column', sm: 'row' }} gap={4}>
             <Button type="submit" h="44px" bg="#f47742" color="white" rounded="full" px={8} disabled={saving} alignSelf={{ base: 'stretch', sm: 'flex-start' }}>{saving ? 'Saving…' : 'Save controls'}</Button>
             {feedback && <Text color="whiteAlpha.700">{feedback}</Text>}

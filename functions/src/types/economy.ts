@@ -1,4 +1,4 @@
-export type BalanceBucket = "available" | "locked" | "pending";
+export type BalanceBucket = "available" | "locked" | "pending" | "payout_pending" | "paid" | "reversed";
 
 export type LedgerTransactionType =
   | "admin_credit"
@@ -11,7 +11,10 @@ export type LedgerTransactionType =
   | "escrow_lock"
   | "escrow_release"
   | "escrow_refund"
-  | "marketplace_purchase";
+  | "marketplace_purchase"
+  | "store_provider_fee"
+  | "store_collection" | "store_release" | "store_refund_hold" | "store_refund"
+  | "store_payout_lock" | "store_payout_paid" | "store_payout_failed";
 
 export interface LedgerEntry {
   accountId: string;
@@ -20,6 +23,7 @@ export interface LedgerEntry {
 }
 
 export interface LedgerPostInput {
+  currency?: "POINT" | "ZMW";
   transactionId: string;
   type: LedgerTransactionType;
   status: "completed" | "failed" | "reversed";
@@ -59,6 +63,9 @@ export interface LedgerPostInput {
 }
 
 export interface BalanceRecord {
+  payout_pending: number;
+  paid: number;
+  reversed: number;
   walletId: string;
   available: number;
   locked: number;

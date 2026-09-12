@@ -1,0 +1,12 @@
+{
+  "passed": [
+    "store-desktop",
+    "store-mobile",
+    "listing-mobile",
+    "completed-order-mobile",
+    "seller-listings-desktop",
+    "listing-editor-desktop",
+    "admin-reconciliation-desktop"
+  ],
+  "pageErrors": []
+}

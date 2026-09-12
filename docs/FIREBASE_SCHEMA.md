@@ -2,6 +2,20 @@
 
 This document summarizes the current Firebase model for Club BZR. TypeScript source of truth lives in `lib/schema.ts`; access control lives in `firebase/firestore.rules` and `storage.rules`.
 
+## Store extension
+
+Store contracts are defined in `functions/src/store/types.ts` and re-exported as types by `lib/schema.ts`. See [Store architecture](STORE_ARCHITECTURE.md) for the complete collection/access map and [deployment](STORE_DEPLOYMENT.md) for indexes and rollout.
+
+- Public metadata: `storeListings`, `storeSellerProfiles`; drafts are seller/admin only. `communityPosts` can hold `postType: marketplace` with only a stable `marketplace.listingId` and version reference.
+- Private content: immutable `storeListingAssets/{listingId}_v{version}`, buyer `storeGrants`, private `storeDownloadAttempts`, and `store-private/{uid}/{objectId}` Storage objects. Public listing metadata never includes paid download paths or URLs.
+- Existing `trades` contain Store orders marked `storeOrder: true`, authoritative price/licence/brief/delivery snapshots and the selected `POINT` or `ZMW` rail. Legacy trade kinds remain supported. `escrows` continues to represent Points holds only.
+- `storeOrderEvents`, `storeOrderMessages` and `storeOperations` retain append-only history and retry identity. Order briefs, addresses and evidence are participant/admin only.
+- Existing `transactions` and `ledgerEntries` add explicit currency. `balances` remains Points-only; `sellerPayables` projects ZMW into pending, available, payout_pending, paid and reversed compartments. Existing Points entries without currency are supported during reconciliation; no historical journal rewrite is required.
+- Private seller finance records: `storeSellerAccounts`, `storePayouts`, `storeRefundReceipts`. Store extends `payments` with `purpose: store_order`, `paymentEvents` with `purpose: store`, and existing audit/reconciliation collections.
+- `settings/store` owns fail-closed Store capabilities and fulfilment limits. The platform rate stays in `settings/economy.tradeFeeBasisPoints`, with immutable reasoned changes in `auditLogs`.
+
+All Store collection mutations are server-owned. Claims determine admin access; editable profile roles do not grant financial authority. New indexes cover bounded discovery, cursor workspaces, reporting and recovery, with large private payloads excluded from single-field indexing.
+
 ## Firebase Configuration
 
 Firebase is initialized in `lib/config.ts`.
@@ -49,7 +63,12 @@ Emulators are supported when `VITE_USE_FIREBASE_EMULATORS=true`:
 - `uid`, `email`, `displayName`, `photoURL`.
 - `role`: `user`, `artist`, `facilitator`, `curator`, or `admin`.
 - Optional profile fields: `bio`, `location`, `website`, `socialLinks`.
-- `isOnboarded`, `isActive`, `lastActiveAt`.
+- `accountStatus`: `active`, `suspended`, or `closed`; `isActive` remains a compatibility mirror.
+- `invitationStatus`: `pending`, `accepted`, `expired`, or `revoked`.
+- `isOnboarded` is an onboarding state and is not an account-access status.
+- `lastActiveAt` is written by the authenticated server activity callable; it must not fall back to `updatedAt`.
+
+`userInvites/{inviteId}` stores server-created invitation state. `auditLogs/{auditId}` stores immutable administrative actions. Both collections are admin-readable and server-write-only.
 
 `creativePassports/{userId}` stores gamification and activity state:
 
@@ -90,6 +109,10 @@ The wall is a merged activity feed:
 - Content: `prompt`, `content`, `mediaUrls`, `mediaType`.
 - Engagement: `reactions`, `reactionsCount`, `comments`, `commentsCount`, `shares`.
 - Moderation: `isApproved`, `isHidden`, plus `featured`, `pinned`, `tags`.
+- Optional platform editorial fields: `postType: community_note` and a
+  `communityNote` object containing `title`, `category`, `takeaway`,
+  `groundingLabel`, `dateKey`, `aiGenerated`, and `model`. These fields are
+  server-authored and cannot be supplied or changed by ordinary clients.
 
 `comments/{commentId}` supports comments for posts, submissions, sessions, and exhibitions:
 
@@ -156,7 +179,8 @@ Submission voting is implemented in `lib/submissionVotes.ts`. Vote changes updat
 
 ## Access Rules Summary
 
-- Public reads: users, artists, sessions, quests, quest submissions, community posts, comments, exhibitions, art locations, radio content, prompts.
+- Public reads: public profiles, artists, sessions, quests, quest submissions, community posts, comments, exhibitions, art locations, radio content, prompts.
+- Private user documents: readable only by the owner or an active administrator.
 - Authenticated creates: own users, artists, quest submissions, community posts, comments, art locations, matches.
 - Admin or curator management: sessions and exhibitions.
 - Admin-only management: quests, radio creation/deletion, prompts, most destructive operations.

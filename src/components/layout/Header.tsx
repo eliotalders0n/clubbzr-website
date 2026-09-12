@@ -29,6 +29,7 @@ import {
   Portal,
 } from '@chakra-ui/react'
 
+import { ShoppingBag } from 'lucide-react'
 import logoWhite from '@/assets/logos/Club BZR logo (RED).png'
 import { useAuth } from '@/contexts/AuthContext'
 import { useDocument } from '@/hooks/useFirestore'
@@ -46,6 +47,7 @@ const NAV_LINKS: NavLink[] = [
   { label: 'Sessions', shortLabel: 'Sessions', href: '/sessions', match: ['/sessions'], icon: CalendarDays },
   { label: 'Side Quests', shortLabel: 'Quests', href: '/quests', match: ['/quests'], icon: Compass },
   { label: 'Artists', shortLabel: 'Artists', href: '/artists', match: ['/artists'], icon: UsersRound },
+  { label: 'Store', shortLabel: 'Store', href: '/store', match: ['/store'], icon: ShoppingBag },
   { label: 'Radio', shortLabel: 'Radio', href: '/radio', match: ['/radio'], icon: RadioIcon },
 ]
 
@@ -115,6 +117,7 @@ export function Header({ activeLink }: HeaderProps) {
             </HStack>
 
             <HStack gap={3}>
+              <Box display={{ base: 'block', md: 'none' }}><Link to="/store" aria-label="Open Store"><ShoppingBag size={21} /></Link></Box>
               {artistProfile && (
                 <Link to="/subversions/create">
                   <Button

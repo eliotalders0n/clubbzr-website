@@ -16,6 +16,7 @@ import React, {
   type ReactNode,
 } from 'react';
 import { User as FirebaseUser } from 'firebase/auth';
+import { httpsCallable } from 'firebase/functions';
 
 import {
   onAuthStateChange,
@@ -35,6 +36,7 @@ import {
   type AuthErrorInfo,
 } from '../../lib/authentication';
 import type { User, UserRole } from '../../lib/schema';
+import { functions } from '../../lib/config';
 import { recordDailyLogin } from '../../lib/quests';
 
 // =============================================================================
@@ -132,6 +134,9 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
         });
         void recordDailyLogin().catch(() => {
           // Login remains successful if quest activity is temporarily unavailable.
+        });
+        void httpsCallable(functions, 'recordUserActivity')({ source: 'auth_session' }).catch(() => {
+          // Activity tracking must never block authentication.
         });
       } else {
         setUser(null);

@@ -27,6 +27,8 @@ export interface BaseDocument {
 /** User roles in the system */
 export type UserRole = 'user' | 'artist' | 'facilitator' | 'curator' | 'admin';
 
+export type UserAccountStatus = 'active' | 'suspended' | 'closed';
+
 /** Reaction types */
 export type ReactionType = 'love' | 'fire' | 'mind_blown' | 'inspire' | 'curious';
 
@@ -178,7 +180,31 @@ export interface User extends BaseDocument {
   bookmarkedArtworkKeys?: string[];
   isOnboarded: boolean;
   isActive: boolean;
+  accountStatus?: UserAccountStatus;
+  invitationStatus?: 'pending' | 'accepted' | 'expired' | 'revoked';
   lastActiveAt?: FirestoreTimestamp;
+}
+
+/** Admin-owned invitation record. */
+export interface UserInvite extends BaseDocument {
+  email: string;
+  displayName: string;
+  username: string;
+  role: UserRole;
+  status: 'pending' | 'accepted' | 'expired' | 'revoked';
+  createdBy: string;
+  userId?: string;
+  setupLink?: string;
+  expiresAt?: FirestoreTimestamp;
+}
+
+/** Immutable server-written administrative audit event. */
+export interface AuditLog extends BaseDocument {
+  actorId: string;
+  action: string;
+  targetType: string;
+  targetId: string;
+  data?: Record<string, unknown>;
 }
 
 /**
@@ -256,6 +282,21 @@ export interface CreativePassport extends BaseDocument {
 
   // Statistics
   stats: PassportStats;
+}
+
+/** Authoritative point balance projected from the immutable ledger. */
+export interface PointBalance extends BaseDocument {
+  walletId: string;
+  available: number;
+  locked: number;
+  pending: number;
+  total: number;
+  ledgerSequence: number;
+  lifetimeEarned: number;
+  lifetimePurchased: number;
+  lifetimeSpent: number;
+  lifetimeTransferredIn: number;
+  lifetimeTransferredOut: number;
 }
 
 /** Collaboration record */
@@ -696,6 +737,8 @@ export interface QuestSubmission extends BaseDocument {
 
   // Points
   pointsAwarded: number;
+  rewardTransactionId?: string;
+  rewardedAt?: FirestoreTimestamp;
 
   // Denormalized display fields
   questTitle?: string;
@@ -734,6 +777,19 @@ export interface CommunityPost extends BaseDocument {
   featured: boolean;
   pinned: boolean;
   tags: string[];
+
+  // Platform-authored editorial content
+  postType?: 'member' | 'community_note' | 'marketplace';
+  marketplace?: {listingId: string; version: number};
+  communityNote?: {
+    title: string;
+    category: string;
+    takeaway: string;
+    groundingLabel: string;
+    dateKey: string;
+    aiGenerated: true;
+    model: string;
+  };
 
   // Moderation
   isApproved: boolean;
@@ -1092,6 +1148,7 @@ export interface CollectionTypes {
   users: User;
   publicProfiles: PublicProfile;
   creativePassports: CreativePassport;
+  balances: PointBalance;
   artists: Artist;
   artistFollows: ArtistFollow;
   artworks: Artwork;
@@ -1106,6 +1163,11 @@ export interface CollectionTypes {
   radioContent: RadioContent;
   notifications: Notification;
   matches: Match;
+  userInvites: UserInvite;
+  auditLogs: AuditLog;
 }
 
 export type CollectionName = keyof CollectionTypes;
+
+// Marketplace contracts are shared with trusted callable implementations.
+export type { StoreListing, StoreOrder, StoreAsset, StoreSettings, ProductType, PaymentRail, PriceSnapshot, CheckoutInput } from '../functions/src/store/types';

@@ -17,10 +17,10 @@ import {getEconomySettings, requireEconomyEnabled} from "../core/settings";
 import {getSystemAccount, postLedgerTransaction} from "../wallet/ledger";
 import {recordSystemActivity} from "../quests/engine";
 
-const lencoSecretKey = defineSecret("LENCO_SECRET_KEY");
+export const lencoSecretKey = defineSecret("LENCO_SECRET_KEY");
 const apiBase = process.env.LENCO_API_BASE || "https://api.lenco.co/access/v2";
 
-function normalizePhone(value: string): string {
+export function normalizePhone(value: string): string {
   const digits = value.replace(/\D/g, "");
   const normalized = digits.startsWith("0") ? `260${digits.slice(1)}` : digits;
   if (!/^260\d{9}$/.test(normalized)) {
@@ -29,7 +29,7 @@ function normalizePhone(value: string): string {
   return normalized;
 }
 
-function normalizeOperator(value: string): "mtn" | "airtel" | "zamtel" {
+export function normalizeOperator(value: string): "mtn" | "airtel" | "zamtel" {
   const operator = value.toLowerCase();
   if (!(["mtn", "airtel", "zamtel"] as string[]).includes(operator)) {
     throw new HttpsError("invalid-argument", "Mobile money operator is invalid.");
@@ -37,7 +37,7 @@ function normalizeOperator(value: string): "mtn" | "airtel" | "zamtel" {
   return operator as "mtn" | "airtel" | "zamtel";
 }
 
-async function lencoRequest(
+export async function lencoRequest(
   path: string,
   body?: Record<string, unknown>,
   method: "GET" | "POST" = "POST"
@@ -195,7 +195,8 @@ export const initiatePointPurchase = onCall({
   }
 });
 
-function validWebhookSignature(rawBody: Buffer, signature: string, secret: string): boolean {
+export function validWebhookSignature(rawBody: Buffer, signature: string, secret: string): boolean {
+  if (!secret || !/^[a-fA-F0-9]{128}$/.test(signature)) return false;
   const webhookHashKey = createHash("sha256").update(secret).digest("hex");
   const expected = createHmac("sha512", webhookHashKey).update(rawBody).digest("hex");
   const receivedBuffer = Buffer.from(signature.toLowerCase(), "hex");
@@ -227,6 +228,21 @@ export const lencoPointsWebhook = onRequest({
   const body = request.body as Record<string, unknown>;
   const event = String(body.event || "");
   const data = (body.data || {}) as Record<string, unknown>;
+  // Preserve the existing merchant webhook URL while routing only confirmed
+  // Store references to the Store handler. Point purchases keep their own path.
+  if (/^(collection|transfer)\.(successful|failed)$/.test(event) && /^[a-f0-9]{64}$/.test(String(data.reference || ""))) {
+    try {
+      const {handleVerifiedStoreEvent} = await import("../store/webhook.js");
+      if (await handleVerifiedStoreEvent(body, rawBody)) {
+        response.status(200).send("OK");
+        return;
+      }
+    } catch (error) {
+      logger.error("Store webhook requires retry", {error});
+      response.status(500).send("Retry required");
+      return;
+    }
+  }
   const paymentId = String(data.clientReference || data.reference || "");
   const providerTransactionId = String(data.id || data.transactionReference || "");
   const eventId = deterministicId(

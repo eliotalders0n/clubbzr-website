@@ -5,6 +5,9 @@ import {setGlobalOptions} from "firebase-functions/v2";
 import {onDocumentCreated, onDocumentUpdated} from "firebase-functions/v2/firestore";
 import {HttpsError, onCall, onRequest} from "firebase-functions/v2/https";
 import * as logger from "firebase-functions/logger";
+import {onSchedule} from "firebase-functions/v2/scheduler";
+
+import {moneyEquals, sumMoney, toMinorUnits} from "./payments/money";
 
 if (admin.apps.length === 0) {
   admin.initializeApp();
@@ -21,6 +24,10 @@ const whatsappWebhookVerifyToken = defineSecret("WHATSAPP_WEBHOOK_VERIFY_TOKEN")
 const LENCO_API_BASE =
   process.env.LENCO_API_BASE || "https://api.lenco.co/access/v2";
 const LENCO_REQUEST_TIMEOUT_MS = 15000;
+const LENCO_SETTLEMENT_REQUEST_TIMEOUT_MS = 2500;
+const LENCO_MAX_REPORTING_PAGES = 100;
+const LENCO_REPORTING_DAYS = 30;
+const LENCO_REPORTING_TIME_ZONE = "Africa/Lusaka";
 const WHATSAPP_API_BASE = "https://graph.facebook.com/v25.0";
 const WHATSAPP_REQUEST_TIMEOUT_MS = 15000;
 const CLUB_BZR_WHATSAPP_BUSINESS_NUMBER = "260960912464";
@@ -48,6 +55,10 @@ const SESSION_REGISTRATIONS_COLLECTION = "sessionRegistrations";
 const SESSION_PAYMENT_TRANSACTIONS_COLLECTION = "sessionPaymentTransactions";
 const SESSION_PAYMENT_RETURNS_COLLECTION = "sessionPaymentReturns";
 const SESSION_PAYMENT_WITHDRAWALS_COLLECTION = "sessionPaymentWithdrawals";
+const SESSION_EXTERNAL_PAYMENT_RECEIPTS_COLLECTION =
+  "sessionExternalPaymentReceipts";
+const SESSION_EXTERNAL_FUND_MOVEMENTS_COLLECTION =
+  "sessionExternalFundMovements";
 const MESSAGE_JOBS_COLLECTION = "messageJobs";
 const WHATSAPP_WEBHOOK_EVENTS_COLLECTION = "whatsappWebhookEvents";
 const MAIL_COLLECTION = "mail";
@@ -78,6 +89,35 @@ interface SessionPaymentMetadata {
 interface AdminPaymentsDashboardData {
   sessionId?: string;
   limit?: number;
+}
+
+interface AdminRecordExternalPaymentData {
+  sessionId?: string;
+  registrationId?: string;
+  method?: string;
+  amount?: number | string;
+  currency?: string;
+  reference?: string;
+  receivedAt?: string;
+  note?: string;
+}
+
+interface AdminClassifyExternalPaymentData {
+  sessionId?: string;
+  registrationId?: string;
+  method?: string;
+  note?: string;
+}
+
+interface AdminRecordExternalFundOutflowData {
+  sessionId?: string;
+  source?: string;
+  amount?: number | string;
+  currency?: string;
+  reason?: string;
+  reference?: string;
+  spentAt?: string;
+  note?: string;
 }
 
 interface AdminResolvePaymentReconciliationIssueData {
@@ -466,8 +506,8 @@ function normalizePaymentReference(value: unknown): string | null {
 }
 
 function getFiniteAmount(value: unknown): number | null {
-  const amount = Number(value);
-  return Number.isFinite(amount) ? roundCurrency(amount) : null;
+  const minorUnits = toMinorUnits(value);
+  return minorUnits === null ? null : minorUnits / 100;
 }
 
 function requirePositiveAmount(value: unknown, message: string): number {
@@ -511,7 +551,9 @@ function getRecord(value: unknown): Record<string, unknown> {
 function getLencoAccountDetails(
   account: Record<string, unknown>
 ): Record<string, unknown> {
-  return getRecord(account.details);
+  const details = getRecord(account.details);
+  const bankAccount = getRecord(account.bankAccount);
+  return Object.keys(details).length > 0 ? details : bankAccount;
 }
 
 function getLencoAccountId(account: Record<string, unknown>): string | null {
@@ -524,8 +566,9 @@ function getLencoAccountDisplayName(
 ): string | null {
   const details = getLencoAccountDetails(account);
   return normalizeOptionalString(details.accountName) ??
+    normalizeOptionalString(account.name) ??
     normalizeOptionalString(account.accountName) ??
-    normalizeOptionalString(account.name);
+    null;
 }
 
 function getLencoAccountNumber(
@@ -636,6 +679,43 @@ function getLocalPaymentKey(record: Record<string, unknown>): string | null {
     normalizeOptionalString(record.transactionId) ??
     normalizeOptionalString(record.paymentTransactionId) ??
     normalizeOptionalString(record.id);
+}
+
+function getPaymentMatchKeys(record: Record<string, unknown>): string[] {
+  const nestedProvider = record.providerCollection &&
+    typeof record.providerCollection === "object" &&
+    !Array.isArray(record.providerCollection) ?
+    record.providerCollection as Record<string, unknown> :
+    {};
+  const nestedCollection = record.collection &&
+    typeof record.collection === "object" &&
+    !Array.isArray(record.collection) ?
+    record.collection as Record<string, unknown> :
+    {};
+  const candidates = [
+    record.id,
+    record.reference,
+    record.paymentReference,
+    record.transactionId,
+    record.transactionReference,
+    record.paymentTransactionId,
+    record.clientReference,
+    record.providerReference,
+    record.lencoReference,
+    nestedProvider.id,
+    nestedProvider.reference,
+    nestedProvider.clientReference,
+    nestedProvider.transactionId,
+    nestedProvider.transactionReference,
+    nestedCollection.id,
+    nestedCollection.reference,
+    nestedCollection.clientReference,
+    nestedCollection.lencoReference,
+  ];
+
+  return Array.from(new Set(candidates
+    .map((value) => normalizeOptionalString(value)?.toLowerCase())
+    .filter((value): value is string => Boolean(value))));
 }
 
 function getRecordDate(
@@ -1834,6 +1914,411 @@ async function resolveLencoDebitAccountId(
   return accountId;
 }
 
+function selectConfiguredLencoAccount(
+  accounts: Record<string, unknown>[],
+  currency = DEFAULT_CURRENCY
+): Record<string, unknown> | null {
+  const activeAccounts = accounts.filter(isLencoAccountActive);
+  const configuredId = getConfiguredLencoAccountId();
+  const configuredNumber = getConfiguredLencoAccountNumber()?.replace(/\s/g, "");
+  const configuredName = getConfiguredLencoAccountName()?.toLowerCase();
+  const normalizedCurrency = normalizeCurrency(currency);
+
+  if (configuredId) {
+    const account = activeAccounts.find((candidate) =>
+      getLencoAccountId(candidate) === configuredId
+    );
+    const actualNumber = getLencoAccountNumber(account ?? {})
+      ?.replace(/\s/g, "");
+    if (account && (!configuredNumber || actualNumber === configuredNumber)) {
+      return account;
+    }
+
+    // Lenco can replace an account UUID while retaining its visible merchant
+    // or till number. Treat the configured number as the stable identity when
+    // the UUID is stale, rather than making the balance unavailable.
+    if (configuredNumber) {
+      const accountByNumber = activeAccounts.find((candidate) =>
+        getLencoAccountNumber(candidate)?.replace(/\s/g, "") ===
+          configuredNumber
+      );
+      if (accountByNumber) return accountByNumber;
+    }
+  }
+
+  if (configuredNumber) {
+    return activeAccounts.find((account) =>
+      getLencoAccountNumber(account)?.replace(/\s/g, "") === configuredNumber
+    ) ?? null;
+  }
+
+  if (configuredName) {
+    return activeAccounts.find((account) =>
+      getLencoAccountDisplayName(account)?.toLowerCase() === configuredName
+    ) ?? null;
+  }
+
+  return activeAccounts.find((account) =>
+    getLencoAccountCurrency(account)?.toUpperCase() === normalizedCurrency
+  ) ?? null;
+}
+
+function formatLusakaDate(value: Date): string {
+  return new Intl.DateTimeFormat("en-CA", {
+    timeZone: LENCO_REPORTING_TIME_ZONE,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).format(value);
+}
+
+function getLencoReportingPeriod(now = new Date()): {
+  from: string;
+  to: string;
+  days: number;
+  timeZone: string;
+} {
+  const start = new Date(
+    now.getTime() - (LENCO_REPORTING_DAYS - 1) * 24 * 60 * 60 * 1000
+  );
+  return {
+    from: formatLusakaDate(start),
+    to: formatLusakaDate(now),
+    days: LENCO_REPORTING_DAYS,
+    timeZone: LENCO_REPORTING_TIME_ZONE,
+  };
+}
+
+function isRecordInReportingPeriod(
+  record: Record<string, unknown>,
+  period: {from: string; to: string},
+  fields: string[]
+): boolean {
+  const date = getRecordDate(record, fields);
+  if (!date) return false;
+  const start = new Date(`${period.from}T00:00:00+02:00`);
+  const endExclusive = new Date(`${period.to}T00:00:00+02:00`);
+  endExclusive.setUTCDate(endExclusive.getUTCDate() + 1);
+  return date >= start && date < endExclusive;
+}
+
+function requireCompletePagination(pageCount: number): number {
+  const normalized = Math.max(Number(pageCount) || 1, 1);
+  if (normalized > LENCO_MAX_REPORTING_PAGES) {
+    throw new HttpsError(
+      "resource-exhausted",
+      "Lenco returned too many records for an accurate dashboard snapshot."
+    );
+  }
+  return normalized;
+}
+
+async function getLencoProviderSnapshot(
+  secret: string
+): Promise<Record<string, unknown>> {
+  const reportingPeriod = getLencoReportingPeriod();
+  let accountsResponse: Record<string, unknown>;
+  try {
+    accountsResponse = await lencoRequest(
+      "/accounts",
+      {method: "GET"},
+      secret
+    );
+  } catch (error) {
+    const configuredAccountId = getConfiguredLencoAccountId();
+    if (!configuredAccountId) throw error;
+
+    return getLencoConfiguredAccountSnapshot(
+      secret,
+      configuredAccountId,
+      getErrorMessage(error)
+    );
+  }
+  const accounts = Array.isArray(accountsResponse.data) ?
+    accountsResponse.data as Record<string, unknown>[] :
+    [];
+  const selectedAccount = selectConfiguredLencoAccount(accounts);
+  const accountId = getLencoAccountId(selectedAccount ?? {});
+
+  if (!selectedAccount || !accountId) {
+    throw new HttpsError(
+      "failed-precondition",
+      "The configured Lenco account was not returned by the accounts API."
+    );
+  }
+
+  const balancePromise = lencoRequest(
+    `/accounts/${encodeURIComponent(accountId)}/balance`,
+    {method: "GET"},
+    secret
+  );
+  const transactionsPromise = (async () => {
+    const records: Record<string, unknown>[] = [];
+    let page = 1;
+    let pageCount: number;
+
+    do {
+      const query = new URLSearchParams({
+        page: String(page),
+        from: reportingPeriod.from,
+        to: reportingPeriod.to,
+        accountId,
+      });
+      const response = await lencoRequest(
+        `/transactions?${query.toString()}`,
+        {method: "GET"},
+        secret
+      );
+      const pageTransactions = Array.isArray(response.data) ?
+        response.data as Record<string, unknown>[] :
+        [];
+      records.push(...pageTransactions.map((transaction) => ({
+        ...transaction,
+        // Lenco v2 account transactions are posted ledger entries and do not
+        // expose the v1 transaction-status field. Reaching this endpoint means
+        // the entry is complete; retain an explicit status if Lenco adds one.
+        status: normalizeOptionalString(transaction.status) ?? "completed",
+        completedAt: transaction.completedAt ?? transaction.datetime ?? null,
+        transactionReference: transaction.transactionReference ??
+          transaction.lencoReference ?? transaction.id ?? null,
+      })));
+      pageCount = requireCompletePagination(
+        Number(getRecord(response.meta).pageCount)
+      );
+      page += 1;
+    } while (page <= pageCount);
+
+    return records;
+  })();
+  const settlementsPromise = (async () => {
+    const records: Record<string, unknown>[] = [];
+    let page = 1;
+    let pageCount: number;
+
+    try {
+      do {
+        const query = new URLSearchParams({
+          page: String(page),
+          from: reportingPeriod.from,
+          to: reportingPeriod.to,
+          country: "zm",
+        });
+        const response = await lencoRequest(
+          `/settlements?${query.toString()}`,
+          {method: "GET"},
+          secret,
+          LENCO_SETTLEMENT_REQUEST_TIMEOUT_MS
+        );
+        const pageSettlements = Array.isArray(response.data) ?
+          response.data as Record<string, unknown>[] :
+          [];
+        records.push(...pageSettlements.filter((settlement) =>
+          normalizeOptionalString(settlement.accountId) === accountId
+        ));
+        pageCount = requireCompletePagination(
+          Number(getRecord(response.meta).pageCount)
+        );
+        page += 1;
+      } while (page <= pageCount);
+
+      return {records, warning: null as string | null};
+    } catch (error) {
+      return {
+        records: [],
+        warning: `Settlement data is unavailable: ${getErrorMessage(error)}`,
+      };
+    }
+  })();
+
+  const [balanceResponse, transactions, settlementResult] = await Promise.all([
+    balancePromise,
+    transactionsPromise,
+    settlementsPromise,
+  ]);
+  const balance = getRecord(balanceResponse.data);
+  const currentBalance = getFiniteAmount(balance.ledgerBalance);
+  const availableBalance = getFiniteAmount(balance.availableBalance);
+  if (currentBalance === null || availableBalance === null) {
+    throw new HttpsError(
+      "unavailable",
+      "Lenco returned an account balance without ledgerBalance or availableBalance."
+    );
+  }
+  const settlements = settlementResult.records;
+  const settlementWarning = settlementResult.warning;
+
+  const successfulTransactions = transactions.filter((transaction) => {
+    const status = normalizeOptionalString(transaction.status)?.toLowerCase();
+    return !status || ["successful", "completed", "success"].includes(status);
+  });
+  const inflowTotal = sumMoney(
+    successfulTransactions.filter((transaction) => transaction.type === "credit"),
+    (transaction) => transaction.amount
+  );
+  const payoutTotal = sumMoney(
+    successfulTransactions.filter((transaction) => transaction.type === "debit"),
+    (transaction) => transaction.amount
+  );
+  const failedPayoutTotal = transactions
+    .filter((transaction) =>
+      transaction.type === "debit" &&
+      ["failed", "declined", "cancelled"].includes(
+        String(transaction.status ?? "").toLowerCase()
+      )
+    )
+    .reduce((sum, transaction) =>
+      sum + (getFiniteAmount(transaction.amount) ?? 0), 0
+    );
+
+  return {
+    status: "connected",
+    syncedAt: new Date().toISOString(),
+    reportingPeriod,
+    balanceAuthoritative: true,
+    balanceSource: "lenco-account",
+    transactionsComplete: true,
+    settlementsAvailable: settlementWarning === null,
+    settlementWarning,
+    account: {
+      id: accountId,
+      name: getLencoAccountDisplayName(selectedAccount),
+      accountNumber: getLencoAccountNumber(selectedAccount),
+      currency: normalizeOptionalString(balance.currency) ??
+        getLencoAccountCurrency(selectedAccount) ?? DEFAULT_CURRENCY,
+      type: normalizeOptionalString(selectedAccount.type),
+      status: normalizeOptionalString(selectedAccount.status),
+      availableBalance,
+      currentBalance,
+    },
+    transactions: serializeForCallable(transactions),
+    settlements: serializeForCallable(settlements),
+    totals: {
+      inflow: roundCurrency(inflowTotal),
+      payout: roundCurrency(payoutTotal),
+      fees: null,
+      feeDataAvailable: false,
+      failedPayout: roundCurrency(failedPayoutTotal),
+      netMovement: roundCurrency(inflowTotal - payoutTotal),
+      transactionCount: transactions.length,
+    },
+  };
+}
+
+async function getLencoConfiguredAccountSnapshot(
+  secret: string,
+  accountId: string,
+  accountLookupError: string
+): Promise<Record<string, unknown>> {
+  const reportingPeriod = getLencoReportingPeriod();
+  const balancePromise = lencoRequest(
+    `/accounts/${encodeURIComponent(accountId)}/balance`,
+    {method: "GET"},
+    secret
+  );
+  const transactionsPromise = (async () => {
+    const records: Record<string, unknown>[] = [];
+    let page = 1;
+    let pageCount: number;
+
+    do {
+      const query = new URLSearchParams({
+        page: String(page),
+        accountId,
+        from: reportingPeriod.from,
+        to: reportingPeriod.to,
+      });
+      const response = await lencoRequest(
+        `/transactions?${query.toString()}`,
+        {method: "GET"},
+        secret,
+        LENCO_REQUEST_TIMEOUT_MS,
+        LENCO_API_BASE
+      );
+      const pageTransactions = Array.isArray(response.data) ?
+        response.data as Record<string, unknown>[] :
+        [];
+      records.push(...pageTransactions.map((transaction) => ({
+        ...transaction,
+        status: normalizeOptionalString(transaction.status) ?? "completed",
+        completedAt: transaction.completedAt ?? transaction.datetime ?? null,
+        transactionReference: transaction.transactionReference ??
+          transaction.lencoReference ?? transaction.id ?? null,
+      })));
+      pageCount = requireCompletePagination(
+        Number(getRecord(response.meta).pageCount)
+      );
+      page += 1;
+    } while (page <= pageCount);
+
+    return records;
+  })();
+  const [balanceResponse, transactions] = await Promise.all([
+    balancePromise,
+    transactionsPromise,
+  ]);
+  const balance = getRecord(balanceResponse.data);
+  const currentBalance = getFiniteAmount(balance.ledgerBalance);
+  const availableBalance = getFiniteAmount(balance.availableBalance);
+  if (currentBalance === null || availableBalance === null) {
+    throw new HttpsError(
+      "unavailable",
+      "Lenco returned an account balance without ledgerBalance or availableBalance."
+    );
+  }
+
+  const latestTransaction = [...transactions].sort((left, right) => {
+    const leftDate = getRecordDate(left, ["datetime", "completedAt"]);
+    const rightDate = getRecordDate(right, ["datetime", "completedAt"]);
+    return (rightDate?.getTime() ?? 0) - (leftDate?.getTime() ?? 0);
+  })[0];
+  const observedTransactionBalance = getFiniteAmount(latestTransaction?.balance);
+  const inflowTotal = sumMoney(
+    transactions.filter((transaction) => transaction.type === "credit"),
+    (transaction) => transaction.amount
+  );
+  const payoutTotal = sumMoney(
+    transactions.filter((transaction) => transaction.type === "debit"),
+    (transaction) => transaction.amount
+  );
+
+  return {
+    status: "connected",
+    mode: "configured-account-transactions",
+    syncedAt: new Date().toISOString(),
+    reportingPeriod,
+    balanceAuthoritative: true,
+    balanceSource: "lenco-account",
+    transactionsComplete: true,
+    settlementsAvailable: false,
+    warning: [
+      "Using the configured account directly because Lenco rejected the",
+      `account-list lookup: ${accountLookupError}`,
+    ].join(" "),
+    account: {
+      id: accountId,
+      name: getConfiguredLencoAccountName() ?? "Configured Lenco account",
+      accountNumber: getConfiguredLencoAccountNumber(),
+      currency: normalizeOptionalString(balance.currency) ?? DEFAULT_CURRENCY,
+      type: null,
+      status: "configured",
+      availableBalance,
+      currentBalance,
+      observedTransactionBalance,
+    },
+    transactions: serializeForCallable(transactions),
+    settlements: [],
+    totals: {
+      inflow: roundCurrency(inflowTotal),
+      payout: roundCurrency(payoutTotal),
+      fees: null,
+      feeDataAvailable: false,
+      failedPayout: 0,
+      netMovement: roundCurrency(inflowTotal - payoutTotal),
+      transactionCount: transactions.length,
+    },
+  };
+}
+
 async function isAdminUser(uid: string): Promise<boolean> {
   const userSnapshot = await db.collection("users").doc(uid).get();
   return userSnapshot.exists && userSnapshot.data()?.role === "admin";
@@ -2287,7 +2772,10 @@ export {
 } from "./wallet/reconciliation";
 export {
   adminCreateInviteProfile,
+  adminGetUserAuthDetails,
+  adminSaveUser,
   adminUpdateUserProfile,
+  recordUserActivity,
   setUserAccess,
   setUserAccountStatus,
   updateEconomySettings,
@@ -2300,6 +2788,7 @@ export {
   reconcilePendingPointPayments,
 } from "./payments/lenco";
 export {
+  adminBackfillQuestRewards,
   adminBackfillPaidSessionRewards,
   activityFromArtwork,
   activityFromApprovedQuestSubmission,
@@ -2329,6 +2818,7 @@ export {
   calculateDailyEconomyAnalytics,
   detectLedgerRisk,
 } from "./analytics/triggers";
+export {generateDailyCommunityNote} from "./community/notes";
 
 export const adminSearchLocations = onCall(
   {
@@ -2713,6 +3203,7 @@ export const adminGetPaymentsDashboard = onCall(
     cors: true,
     invoker: "public",
     timeoutSeconds: 30,
+    secrets: [lencoSecretKey],
   },
   async (request) => {
     await requireAdminAuth(request.auth?.uid);
@@ -2729,12 +3220,26 @@ export const adminGetPaymentsDashboard = onCall(
       .collection(SESSION_PAYMENT_RETURNS_COLLECTION);
     let withdrawalQuery: FirebaseFirestore.Query = db
       .collection(SESSION_PAYMENT_WITHDRAWALS_COLLECTION);
+    let externalReceiptQuery: FirebaseFirestore.Query = db
+      .collection(SESSION_EXTERNAL_PAYMENT_RECEIPTS_COLLECTION);
+    let externalMovementQuery: FirebaseFirestore.Query = db
+      .collection(SESSION_EXTERNAL_FUND_MOVEMENTS_COLLECTION);
+    const pointPaymentQuery = db.collection("payments")
+      .where("purpose", "==", "point_purchase")
+      .orderBy("createdAt", "desc")
+      .limit(limitCount);
 
     if (sessionId) {
       transactionQuery = transactionQuery.where("sessionId", "==", sessionId);
       registrationQuery = registrationQuery.where("sessionId", "==", sessionId);
       returnQuery = returnQuery.where("sessionId", "==", sessionId);
       withdrawalQuery = withdrawalQuery.where("sessionId", "==", sessionId);
+      externalReceiptQuery = externalReceiptQuery.where(
+        "sessionId", "==", sessionId
+      );
+      externalMovementQuery = externalMovementQuery.where(
+        "sessionId", "==", sessionId
+      );
     } else {
       transactionQuery = transactionQuery
         .orderBy("createdAt", "desc")
@@ -2742,6 +3247,12 @@ export const adminGetPaymentsDashboard = onCall(
       registrationQuery = registrationQuery.limit(1000);
       returnQuery = returnQuery.orderBy("createdAt", "desc").limit(limitCount);
       withdrawalQuery = withdrawalQuery
+        .orderBy("createdAt", "desc")
+        .limit(limitCount);
+      externalReceiptQuery = externalReceiptQuery
+        .orderBy("createdAt", "desc")
+        .limit(limitCount);
+      externalMovementQuery = externalMovementQuery
         .orderBy("createdAt", "desc")
         .limit(limitCount);
     }
@@ -2755,13 +3266,35 @@ export const adminGetPaymentsDashboard = onCall(
       registrationSnapshot,
       returnSnapshot,
       withdrawalSnapshot,
+      externalReceiptSnapshot,
+      externalMovementSnapshot,
+      pointPaymentSnapshot,
       sessionResult,
+      providerSnapshotResult,
     ] = await Promise.all([
       transactionQuery.get(),
       registrationQuery.get(),
       returnQuery.get(),
       withdrawalQuery.get(),
+      externalReceiptQuery.get(),
+      externalMovementQuery.get(),
+      pointPaymentQuery.get(),
       sessionPromise,
+      getLencoProviderSnapshot(lencoSecretKey.value())
+        .catch((error) => ({
+          status: "unavailable",
+          syncedAt: new Date().toISOString(),
+          error: getErrorMessage(error),
+          account: null,
+          transactions: [],
+          settlements: [],
+          totals: null,
+          reportingPeriod: getLencoReportingPeriod(),
+          balanceAuthoritative: false,
+          balanceSource: "unavailable",
+          transactionsComplete: false,
+          settlementsAvailable: false,
+        })),
     ]);
 
     const sessions = sessionId ?
@@ -2783,6 +3316,20 @@ export const adminGetPaymentsDashboard = onCall(
     const withdrawals = withdrawalSnapshot.docs.map((snapshot) =>
       snapshotToCallableObject(snapshot)
     );
+    const externalReceipts = externalReceiptSnapshot.docs.map((snapshot) =>
+      snapshotToCallableObject(snapshot)
+    );
+    const externalFundMovements = externalMovementSnapshot.docs.map(
+      (snapshot) => snapshotToCallableObject(snapshot)
+    );
+    const pointPayments = pointPaymentSnapshot.docs.map((snapshot) =>
+      snapshotToCallableObject(snapshot)
+    );
+    const externalReceiptByRegistrationId = new Map<string, Record<string, unknown>>();
+    externalReceipts.forEach((receipt) => {
+      const registrationId = normalizeOptionalString(receipt.registrationId);
+      if (registrationId) externalReceiptByRegistrationId.set(registrationId, receipt);
+    });
 
     const localTransactionsByKey = new Map<string, Record<string, unknown>>();
     localTransactions.forEach((transaction) => {
@@ -2868,6 +3415,133 @@ export const adminGetPaymentsDashboard = onCall(
       }
     });
 
+    const providerSettlements = Array.isArray(providerSnapshotResult.settlements) ?
+      providerSnapshotResult.settlements as Record<string, unknown>[] :
+      [];
+    const periodRecord = getRecord(providerSnapshotResult.reportingPeriod);
+    const reportingPeriod = {
+      from: normalizeOptionalString(periodRecord.from) ??
+        getLencoReportingPeriod().from,
+      to: normalizeOptionalString(periodRecord.to) ??
+        getLencoReportingPeriod().to,
+    };
+    const completedSessionCollections = localTransactions.filter((transaction) =>
+      getFallbackPaymentStatus(transaction.status) === "completed" &&
+      isRecordInReportingPeriod(
+        transaction,
+        reportingPeriod,
+        ["completedAt", "updatedAt", "createdAt"]
+      )
+    );
+    const completedPointCollections: Record<string, unknown>[] = pointPayments
+      .filter((payment) =>
+        normalizeOptionalString(payment.provider)?.toLowerCase() === "lenco" &&
+        normalizeOptionalString(payment.purpose) === "point_purchase" &&
+        ["successful", "refunded"].includes(
+          normalizeOptionalString(payment.status)?.toLowerCase() ?? ""
+        ) &&
+        isRecordInReportingPeriod(
+          payment,
+          reportingPeriod,
+          ["completedAt", "updatedAt", "createdAt"]
+        )
+      )
+      .map((payment) => ({
+        ...payment,
+        amount: (Number(payment.amountNgwee) || 0) / 100,
+        sourceType: "point_purchase",
+      }));
+    const completedLocalCollections: Record<string, unknown>[] = [
+      ...completedSessionCollections.map((transaction) => ({
+        ...transaction,
+        sourceType: "session_collection",
+      })),
+      ...completedPointCollections,
+    ];
+    const localCollectionKeys = new Set(
+      completedLocalCollections.flatMap(getPaymentMatchKeys)
+    );
+    const successfulProviderSettlements = providerSettlements.filter(
+      (settlement) => {
+        const collection = getRecord(settlement.collection);
+        const settlementStatus = normalizeOptionalString(
+          settlement.status
+        )?.toLowerCase();
+        const collectionStatus = normalizeOptionalString(
+          collection.status
+        )?.toLowerCase();
+        return ["settled", "successful", "completed"].includes(
+          settlementStatus ?? ""
+        ) && ["successful", "success", "completed"].includes(
+          collectionStatus ?? ""
+        );
+      }
+    );
+    const successfulProviderCollections = providerSettlements.filter(
+      (settlement) => {
+        const collectionStatus = normalizeOptionalString(
+          getRecord(settlement.collection).status
+        )?.toLowerCase();
+        return ["successful", "success", "completed"].includes(
+          collectionStatus ?? ""
+        );
+      }
+    );
+    const providerCollectionKeys = new Set(
+      successfulProviderCollections.flatMap(getPaymentMatchKeys)
+    );
+    const settledProviderCollectionKeys = new Set(
+      successfulProviderSettlements.flatMap(getPaymentMatchKeys)
+    );
+    const canReconcileProvider = providerSnapshotResult.status === "connected" &&
+      providerSnapshotResult.settlementsAvailable === true;
+    const attributableProviderInflows = successfulProviderCollections.filter(
+      (settlement) => getPaymentMatchKeys(settlement).some(
+        (key) => key.startsWith("club_bzr_") || key.startsWith("points_")
+      )
+    );
+    const unmatchedProviderInflows = canReconcileProvider ? attributableProviderInflows
+      .filter((settlement) =>
+        !getPaymentMatchKeys(settlement).some((key) => localCollectionKeys.has(key))
+      )
+      .map((settlement) => ({
+        reference: getPaymentMatchKeys(settlement)[0] ?? null,
+        providerSettlement: settlement,
+      })) : [];
+    const unmatchedLocalCollections = canReconcileProvider ? completedLocalCollections
+      .filter((transaction) =>
+        !getPaymentMatchKeys(transaction).some((key) => providerCollectionKeys.has(key))
+      )
+      .map((transaction) => ({
+        reference: getLocalPaymentKey(transaction),
+        transaction,
+      })) : [];
+    const pendingProviderSettlements = canReconcileProvider ?
+      completedLocalCollections.filter((transaction) => {
+        const keys = getPaymentMatchKeys(transaction);
+        return keys.some((key) => providerCollectionKeys.has(key)) &&
+          !keys.some((key) => settledProviderCollectionKeys.has(key));
+      }).map((transaction) => ({
+        reference: getLocalPaymentKey(transaction),
+        transaction,
+      })) : [];
+    const settlementAmountIssues = canReconcileProvider ?
+      completedLocalCollections.flatMap((transaction) => {
+        const keys = getPaymentMatchKeys(transaction);
+        const settlement = successfulProviderCollections.find((candidate) =>
+          getPaymentMatchKeys(candidate).some((key) => keys.includes(key))
+        );
+        if (!settlement) return [];
+        const providerAmount = getRecord(settlement.collection).amount;
+        return moneyEquals(transaction.amount, providerAmount) ? [] : [{
+          reference: getLocalPaymentKey(transaction),
+          localAmount: getFiniteAmount(transaction.amount),
+          providerAmount: getFiniteAmount(providerAmount),
+          transaction,
+          providerSettlement: settlement,
+        }];
+      }) : [];
+
     const sessionsById = new Map<string, Record<string, unknown>>();
     sessions.forEach((session) => {
       const id = normalizeOptionalString(session.id);
@@ -2882,6 +3556,8 @@ export const adminGetPaymentsDashboard = onCall(
       ...registrations,
       ...returns,
       ...withdrawals,
+      ...externalReceipts,
+      ...externalFundMovements,
     ].forEach((record) => {
       const id = normalizeOptionalString(record.sessionId);
       if (id) ledgerSessionIds.add(id);
@@ -2900,6 +3576,12 @@ export const adminGetPaymentsDashboard = onCall(
       );
       const sessionWithdrawals = withdrawals.filter((withdrawal) =>
         normalizeOptionalString(withdrawal.sessionId) === id
+      );
+      const sessionExternalOutflows = externalFundMovements.filter(
+        (movement) =>
+          normalizeOptionalString(movement.sessionId) === id &&
+          movement.direction === "outflow" &&
+          movement.status === "completed"
       );
 
       const onlineCollected = sessionTransactions
@@ -2925,6 +3607,37 @@ export const adminGetPaymentsDashboard = onCall(
               paymentStatusBeforeReturn === "paid_external");
         })
         .reduce((sum, registration) => sum + (getFiniteAmount(registration.paymentAmount) ?? 0), 0);
+      const externalCollectedByMethod = sessionRegistrations
+        .filter((registration) => {
+          const paymentStatus = normalizeOptionalString(
+            registration.paymentStatus
+          );
+          const paymentStatusBeforeReturn = normalizeOptionalString(
+            registration.paymentStatusBeforeReturn
+          );
+          return paymentStatus === "paid_external" ||
+            (paymentStatus === "refunded" &&
+              paymentStatusBeforeReturn === "paid_external");
+        })
+        .reduce<{cash: number; bankTransfer: number; other: number}>(
+          (summary, registration) => {
+            const registrationId = normalizeOptionalString(registration.id);
+            const receipt = registrationId ?
+              externalReceiptByRegistrationId.get(registrationId) :
+              undefined;
+            // Historical `paid_external` records defaulted to bank transfer even
+            // when the real method was unknown. Only an explicit receipt is safe
+            // to classify as cash or bank transfer.
+            const method = receipt ?
+              normalizeReturnMethod(receipt.method) : "other";
+            const amount = getFiniteAmount(registration.paymentAmount) ?? 0;
+            if (method === "cash") summary.cash += amount;
+            else if (method === "bank_transfer") summary.bankTransfer += amount;
+            else summary.other += amount;
+            return summary;
+          },
+          {cash: 0, bankTransfer: 0, other: 0}
+        );
       const returned = sessionReturns
         .filter((returnRecord) =>
           returnRecord.status === "completed" &&
@@ -2940,6 +3653,10 @@ export const adminGetPaymentsDashboard = onCall(
       const withdrawn = sessionWithdrawals
         .filter((withdrawal) => withdrawal.status === "completed")
         .reduce((sum, withdrawal) => sum + (getFiniteAmount(withdrawal.amount) ?? 0), 0);
+      const externalSpent = sessionExternalOutflows.reduce(
+        (sum, movement) => sum + (getFiniteAmount(movement.amount) ?? 0),
+        0
+      );
       const fallbackCurrency = sessionTransactions
         .map((transaction) => normalizeOptionalString(transaction.currency))
         .find(Boolean) ??
@@ -2972,6 +3689,11 @@ export const adminGetPaymentsDashboard = onCall(
         price: getFiniteAmount(session?.price) ?? fallbackPrice,
         onlineCollected: roundCurrency(onlineCollected),
         externalCollected: roundCurrency(externalCollected),
+        cashCollected: roundCurrency(externalCollectedByMethod.cash),
+        bankTransferCollected: roundCurrency(
+          externalCollectedByMethod.bankTransfer
+        ),
+        otherExternalCollected: roundCurrency(externalCollectedByMethod.other),
         grossCollected: roundCurrency(
           onlineCollected + externalCollected
         ),
@@ -2980,6 +3702,7 @@ export const adminGetPaymentsDashboard = onCall(
         returned: roundCurrency(returned),
         corrections: roundCurrency(corrections),
         withdrawn: roundCurrency(withdrawn),
+        externalSpent: roundCurrency(externalSpent),
         netCollected: roundCurrency(
           onlineCollected +
           externalCollected -
@@ -3017,6 +3740,26 @@ export const adminGetPaymentsDashboard = onCall(
       (sum, withdrawal) => sum + (getFiniteAmount(withdrawal.amount) ?? 0),
       0
     );
+    const completedExternalOutflows = externalFundMovements.filter(
+      (movement) =>
+        movement.direction === "outflow" && movement.status === "completed"
+    );
+    const externalOutflowBySource = completedExternalOutflows.reduce<{
+      cash: number;
+      bankTransfer: number;
+      other: number;
+    }>((summary, movement) => {
+      const source = normalizeReturnMethod(movement.source);
+      const amount = getFiniteAmount(movement.amount) ?? 0;
+      if (source === "cash") summary.cash += amount;
+      else if (source === "bank_transfer") summary.bankTransfer += amount;
+      else summary.other += amount;
+      return summary;
+    }, {cash: 0, bankTransfer: 0, other: 0});
+    const externalSpentTotal = completedExternalOutflows.reduce(
+      (sum, movement) => sum + (getFiniteAmount(movement.amount) ?? 0),
+      0
+    );
     const completedReturnTotal = returns
       .filter((returnRecord) =>
         returnRecord.status === "completed" &&
@@ -3040,6 +3783,11 @@ export const adminGetPaymentsDashboard = onCall(
       (summary, session) => ({
         onlineCollected: summary.onlineCollected + Number(session.onlineCollected),
         externalCollected: summary.externalCollected + Number(session.externalCollected),
+        cashCollected: summary.cashCollected + Number(session.cashCollected),
+        bankTransferCollected: summary.bankTransferCollected +
+          Number(session.bankTransferCollected),
+        otherExternalCollected: summary.otherExternalCollected +
+          Number(session.otherExternalCollected),
         grossCollected: summary.grossCollected + Number(session.grossCollected),
         pending: summary.pending + Number(session.pending),
         failed: summary.failed + Number(session.failed),
@@ -3051,6 +3799,9 @@ export const adminGetPaymentsDashboard = onCall(
       {
         onlineCollected: 0,
         externalCollected: 0,
+        cashCollected: 0,
+        bankTransferCollected: 0,
+        otherExternalCollected: 0,
         grossCollected: 0,
         pending: 0,
         failed: 0,
@@ -3070,6 +3821,12 @@ export const adminGetPaymentsDashboard = onCall(
       completedReturnTotal -
       recordedWithdrawalTotal
     );
+    const pointPurchaseCollectedTotal = sumMoney(
+      completedPointCollections.filter((payment) =>
+        normalizeOptionalString(payment.status)?.toLowerCase() === "successful"
+      ),
+      (payment) => payment.amount
+    );
 
     return {
       generatedAt: new Date().toISOString(),
@@ -3078,21 +3835,37 @@ export const adminGetPaymentsDashboard = onCall(
         Number(b.netCollected) - Number(a.netCollected)
       ),
       localTransactions,
+      pointPayments,
       registrations,
       returns,
       withdrawals,
+      externalReceipts,
+      externalFundMovements,
       revenueTimeline,
+      provider: providerSnapshotResult,
       reconciliation: {
         transactionStatusIssues,
         registrationPaymentIssues,
         returnIssues,
+        unmatchedProviderInflows,
+        unmatchedLocalCollections,
+        pendingProviderSettlements,
+        settlementAmountIssues,
         issueCount: transactionStatusIssues.length +
           registrationPaymentIssues.length +
-          returnIssues.length,
+          returnIssues.length +
+          unmatchedProviderInflows.length +
+          unmatchedLocalCollections.length +
+          pendingProviderSettlements.length +
+          settlementAmountIssues.length,
       },
       totals: {
         onlineCollected: roundCurrency(totals.onlineCollected),
+        pointPurchaseCollected: pointPurchaseCollectedTotal,
         externalCollected: roundCurrency(totals.externalCollected),
+        cashCollected: roundCurrency(totals.cashCollected),
+        bankTransferCollected: roundCurrency(totals.bankTransferCollected),
+        otherExternalCollected: roundCurrency(totals.otherExternalCollected),
         grossCollected: grossCollectedTotal,
         pending: roundCurrency(totals.pending),
         failed: roundCurrency(totals.failed),
@@ -3105,11 +3878,20 @@ export const adminGetPaymentsDashboard = onCall(
         cancelledWithdrawals: roundCurrency(cancelledWithdrawalTotal),
         totalWithdrawals: roundCurrency(withdrawalTotal),
         completedReturns: roundCurrency(completedReturnTotal),
+        cashSpent: roundCurrency(externalOutflowBySource.cash),
+        bankTransferSpent: roundCurrency(
+          externalOutflowBySource.bankTransfer
+        ),
+        otherExternalSpent: roundCurrency(externalOutflowBySource.other),
+        externalSpent: roundCurrency(externalSpentTotal),
       },
       sourceNotes: [
-        "Dashboard totals come from Firestore ledger records.",
-        "Lenco is only contacted for explicit payment actions and manual payment syncs.",
-        "Provider-wide accounts, settlements, and transactions are not loaded here.",
+        "Business revenue comes from Club BZR ledger records and is not a bank balance.",
+        providerSnapshotResult.balanceAuthoritative === true ?
+          "The Lenco balance comes directly from the configured account." :
+          "The authoritative Lenco balance is unavailable; no estimate is shown.",
+        "Provider activity uses the same 30-day Africa/Lusaka reporting window.",
+        "Cash and external receipts remain separate from the Lenco balance.",
       ],
     };
   }
@@ -3281,6 +4063,376 @@ export const adminResolvePaymentReconciliationIssue = onCall(
       registrationId,
       status: "completed",
       message: "Signup payment status updated.",
+    };
+  }
+);
+
+export const adminRecordExternalPayment = onCall(
+  {
+    cors: true,
+    invoker: "public",
+  },
+  async (request) => {
+    const adminUid = await requireAdminAuth(request.auth?.uid);
+    const data = (request.data || {}) as AdminRecordExternalPaymentData;
+    const sessionId = requireString(data.sessionId, "Session ID is required.");
+    const registrationId = requireString(
+      data.registrationId,
+      "Registration ID is required."
+    );
+    const method = normalizeReturnMethod(data.method);
+    if (!["cash", "bank_transfer", "card", "other"].includes(method)) {
+      throw new HttpsError(
+        "invalid-argument",
+        "External payment method must be cash, bank transfer, card, or other."
+      );
+    }
+    const amount = requirePositiveAmount(
+      data.amount,
+      "Payment amount is required."
+    );
+    const currency = normalizeCurrency(data.currency);
+    const reference = normalizePaymentReference(data.reference) ??
+      generateReference();
+    const receivedAtInput = normalizeOptionalString(data.receivedAt);
+    const receivedAtDate = receivedAtInput ? new Date(receivedAtInput) : null;
+    if (receivedAtDate && !Number.isFinite(receivedAtDate.getTime())) {
+      throw new HttpsError("invalid-argument", "Received date is invalid.");
+    }
+    if (receivedAtDate && receivedAtDate.getTime() > Date.now() + 300000) {
+      throw new HttpsError(
+        "invalid-argument",
+        "Received date cannot be in the future."
+      );
+    }
+
+    const sessionRef = db.collection(SESSIONS_COLLECTION).doc(sessionId);
+    const registrationRef = db.collection(SESSION_REGISTRATIONS_COLLECTION)
+      .doc(registrationId);
+    const receiptRef = db
+      .collection(SESSION_EXTERNAL_PAYMENT_RECEIPTS_COLLECTION)
+      .doc(reference);
+
+    await db.runTransaction(async (transaction) => {
+      const [sessionSnapshot, registrationSnapshot, receiptSnapshot] =
+        await Promise.all([
+          transaction.get(sessionRef),
+          transaction.get(registrationRef),
+          transaction.get(receiptRef),
+        ]);
+
+      if (!sessionSnapshot.exists) {
+        throw new HttpsError("not-found", "Session not found.");
+      }
+      if (!registrationSnapshot.exists) {
+        throw new HttpsError("not-found", "Session registration not found.");
+      }
+      const registration = registrationSnapshot.data() || {};
+      if (registration.sessionId !== sessionId) {
+        throw new HttpsError(
+          "invalid-argument",
+          "Registration does not belong to this session."
+        );
+      }
+
+      if (receiptSnapshot.exists) {
+        const existing = receiptSnapshot.data() || {};
+        if (
+          existing.registrationId === registrationId &&
+          getFiniteAmount(existing.amount) === amount &&
+          existing.currency === currency &&
+          existing.method === method
+        ) return;
+        throw new HttpsError(
+          "already-exists",
+          "This receipt reference is already used by another payment."
+        );
+      }
+
+      if (["paid_online", "paid_external"].includes(registration.paymentStatus)) {
+        throw new HttpsError(
+          "failed-precondition",
+          "This registration is already marked as paid."
+        );
+      }
+
+      const paidAt = receivedAtDate ?
+        admin.firestore.Timestamp.fromDate(receivedAtDate) :
+        admin.firestore.FieldValue.serverTimestamp();
+      const nextRegistrationStatus = registration.status === "pending_payment" ?
+        "paid_pending_confirmation" :
+        registration.status;
+
+      transaction.create(receiptRef, {
+        receiptId: reference,
+        reference,
+        sessionId,
+        registrationId,
+        userId: normalizeOptionalString(registration.userId),
+        displayName: getRegistrationName(registration),
+        email: normalizeOptionalString(registration.email),
+        amount,
+        currency,
+        method,
+        accountId: method === "cash" ? "cash_on_hand" :
+          `external_${method}`,
+        status: "completed",
+        source: "club-bzr-admin",
+        note: normalizeOptionalString(data.note),
+        receivedAt: paidAt,
+        recordedBy: adminUid,
+        createdAt: admin.firestore.FieldValue.serverTimestamp(),
+        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      });
+      transaction.set(registrationRef, {
+        status: nextRegistrationStatus,
+        paymentStatus: "paid_external",
+        paymentMethod: method,
+        paymentReference: reference,
+        paymentAmount: amount,
+        paymentCurrency: currency,
+        paidAt,
+        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      }, {merge: true});
+      transaction.create(db.collection("auditLogs").doc(), {
+        actorId: adminUid,
+        action: "external_session_payment_recorded",
+        targetType: "sessionRegistration",
+        targetId: registrationId,
+        data: {sessionId, receiptId: reference, method, amount, currency},
+        createdAt: admin.firestore.FieldValue.serverTimestamp(),
+      });
+    });
+
+    return {
+      success: true,
+      reference,
+      receiptId: reference,
+      status: "completed",
+      message: `${method === "cash" ? "Cash" : "External"} payment recorded.`,
+    };
+  }
+);
+
+export const adminClassifyExternalPayment = onCall(
+  {
+    cors: true,
+    invoker: "public",
+  },
+  async (request) => {
+    const adminUid = await requireAdminAuth(request.auth?.uid);
+    const data = (request.data || {}) as AdminClassifyExternalPaymentData;
+    const sessionId = requireString(data.sessionId, "Session ID is required.");
+    const registrationId = requireString(
+      data.registrationId,
+      "Registration ID is required."
+    );
+    const method = normalizeReturnMethod(data.method);
+    if (!["cash", "bank_transfer", "card", "other"].includes(method)) {
+      throw new HttpsError(
+        "invalid-argument",
+        "Choose cash, bank transfer, card, or other."
+      );
+    }
+
+    const existingReceiptSnapshot = await db
+      .collection(SESSION_EXTERNAL_PAYMENT_RECEIPTS_COLLECTION)
+      .where("registrationId", "==", registrationId)
+      .limit(1)
+      .get();
+    if (!existingReceiptSnapshot.empty) {
+      throw new HttpsError(
+        "already-exists",
+        "This payment has already been classified. Refresh the dashboard."
+      );
+    }
+
+    const registrationRef = db.collection(SESSION_REGISTRATIONS_COLLECTION)
+      .doc(registrationId);
+    const receiptRef = db
+      .collection(SESSION_EXTERNAL_PAYMENT_RECEIPTS_COLLECTION)
+      .doc(`legacy_${registrationId}`);
+
+    try {
+      await db.runTransaction(async (transaction) => {
+        const registrationSnapshot = await transaction.get(registrationRef);
+        const receiptSnapshot = await transaction.get(receiptRef);
+        if (!registrationSnapshot.exists) {
+          throw new HttpsError("not-found", "Registration not found.");
+        }
+        if (receiptSnapshot.exists) {
+          throw new HttpsError("already-exists", "Payment already classified.");
+        }
+
+        const registration = registrationSnapshot.data() || {};
+        if (registration.sessionId !== sessionId) {
+          throw new HttpsError(
+            "invalid-argument",
+            "Registration does not belong to this session."
+          );
+        }
+        if (registration.paymentStatus !== "paid_external") {
+          throw new HttpsError(
+            "failed-precondition",
+            "Only legacy external payments can be classified."
+          );
+        }
+
+        const amount = requirePositiveAmount(
+          registration.paymentAmount,
+          "The legacy payment amount is missing."
+        );
+        const currency = normalizeCurrency(registration.paymentCurrency);
+        const reference = normalizeOptionalString(
+          registration.paymentReference
+        ) ?? `legacy_${registrationId}`;
+        const receivedAt = registration.paidAt ??
+          admin.firestore.FieldValue.serverTimestamp();
+
+        transaction.create(receiptRef, {
+          receiptId: receiptRef.id,
+          reference,
+          sessionId,
+          registrationId,
+          userId: normalizeOptionalString(registration.userId),
+          displayName: getRegistrationName(registration),
+          email: normalizeOptionalString(registration.email),
+          amount,
+          currency,
+          method,
+          accountId: method === "cash" ? "cash_on_hand" :
+            `external_${method}`,
+          status: "completed",
+          source: "club-bzr-admin-legacy-classification",
+          note: normalizeOptionalString(data.note),
+          receivedAt,
+          recordedBy: adminUid,
+          createdAt: admin.firestore.FieldValue.serverTimestamp(),
+          updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+        });
+        transaction.set(registrationRef, {
+          paymentMethod: method,
+          updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+        }, {merge: true});
+        transaction.create(db.collection("auditLogs").doc(), {
+          actorId: adminUid,
+          action: "external_session_payment_classified",
+          targetType: "sessionRegistration",
+          targetId: registrationId,
+          data: {sessionId, receiptId: receiptRef.id, method, amount, currency},
+          createdAt: admin.firestore.FieldValue.serverTimestamp(),
+        });
+      });
+    } catch (error) {
+      if (error instanceof HttpsError) throw error;
+      const errorMessage = getErrorMessage(error);
+      logger.error("Legacy external payment classification failed", {
+        sessionId,
+        registrationId,
+        method,
+        errorMessage,
+      });
+      throw new HttpsError(
+        "internal",
+        `Could not save the classification: ${errorMessage}`
+      );
+    }
+
+    return {
+      success: true,
+      receiptId: receiptRef.id,
+      status: "completed",
+      message: "Legacy payment classified.",
+    };
+  }
+);
+
+export const adminRecordExternalFundOutflow = onCall(
+  {
+    cors: true,
+    invoker: "public",
+  },
+  async (request) => {
+    const adminUid = await requireAdminAuth(request.auth?.uid);
+    const data = (request.data || {}) as AdminRecordExternalFundOutflowData;
+    const sessionId = normalizeOptionalString(data.sessionId);
+    const source = normalizeReturnMethod(data.source);
+    if (!["cash", "bank_transfer", "card", "other"].includes(source)) {
+      throw new HttpsError(
+        "invalid-argument",
+        "Choose the account the money was spent from."
+      );
+    }
+    const amount = requirePositiveAmount(data.amount, "Amount is required.");
+    const currency = normalizeCurrency(data.currency);
+    const reason = requireString(data.reason, "Purpose is required.");
+    const reference = normalizePaymentReference(data.reference) ??
+      generateReference();
+    const spentAtInput = normalizeOptionalString(data.spentAt);
+    const spentAtDate = spentAtInput ? new Date(spentAtInput) : new Date();
+    if (!Number.isFinite(spentAtDate.getTime())) {
+      throw new HttpsError("invalid-argument", "Spent date is invalid.");
+    }
+    if (spentAtDate.getTime() > Date.now() + 300000) {
+      throw new HttpsError(
+        "invalid-argument",
+        "Spent date cannot be in the future."
+      );
+    }
+
+    if (sessionId) {
+      const sessionSnapshot = await db.collection(SESSIONS_COLLECTION)
+        .doc(sessionId)
+        .get();
+      if (!sessionSnapshot.exists) {
+        throw new HttpsError("not-found", "Session not found.");
+      }
+    }
+
+    const movementRef = db
+      .collection(SESSION_EXTERNAL_FUND_MOVEMENTS_COLLECTION)
+      .doc(reference);
+    const existingSnapshot = await movementRef.get();
+    if (existingSnapshot.exists) {
+      throw new HttpsError(
+        "already-exists",
+        "This money-out reference is already in use."
+      );
+    }
+
+    const movement = {
+      movementId: reference,
+      reference,
+      sessionId: sessionId ?? null,
+      direction: "outflow",
+      type: "expense",
+      source,
+      amount,
+      currency,
+      reason,
+      note: normalizeOptionalString(data.note),
+      spentAt: admin.firestore.Timestamp.fromDate(spentAtDate),
+      status: "completed",
+      recordedBy: adminUid,
+      createdAt: admin.firestore.FieldValue.serverTimestamp(),
+      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+    };
+    await movementRef.create(movement);
+    await db.collection("auditLogs").add({
+      actorId: adminUid,
+      action: "external_fund_outflow_recorded",
+      targetType: "externalFundMovement",
+      targetId: movementRef.id,
+      data: {sessionId: sessionId ?? null, source, amount, currency, reason},
+      createdAt: admin.firestore.FieldValue.serverTimestamp(),
+    });
+
+    return {
+      success: true,
+      reference,
+      movementId: movementRef.id,
+      status: "completed",
+      message: "Money out recorded.",
     };
   }
 );
@@ -3657,6 +4809,109 @@ export const adminSyncPaymentCollection = onCall(
       failureReason,
       providerCollection: serializeForCallable(collection),
     };
+  }
+);
+
+async function reconcilePendingSessionCollection(
+  snapshot: FirebaseFirestore.QueryDocumentSnapshot
+): Promise<void> {
+  const existing = snapshot.data();
+  const reference = normalizeOptionalString(existing.reference) ?? snapshot.id;
+  const responseData = await lencoRequest(
+    `/collections/status/${encodeURIComponent(reference)}`,
+    {method: "GET"},
+    lencoSecretKey.value()
+  );
+  const collection = getRecord(responseData.data);
+  const status = mapCollectionStatus(collection.status);
+  const providerAmount = getFiniteAmount(collection.amount);
+  const localAmount = getFiniteAmount(existing.amount);
+
+  if (
+    providerAmount !== null &&
+    localAmount !== null &&
+    !moneyEquals(providerAmount, localAmount)
+  ) {
+    await snapshot.ref.set({
+      status: "review_required",
+      gatewayStatus: normalizeOptionalString(collection.status),
+      failureReason: "Provider amount does not match the local collection.",
+      providerCollection: serializeForCallable(collection),
+      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+    }, {merge: true});
+    return;
+  }
+
+  const transactionId = normalizeOptionalString(collection.id) ??
+    normalizeOptionalString(existing.transactionId) ?? snapshot.id;
+  const paymentReference = normalizeOptionalString(collection.reference) ??
+    reference;
+  const amount = providerAmount ?? localAmount;
+  const currency = normalizeCurrency(collection.currency ?? existing.currency);
+  const failureReason = getFailureReason(collection);
+
+  await snapshot.ref.set({
+    transactionId,
+    reference: paymentReference,
+    amount,
+    currency,
+    gatewayStatus: normalizeOptionalString(collection.status),
+    status,
+    message: getMessageForStatus(status),
+    failureReason,
+    providerCollection: serializeForCallable(collection),
+    completedAt: status === "completed" ?
+      admin.firestore.FieldValue.serverTimestamp() : null,
+    lastReconciledAt: admin.firestore.FieldValue.serverTimestamp(),
+    updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+  }, {merge: true});
+
+  const sessionId = normalizeOptionalString(existing.sessionId);
+  const registrationId = normalizeOptionalString(existing.registrationId);
+  if (status === "completed" && sessionId && registrationId) {
+    await markRegistrationPaid({
+      transactionId,
+      reference: paymentReference,
+      metadata: {
+        source: "club-bzr-admin",
+        sessionId,
+        registrationId,
+      },
+      amount,
+      currency,
+    });
+  } else if (status === "failed" && registrationId) {
+    await db.collection(SESSION_REGISTRATIONS_COLLECTION)
+      .doc(registrationId)
+      .set({
+        paymentStatus: "failed",
+        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      }, {merge: true});
+  }
+}
+
+export const reconcilePendingSessionPayments = onSchedule(
+  {
+    schedule: "every 30 minutes",
+    secrets: [lencoSecretKey],
+    timeoutSeconds: 120,
+  },
+  async () => {
+    const pending = await db.collection(SESSION_PAYMENT_TRANSACTIONS_COLLECTION)
+      .where("status", "in", ["pending", "processing"])
+      .limit(25)
+      .get();
+
+    for (const payment of pending.docs) {
+      try {
+        await reconcilePendingSessionCollection(payment);
+      } catch (error) {
+        logger.warn("Pending session payment reconciliation failed", {
+          paymentId: payment.id,
+          error: getErrorMessage(error),
+        });
+      }
+    }
   }
 );
 
@@ -4894,3 +6149,6 @@ export const checkSessionMomoStatus = onCall(
     };
   }
 );
+
+// Marketplace callables preserve existing payment and trading exports.
+export * from "./store/callables";

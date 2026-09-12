@@ -2,9 +2,18 @@ rules_version = '2';
 
 service firebase.storage {
   match /b/{bucket}/o {
+    // Older profiles may omit these optional account-status fields.
+    function isActiveUser(user) {
+      return (!('isActive' in user) || user.isActive != false)
+        && (!('accountStatus' in user)
+          || (user.accountStatus != 'suspended' && user.accountStatus != 'closed'));
+    }
+
     // Helper function to check if user is authenticated
     function isAuthenticated() {
-      return request.auth != null;
+      return request.auth != null
+        && firestore.exists(/databases/(default)/documents/users/$(request.auth.uid))
+        && isActiveUser(firestore.get(/databases/(default)/documents/users/$(request.auth.uid)).data);
     }
 
     // Helper function to check file size (max 10MB)
@@ -34,9 +43,9 @@ service firebase.storage {
 
     // Helper function to check if the signed-in user can manage admin media
     function isCuratorOrAdmin() {
-      return isAuthenticated()
-        && firestore.exists(/databases/(default)/documents/users/$(request.auth.uid))
-        && firestore.get(/databases/(default)/documents/users/$(request.auth.uid)).data.role in ['admin', 'curator'];
+      return isAuthenticated() && (
+        request.auth.token.admin == true || request.auth.token.curator == true
+      );
     }
 
     // Community posts media
@@ -95,9 +104,18 @@ service firebase.storage {
       allow write: if isCuratorOrAdmin() && isValidAudioSize() && isAudio();
     }
 
-    // Fallback - deny all other paths
-    match /{allPaths=**} {
+    // Paid assets have no public download tokens. Only signed server requests
+    // can upload/read these immutable objects; no client Storage SDK access.
+    match /store-private/{allPaths=**} { allow read, write: if false; }
+    match /store-previews/{userId}/{fileName} {
       allow read: if true;
+      allow create: if isAuthenticated() && request.auth.uid == userId && isValidSize()
+        && request.resource.contentType in ['image/jpeg', 'image/png', 'image/webp'];
+      allow update, delete: if false;
+    }
+    // Preserve existing public media while excluding the protected namespace.
+    match /{folder}/{allPaths=**} {
+      allow read: if folder != 'store-private';
       allow write: if false;
     }
   }

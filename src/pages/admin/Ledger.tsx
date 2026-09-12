@@ -23,6 +23,22 @@ interface RewardBackfillSummary extends Omit<RewardBackfillPage, 'nextCursor'> {
   dryRun: boolean
 }
 
+interface QuestRewardBackfillPage {
+  scanned: number
+  eligible: number
+  awarded: number
+  alreadyRewarded: number
+  skipped: number
+  pointsAwarded: number
+  potentialPoints: number
+  nextCursor: string | null
+  failures: Array<{ grantId: string; message: string }>
+}
+
+interface QuestRewardBackfillSummary extends Omit<QuestRewardBackfillPage, 'nextCursor'> {
+  dryRun: boolean
+}
+
 export default function Ledger() {
   const [transactions, setTransactions] = useState<WalletTransaction[]>([])
   const [walletId, setWalletId] = useState('')
@@ -34,6 +50,8 @@ export default function Ledger() {
   const [submitting, setSubmitting] = useState(false)
   const [backfillRunning, setBackfillRunning] = useState(false)
   const [backfillSummary, setBackfillSummary] = useState<RewardBackfillSummary | null>(null)
+  const [questBackfillRunning, setQuestBackfillRunning] = useState(false)
+  const [questBackfillSummary, setQuestBackfillSummary] = useState<QuestRewardBackfillSummary | null>(null)
 
   const normalizedWalletId = walletId.trim()
   const normalizedReason = reason.trim()
@@ -158,6 +176,56 @@ export default function Ledger() {
     }
   }
 
+  async function runQuestRewardBackfill(dryRun: boolean) {
+    if (!dryRun && !window.confirm(
+      `Grant ${questBackfillSummary?.potentialPoints || 0} missing quest points across ${questBackfillSummary?.eligible || 0} reward grants?`
+    )) return
+
+    setQuestBackfillRunning(true)
+    setFeedback(null)
+    let cursor: string | undefined
+    const seenCursors = new Set<string>()
+    const summary: QuestRewardBackfillSummary = {
+      dryRun,
+      scanned: 0,
+      eligible: 0,
+      awarded: 0,
+      alreadyRewarded: 0,
+      skipped: 0,
+      pointsAwarded: 0,
+      potentialPoints: 0,
+      failures: [],
+    }
+    try {
+      const call = httpsCallable<
+        { dryRun: boolean; cursor?: string; limit: number },
+        QuestRewardBackfillPage
+      >(functions, 'adminBackfillQuestRewards')
+      do {
+        const result = (await call({ dryRun, cursor, limit: 25 })).data
+        summary.scanned += result.scanned
+        summary.eligible += result.eligible
+        summary.awarded += result.awarded
+        summary.alreadyRewarded += result.alreadyRewarded
+        summary.skipped += result.skipped
+        summary.pointsAwarded += result.pointsAwarded
+        summary.potentialPoints += result.potentialPoints
+        summary.failures.push(...result.failures)
+        cursor = result.nextCursor || undefined
+        if (cursor) {
+          if (seenCursors.has(cursor)) throw new Error('Quest reward repair pagination did not advance.')
+          seenCursors.add(cursor)
+        }
+      } while (cursor)
+      setQuestBackfillSummary(summary)
+      if (!dryRun) await load()
+    } catch (cause) {
+      setFeedback(cause instanceof Error ? cause.message : 'Quest rewards could not be repaired.')
+    } finally {
+      setQuestBackfillRunning(false)
+    }
+  }
+
   return (
     <AdminLayout>
       <Box px={{ base: 4, md: 8, xl: 12 }} py={{ base: 6, md: 8 }}>
@@ -189,6 +257,33 @@ export default function Ledger() {
           {backfillSummary?.failures.slice(0, 3).map((failure) => (
             <Text key={`${failure.registrationId}-${failure.message}`} color="red.200" fontSize="xs" mt={2}>
               {failure.registrationId}: {failure.message}
+            </Text>
+          ))}
+        </Box>
+
+        <Box bg="gray.900" border="1px solid" borderColor="whiteAlpha.100" rounded="2xl" p={{ base: 5, md: 6 }} mb={6}>
+          <Heading color="white" size="md">Quest reward integrity</Heading>
+          <Text color="whiteAlpha.500" fontSize="sm" mt={2}>
+            Find completed reward grants that never reached the point ledger. Legacy quests using the original points field are supported, and existing transactions are never duplicated.
+          </Text>
+          <Flex gap={3} mt={5} wrap="wrap">
+            <Button h="44px" px={5} rounded="full" variant="outline" color="white" onClick={() => void runQuestRewardBackfill(true)} disabled={questBackfillRunning}>
+              {questBackfillRunning ? 'Checking…' : 'Preview missing quest rewards'}
+            </Button>
+            <Button h="44px" px={5} rounded="full" bg="#f47742" color="white" onClick={() => void runQuestRewardBackfill(false)} disabled={questBackfillRunning || !questBackfillSummary?.dryRun || questBackfillSummary.eligible === 0}>
+              Repair quest rewards
+            </Button>
+          </Flex>
+          {questBackfillSummary && (
+            <Text color="whiteAlpha.700" fontSize="sm" mt={4}>
+              {questBackfillSummary.dryRun
+                ? `${questBackfillSummary.eligible} missing grants would add ${questBackfillSummary.potentialPoints} points. ${questBackfillSummary.alreadyRewarded} already correct; ${questBackfillSummary.skipped} skipped.`
+                : `${questBackfillSummary.awarded} grants repaired with ${questBackfillSummary.pointsAwarded} points. ${questBackfillSummary.alreadyRewarded} already correct; ${questBackfillSummary.skipped} skipped.`}
+            </Text>
+          )}
+          {questBackfillSummary?.failures.slice(0, 3).map((failure) => (
+            <Text key={`${failure.grantId}-${failure.message}`} color="red.200" fontSize="xs" mt={2}>
+              {failure.grantId}: {failure.message}
             </Text>
           ))}
         </Box>

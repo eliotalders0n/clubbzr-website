@@ -605,7 +605,9 @@ export default function CommunityWall() {
     if (activeTab === 'all') return feedItems
 
     return feedItems.filter((item) => {
-      if (item.type === 'post') return followedMemberIds.has(item.post.userId)
+      if (item.type === 'post') {
+        return item.post.postType === 'community_note' || followedMemberIds.has(item.post.userId)
+      }
       if (item.type === 'quest_completed' || item.type === 'badge_earned') {
         return followedMemberIds.has(item.submission.userId)
       }
@@ -1318,6 +1320,7 @@ export default function CommunityWall() {
                     }
 
                     const post = item.post
+                    const isPlatformPost = post.postType === 'community_note'
                     const reactions = localPostReactions[post.id] || post.reactions || {}
                     const commentPage = commentPages[post.id]
                     const displayPost: CommunityPostType = {
@@ -1351,15 +1354,15 @@ export default function CommunityWall() {
                           onAuthRequired={handleSignIn}
                           onCommentsOpen={() => handleCommentsOpen(post.id)}
                           onLoadMoreComments={() => loadPostComments(post.id)}
-                          onEdit={() => handleEditPost(post.id, post.content)}
-                          onDelete={() => handleDeletePost(post.id)}
+                          onEdit={isPlatformPost ? undefined : () => handleEditPost(post.id, post.content)}
+                          onDelete={isPlatformPost ? undefined : () => handleDeletePost(post.id)}
                           isFollowingAuthor={followedMemberIds.has(post.userId)}
-                          onToggleFollow={post.userId !== currentUserId ? () => handleToggleFollow(post.userId) : undefined}
+                          onToggleFollow={!isPlatformPost && post.userId !== currentUserId ? () => handleToggleFollow(post.userId) : undefined}
                           onShare={() => {
                             const url = `${window.location.origin}/community/wall?post=${post.id}`
                             if (navigator.share) {
                               navigator.share({
-                                title: `Post by ${post.userName}`,
+                                title: isPlatformPost ? 'Club BZR Community Note' : `Post by ${post.userName}`,
                                 text: post.content.slice(0, 100) + (post.content.length > 100 ? '...' : ''),
                                 url,
                               }).catch(() => {})

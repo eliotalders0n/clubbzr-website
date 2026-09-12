@@ -2,6 +2,8 @@
 
 This subsystem treats the immutable `transactions` and `ledgerEntries` collections as the financial source of truth. `balances` is a transactionally updated projection. Clients can read their own wallet but cannot write wallets, balances, payments, trades, escrow, ledger entries, reward grants, or audit logs.
 
+The [Club BZR Store](../STORE_ARCHITECTURE.md) extends this subsystem for digital releases, bespoke requests, physical originals and one-time collections. Points settlement uses the existing ledger/escrow; ZMW entries use the same immutable posting service and a separate `sellerPayables` projection. Points have no cash-out. Store ZMW capabilities remain disabled until [provider readiness](../LENCO_MARKETPLACE_READINESS.md) is satisfied. Adding Store does **not** require rerunning the original economy migration below; use the [Store deployment guide](../STORE_DEPLOYMENT.md).
+
 ## Launch invariants
 
 - Points are integer units; ZMW is accepted as integer ngwee.
@@ -38,6 +40,8 @@ System accounts are sharded into 16 documents per purpose to avoid a single hot 
 The endpoint verifies `X-Lenco-Signature` using HMAC SHA-512 with a webhook hash key that is the SHA-256 hash of `LENCO_SECRET_KEY`, following Lenco’s published webhook specification. Duplicate events are keyed and retained in `paymentEvents`. A successful event credits points only when payment ID, amount, currency, user and purpose match the initiated payment.
 
 Lenco recommends polling as a recovery mechanism when webhooks cannot be delivered. Keep purchases disabled until a scheduled recovery poll has been deployed and verified for the production account.
+
+The existing `lencoPointsWebhook` URL also dispatches signed, known Store collection/payout references to the Store handler. Store value never enters the Points purchase credit path. A regression test covers both flows and duplicate events on this shared callback.
 
 Purchase refunds are full reversals. An administrator first completes the cash
 refund in Lenco, then records its provider refund ID and reason through

@@ -11,7 +11,10 @@
     "shell": "npm run build && firebase functions:shell",
     "start": "npm run shell",
     "deploy": "firebase deploy --only functions",
-    "logs": "firebase functions:log"
+    "logs": "firebase functions:log",
+    "test:store:emulator": "npm run build && node --test --test-concurrency=1 test/store.emulator.cjs",
+    "seed:store": "npm run build && node scripts/seed-store.cjs",
+    "deploy:store": "firebase deploy --project club-bzr --only functions:getStoreConfig,functions:browseStore,functions:getStoreListing,functions:saveStoreListing,functions:moderateStoreListing,functions:createStoreUpload,functions:quoteStoreOrder,functions:checkoutStoreOrder,functions:actOnStoreOrder,functions:downloadStoreAsset,functions:getStoreWorkspace,functions:getStoreOrder,functions:messageStoreOrder,functions:getStoreOrderAsset,functions:getStoreSellerSummary,functions:adminStoreSummary,functions:saveStoreSeller,functions:getStoreSeller,functions:adminVerifyStoreSeller,functions:adminUpdateStoreSettings,functions:requestStorePayout,functions:checkStorePayment,functions:checkStorePayout,functions:lencoStoreWebhook,functions:retryStoreFulfilment,functions:recoverStoreOrders,functions:lencoPointsWebhook"
   },
   "engines": {
     "node": "22"
@@ -19,7 +22,8 @@
   "main": "lib/index.js",
   "dependencies": {
     "firebase-admin": "^12.6.0",
-    "firebase-functions": "^6.0.1"
+    "firebase-functions": "^6.0.1",
+    "openai": "^7.10.0"
   },
   "devDependencies": {
     "@typescript-eslint/eslint-plugin": "^5.12.0",

@@ -18,12 +18,12 @@ service cloud.firestore {
 
     // Check if user has admin role
     function isAdmin() {
-      return isAuthenticated() && request.auth.token.admin == true;
+      return isActiveAccount() && request.auth.token.admin == true;
     }
 
     // Check if user has curator role or higher
     function isCuratorOrAdmin() {
-      return isAuthenticated() && (
+      return isActiveAccount() && (
         request.auth.token.admin == true || request.auth.token.curator == true
       );
     }
@@ -31,10 +31,18 @@ service cloud.firestore {
     function isActiveAccount() {
       return isAuthenticated()
         && exists(/databases/$(database)/documents/users/$(request.auth.uid))
-        && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.isActive != false
-        && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.accountStatus != 'frozen'
-        && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.accountStatus != 'suspended'
-        && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.accountStatus != 'closed';
+        && (
+          !('isActive' in currentUserData())
+          || currentUserData().isActive != false
+        )
+        && (
+          !('accountStatus' in currentUserData())
+          || (
+            currentUserData().accountStatus != 'frozen'
+            && currentUserData().accountStatus != 'suspended'
+            && currentUserData().accountStatus != 'closed'
+          )
+        );
     }
 
     // Validate that required fields exist
@@ -112,7 +120,7 @@ service cloud.firestore {
     // ========================================
     match /users/{userId} {
       // Authenticated members can read user profiles
-      allow read: if isAuthenticated();
+      allow read: if isOwner(userId) || isAdmin();
 
       // Users can create their own profile; admins can create pending invite profiles
       allow create: if isOwner(userId)
@@ -121,7 +129,7 @@ service cloud.firestore {
         && request.resource.data.isActive == true;
 
       // Users can update their own profile, admins can update any
-      allow update: if isOwner(userId)
+      allow update: if isActiveAccount() && isOwner(userId)
         && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
           'displayName', 'photoURL', 'phone', 'whatsappPhone', 'gender', 'bio',
           'location', 'website', 'socialLinks', 'preferences', 'isOnboarded',
@@ -186,7 +194,7 @@ service cloud.firestore {
       allow read: if true;
 
       // Authenticated users can create artist profiles
-      allow create: if isAuthenticated();
+      allow create: if isActiveAccount();
 
       // Artist owner or admin can update profile data.
       // Authenticated users can only update follow counters.
@@ -207,7 +215,7 @@ service cloud.firestore {
       allow read: if isAuthenticated();
 
       // Users can create their own follow records
-      allow create: if isAuthenticated() &&
+      allow create: if isActiveAccount() &&
         request.resource.data.userId == request.auth.uid &&
         request.resource.data.artistId is string;
 
@@ -215,7 +223,7 @@ service cloud.firestore {
       allow update: if false;
 
       // Users can delete their own follow records
-      allow delete: if isAuthenticated() && resource.data.userId == request.auth.uid;
+      allow delete: if isActiveAccount() && resource.data.userId == request.auth.uid;
     }
 
     // ========================================
@@ -226,19 +234,19 @@ service cloud.firestore {
       allow read: if true;
 
       // Artists can create their own artwork documents
-      allow create: if isAuthenticated()
+      allow create: if isActiveAccount()
         && exists(/databases/$(database)/documents/artists/$(request.auth.uid))
         && request.resource.data.artistId == request.auth.uid
         && request.resource.data.title is string
         && request.resource.data.imageUrl is string;
 
       // Artwork owners or admins can update artwork without reassigning ownership
-      allow update: if isAuthenticated()
+      allow update: if isActiveAccount()
         && (resource.data.artistId == request.auth.uid || isAdmin())
         && request.resource.data.artistId == resource.data.artistId;
 
       // Artwork owners or admins can delete artwork
-      allow delete: if isAuthenticated()
+      allow delete: if isActiveAccount()
         && (resource.data.artistId == request.auth.uid || isAdmin());
     }
 
@@ -253,7 +261,7 @@ service cloud.firestore {
       allow create, update, delete: if isCuratorOrAdmin();
 
       // Signed-in users can only register or cancel their own registration
-      allow update: if isAuthenticated()
+      allow update: if isActiveAccount()
         && resource.data.status == 'published'
         && isServerTimestamp('updatedAt')
         && (
@@ -367,14 +375,14 @@ service cloud.firestore {
       allow read: if true;
 
       // Authenticated users can create submissions
-      allow create: if isAuthenticated() &&
+      allow create: if isActiveAccount() &&
         request.resource.data.userId == request.auth.uid
         && request.resource.data.approved == false
         && request.resource.data.pointsAwarded == 0;
 
       // Users can update their own submissions, admins can update any.
       // Any authenticated member can update only the aggregate vote fields.
-      allow update: if isAuthenticated() && (
+      allow update: if isActiveAccount() && (
         (
           isOwner(resource.data.userId)
           && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
@@ -403,13 +411,19 @@ service cloud.firestore {
       // Anyone can read posts (that aren't hidden)
       allow read: if true;
 
-      // Authenticated users can create posts
-      allow create: if isAuthenticated();
+      // Authenticated members can create only their own member posts. Platform
+      // notes are written by trusted server code through the Admin SDK.
+      allow create: if isActiveAccount() &&
+        request.resource.data.userId == request.auth.uid &&
+        !request.resource.data.keys().hasAny(['postType', 'communityNote', 'marketplace']);
 
       // Post author can update their own posts, admins can update any
       // Also allow updates for reactions/comments counters
-      allow update: if isAuthenticated() && (
-        isOwner(resource.data.userId) ||
+      allow update: if isActiveAccount() && (
+        (isOwner(resource.data.userId) &&
+          !request.resource.data.diff(resource.data).affectedKeys().hasAny([
+            'postType', 'communityNote', 'marketplace'
+          ])) ||
         isAdmin() ||
         // Allow anyone to update reaction/comment fields
         request.resource.data.diff(resource.data).affectedKeys().hasOnly([
@@ -429,11 +443,11 @@ service cloud.firestore {
       allow read: if true;
 
       // Authenticated users can create comments
-      allow create: if isAuthenticated();
+      allow create: if isActiveAccount();
 
       // Comment author can update, admins can update any
       // Allow reaction updates from anyone
-      allow update: if isAuthenticated() && (
+      allow update: if isActiveAccount() && (
         isOwner(resource.data.userId) ||
         isAdmin() ||
         request.resource.data.diff(resource.data).affectedKeys().hasOnly([
@@ -467,10 +481,10 @@ service cloud.firestore {
       allow read: if true;
 
       // Authenticated users can create locations
-      allow create: if isAuthenticated();
+      allow create: if isActiveAccount();
 
       // Creator or admin can update
-      allow update: if isAuthenticated() && (
+      allow update: if isActiveAccount() && (
         isOwner(resource.data.submittedBy) ||
         isAdmin() ||
         // Allow save/visit toggles
@@ -541,10 +555,10 @@ service cloud.firestore {
 
       // System creates matches (via cloud functions ideally)
       // For now, allow authenticated users to create
-      allow create: if isAuthenticated();
+      allow create: if isActiveAccount();
 
       // Users involved in the match can update status
-      allow update: if isAuthenticated() && (
+      allow update: if isActiveAccount() && (
         resource.data.userId == request.auth.uid ||
         resource.data.matchedUserId == request.auth.uid
       );
@@ -575,6 +589,58 @@ service cloud.firestore {
     // ========================================
     // AUTHORITATIVE ECONOMY COLLECTIONS
     // ========================================
+    // Marketplace metadata is public only while published and enabled.
+    function storeVisible() {
+      return exists(/databases/$(database)/documents/settings/store)
+        && get(/databases/$(database)/documents/settings/store).data.storeEnabled == true;
+    }
+    function storeSellerActive(uid) {
+      return exists(/databases/$(database)/documents/users/$(uid))
+        && get(/databases/$(database)/documents/users/$(uid)).data.get('isActive', true) != false
+        && !(get(/databases/$(database)/documents/users/$(uid)).data.get('accountStatus', 'active') in ['suspended', 'closed']);
+    }
+    match /storeListings/{listingId} {
+      allow read: if isAdmin() || isOwner(resource.data.sellerId) || (
+        storeVisible() && resource.data.status == 'published'
+        && storeSellerActive(resource.data.sellerId)
+        && (resource.data.productType != 'physical_original' || get(/databases/$(database)/documents/settings/store).data.physicalProductsEnabled == true)
+        && (resource.data.productType != 'gated_collection' || get(/databases/$(database)/documents/settings/store).data.gatedCollectionsEnabled == true)
+      );
+      allow write: if false;
+    }
+    match /storeSellerProfiles/{sellerId} {
+      allow read: if isAdmin() || isOwner(sellerId) || (storeVisible() && storeSellerActive(sellerId));
+      allow write: if false;
+    }
+    match /storeSellerAccounts/{sellerId} {
+      allow read: if isAdmin() || isOwner(sellerId);
+      allow write: if false;
+    }
+    match /sellerPayables/{sellerId} {
+      allow read: if isAdmin() || isOwner(sellerId);
+      allow write: if false;
+    }
+    match /storeGrants/{grantId} {
+      allow read: if isAdmin() || isOwner(resource.data.buyerId);
+      allow write: if false;
+    }
+    match /storePayouts/{payoutId} {
+      allow read: if isAdmin() || isOwner(resource.data.sellerId);
+      allow write: if false;
+    }
+    match /storeOrderEvents/{eventId} {
+      allow read: if isAdmin() || (isActiveAccount() && request.auth.uid in resource.data.participants);
+      allow write: if false;
+    }
+    match /storeOrderMessages/{messageId} {
+      allow read: if isAdmin() || (isActiveAccount() && request.auth.uid in resource.data.participants);
+      allow write: if false;
+    }
+    match /storeListingAssets/{assetId} { allow read, write: if false; }
+    match /storeOperations/{operationId} { allow read, write: if false; }
+    match /storeDownloadAttempts/{attemptId} { allow read, write: if false; }
+    match /storeRefundReceipts/{receiptId} { allow read: if isAdmin(); allow write: if false; }
+
     match /wallets/{walletId} {
       allow read: if isOwner(walletId) || isAdmin();
       allow write: if false;
@@ -605,6 +671,16 @@ service cloud.firestore {
     }
 
     match /paymentEvents/{eventId} {
+      allow read: if isAdmin();
+      allow write: if false;
+    }
+
+    match /sessionExternalPaymentReceipts/{receiptId} {
+      allow read: if isAdmin();
+      allow write: if false;
+    }
+
+    match /sessionExternalFundMovements/{movementId} {
       allow read: if isAdmin();
       allow write: if false;
     }
@@ -718,7 +794,7 @@ service cloud.firestore {
       allow read: if true;
 
       // Users can create their own registration
-      allow create: if isAuthenticated() && request.auth.uid == registrationId;
+      allow create: if isActiveAccount() && request.auth.uid == registrationId;
 
       // Users can update/delete their own registration
       allow update, delete: if isOwner(registrationId) || isAdmin();

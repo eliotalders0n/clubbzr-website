@@ -11,6 +11,7 @@ import {deterministicId} from "../core/idempotency";
 import {enforceRateLimit} from "../core/rateLimit";
 import {getEconomySettings, requireEconomyEnabled} from "../core/settings";
 import {getSystemAccount, postLedgerTransaction} from "./ledger";
+import {newPointsWalletRecord} from "./records";
 
 const callableOptions = {
   cors: true,
@@ -179,7 +180,7 @@ export const getWalletTransactions = onCall(callableOptions, async (request) => 
   const data = request.data as Record<string, unknown>;
   const requestedLimit = typeof data.limit === "number" ? data.limit : 30;
   const limit = Math.max(1, Math.min(100, Math.floor(requestedLimit)));
-  const snapshot = await db.collection("transactions")
+  const snapshot = await db.collection("transactions").where("currency", "==", "POINT")
     .where("participants", "array-contains", actor.uid)
     .orderBy("createdAt", "desc")
     .limit(limit)
@@ -197,7 +198,7 @@ export const adminGetPointLedger = onCall(callableOptions, async (request) => {
   const data = request.data as Record<string, unknown>;
   const requestedLimit = typeof data.limit === "number" ? data.limit : 100;
   const limit = Math.max(1, Math.min(250, Math.floor(requestedLimit)));
-  const snapshot = await db.collection("transactions")
+  const snapshot = await db.collection("transactions").where("currency", "==", "POINT")
     .orderBy("createdAt", "desc")
     .limit(limit)
     .get();
@@ -218,14 +219,7 @@ export const bootstrapWalletForUser = async (userId: string): Promise<void> => {
       transaction.get(balanceRef),
     ]);
     if (!wallet.exists) {
-      transaction.create(walletRef, {
-        userId,
-        status: "active",
-        currency: "POINT",
-        version: 1,
-        createdAt: admin.firestore.FieldValue.serverTimestamp(),
-        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-      });
+      transaction.create(walletRef, newPointsWalletRecord(userId));
     }
     if (!balance.exists) {
       transaction.create(balanceRef, {

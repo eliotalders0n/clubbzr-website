@@ -16,12 +16,16 @@ export interface AdminPaymentSessionSummary {
   price: number;
   onlineCollected: number;
   externalCollected: number;
+  cashCollected: number;
+  bankTransferCollected: number;
+  otherExternalCollected: number;
   grossCollected: number;
   pending: number;
   failed: number;
   returned: number;
   corrections: number;
   withdrawn: number;
+  externalSpent: number;
   netCollected: number;
   transactionCount: number;
   registrationCount: number;
@@ -50,19 +54,70 @@ export interface AdminPaymentDashboard {
   filters: AdminPaymentDashboardFilters;
   sessions: AdminPaymentSessionSummary[];
   localTransactions: Record<string, unknown>[];
+  pointPayments: Record<string, unknown>[];
   registrations: Record<string, unknown>[];
   returns: Record<string, unknown>[];
   withdrawals: Record<string, unknown>[];
+  externalReceipts: Record<string, unknown>[];
+  externalFundMovements: Record<string, unknown>[];
+  provider: {
+    status: 'connected' | 'unavailable';
+    mode?: 'configured-account-transactions';
+    syncedAt: string;
+    reportingPeriod: {
+      from: string;
+      to: string;
+      days: number;
+      timeZone: string;
+    };
+    balanceAuthoritative: boolean;
+    balanceSource: 'lenco-account' | 'unavailable';
+    transactionsComplete: boolean;
+    settlementsAvailable: boolean;
+    settlementWarning?: string | null;
+    error?: string;
+    warning?: string;
+    account: {
+      id: string;
+      name: string | null;
+      accountNumber: string | null;
+      currency: string;
+      type: string | null;
+      status: string | null;
+      availableBalance: number | null;
+      currentBalance: number | null;
+      observedTransactionBalance?: number | null;
+    } | null;
+    transactions: Record<string, unknown>[];
+    settlements: Record<string, unknown>[];
+    totals: {
+      inflow: number;
+      payout: number;
+      fees: number | null;
+      feeDataAvailable?: boolean;
+      failedPayout: number;
+      netMovement: number;
+      transactionCount: number;
+    } | null;
+  };
   revenueTimeline: AdminPaymentRevenuePeriod[];
   reconciliation: {
     transactionStatusIssues: Record<string, unknown>[];
     registrationPaymentIssues: Record<string, unknown>[];
     returnIssues: Record<string, unknown>[];
+    unmatchedProviderInflows: Record<string, unknown>[];
+    unmatchedLocalCollections: Record<string, unknown>[];
+    pendingProviderSettlements: Record<string, unknown>[];
+    settlementAmountIssues: Record<string, unknown>[];
     issueCount: number;
   };
   totals: {
     onlineCollected: number;
+    pointPurchaseCollected: number;
     externalCollected: number;
+    cashCollected: number;
+    bankTransferCollected: number;
+    otherExternalCollected: number;
     grossCollected: number;
     pending: number;
     failed: number;
@@ -75,6 +130,10 @@ export interface AdminPaymentDashboard {
     cancelledWithdrawals: number;
     totalWithdrawals: number;
     completedReturns: number;
+    cashSpent: number;
+    bankTransferSpent: number;
+    otherExternalSpent: number;
+    externalSpent: number;
   };
   sourceNotes: string[];
 }
@@ -91,6 +150,35 @@ export interface AdminCollectSessionPaymentInput {
   note?: string;
 }
 
+export interface AdminRecordExternalPaymentInput {
+  sessionId: string;
+  registrationId: string;
+  method: 'cash' | 'bank_transfer' | 'card' | 'other';
+  amount: number;
+  currency?: string;
+  reference?: string;
+  receivedAt?: string;
+  note?: string;
+}
+
+export interface AdminClassifyExternalPaymentInput {
+  sessionId: string;
+  registrationId: string;
+  method: 'cash' | 'bank_transfer' | 'card' | 'other';
+  note?: string;
+}
+
+export interface AdminRecordExternalFundOutflowInput {
+  sessionId?: string;
+  source: 'cash' | 'bank_transfer' | 'card' | 'other';
+  amount: number;
+  currency?: string;
+  reason: string;
+  reference?: string;
+  spentAt?: string;
+  note?: string;
+}
+
 export interface AdminPaymentActionResponse {
   success: boolean;
   transactionId?: string;
@@ -104,6 +192,8 @@ export interface AdminPaymentActionResponse {
   transferId?: string;
   lencoReference?: string | null;
   record?: Record<string, unknown>;
+  receiptId?: string;
+  movementId?: string;
 }
 
 export interface AdminRecordPaymentReturnInput {
@@ -161,6 +251,21 @@ const collectSessionPaymentFn = httpsCallable<
   AdminPaymentActionResponse
 >(functions, 'adminCollectSessionMobileMoney');
 
+const recordExternalPaymentFn = httpsCallable<
+  AdminRecordExternalPaymentInput,
+  AdminPaymentActionResponse & { receiptId?: string }
+>(functions, 'adminRecordExternalPayment');
+
+const classifyExternalPaymentFn = httpsCallable<
+  AdminClassifyExternalPaymentInput,
+  AdminPaymentActionResponse
+>(functions, 'adminClassifyExternalPayment');
+
+const recordExternalFundOutflowFn = httpsCallable<
+  AdminRecordExternalFundOutflowInput,
+  AdminPaymentActionResponse
+>(functions, 'adminRecordExternalFundOutflow');
+
 const syncPaymentCollectionFn = httpsCallable<
   { transactionId?: string; reference?: string },
   AdminPaymentActionResponse
@@ -200,6 +305,21 @@ export async function resolvePaymentReconciliationIssue(
 
 export async function collectSessionPayment(input: AdminCollectSessionPaymentInput) {
   const result = await collectSessionPaymentFn(input);
+  return result.data;
+}
+
+export async function recordExternalPayment(input: AdminRecordExternalPaymentInput) {
+  const result = await recordExternalPaymentFn(input);
+  return result.data;
+}
+
+export async function classifyExternalPayment(input: AdminClassifyExternalPaymentInput) {
+  const result = await classifyExternalPaymentFn(input);
+  return result.data;
+}
+
+export async function recordExternalFundOutflow(input: AdminRecordExternalFundOutflowInput) {
+  const result = await recordExternalFundOutflowFn(input);
   return result.data;
 }
 

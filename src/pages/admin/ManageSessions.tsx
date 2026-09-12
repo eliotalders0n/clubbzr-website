@@ -21,6 +21,7 @@ import {
 import { motion, AnimatePresence } from 'framer-motion'
 import { BadgeCheck, CalendarDays, CheckCircle2, CreditCard, ImagePlus, Link as LinkIcon, MapPin, MessageCircle, MoreHorizontal, Pencil, Plus, RotateCcw, Search, Send, Trash2, UserRoundMinus, Users, X } from 'lucide-react'
 import { GeoPoint, Timestamp, arrayRemove, arrayUnion } from 'firebase/firestore'
+import { useNavigate } from 'react-router-dom'
 
 import { AdminLayout } from '@/components/layout/AdminLayout'
 import { LocationPicker, type LocationPickerValue } from '@/components/map'
@@ -478,6 +479,7 @@ const buildPayload = (
 }
 
 export default function ManageSessions() {
+  const navigate = useNavigate()
   const { firebaseUser } = useAuth()
   const { data, loading, error, refetch } = useCollection('sessions', {
     orderBy: 'date',
@@ -623,11 +625,15 @@ export default function ManageSessions() {
   }
 
   const handleMarkPaid = (registration: SessionRegistration) => {
-    void handleRegistrationUpdate(registration, {
-      status: registration.status === 'pending_payment' ? 'paid_pending_confirmation' : registration.status,
-      paymentStatus: 'paid_external',
-      paymentMethod: registration.paymentMethod || 'bank_transfer',
-      paidAt: Timestamp.now(),
+    navigate('/admin/payments', {
+      state: {
+        recordExternal: {
+          registrationId: registration.id,
+          sessionId: registration.sessionId,
+          amount: registration.paymentAmount,
+          currency: registration.paymentCurrency || 'ZMW',
+        },
+      },
     })
   }
 
@@ -708,10 +714,13 @@ export default function ManageSessions() {
   }
 
   const handleConfirmRegistration = (registration: SessionRegistration, markPaid = false) => {
+    if (markPaid) {
+      handleMarkPaid(registration)
+      return
+    }
     void (async () => {
       const success = await handleRegistrationUpdate(registration, {
       status: 'confirmed',
-      ...(markPaid ? { paymentStatus: 'paid_external' as const, paidAt: Timestamp.now() } : {}),
       confirmedAt: Timestamp.now(),
       confirmedBy: firebaseUser?.uid || 'admin',
     })
@@ -1631,12 +1640,7 @@ function RegistrationRow({
                   )}
                   {canMarkPaid && (
                     <RegistrationActionMenuItem value="mark-paid" icon={<CreditCard size={15} />} onClick={() => onMarkPaid(registration)} color="blue.200">
-                      Mark paid
-                    </RegistrationActionMenuItem>
-                  )}
-                  {canMarkPaid && (
-                    <RegistrationActionMenuItem value="paid-confirm" icon={<CheckCircle2 size={15} />} onClick={() => onConfirm(registration, true)} color="green.200">
-                      Mark paid + confirm
+                      Record cash or external payment
                     </RegistrationActionMenuItem>
                   )}
                   {canExempt && (

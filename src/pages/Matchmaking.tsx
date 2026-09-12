@@ -15,7 +15,7 @@ import { MEDIUMS } from '@/lib/constants'
 import { useAuth } from '@/contexts/AuthContext'
 import { useCollection } from '@/hooks/useFirestore'
 import { updateDocument } from '../../lib/firestore'
-import type { MatchStatus, User } from '../../lib/schema'
+import type { MatchStatus, PublicProfile } from '../../lib/schema'
 
 interface DisplayMatch {
   id: string
@@ -44,14 +44,14 @@ export default function Matchmaking() {
     skip: !authUser,
   })
 
-  // Fetch all users to display match user data
-  const { data: users } = useCollection('users', {
+  // Public profile data avoids exposing private account records to members.
+  const { data: users } = useCollection('publicProfiles', {
     skip: !authUser,
   })
 
   // Build user lookup map
   const userMap = useMemo(() => {
-    const map = new Map<string, User>()
+    const map = new Map<string, PublicProfile>()
     users.forEach(u => map.set(u.id, u))
     return map
   }, [users])
@@ -66,7 +66,7 @@ export default function Matchmaking() {
           id: match.matchedUserId,
           name: matchedUser?.displayName || 'Unknown User',
           photoURL: matchedUser?.photoURL || undefined,
-          mediums: [], // Would need artist profile for mediums
+          mediums: matchedUser?.mediums || [],
           bio: matchedUser?.bio || '',
         },
         score: match.score,

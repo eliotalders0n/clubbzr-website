@@ -19,6 +19,7 @@ const options = {
 async function getTrade(tradeId: string) {
   const snapshot = await db.collection("trades").doc(tradeId).get();
   if (!snapshot.exists) throw new HttpsError("not-found", "Trade not found.");
+  if (snapshot.data()?.storeOrder === true) throw new HttpsError("failed-precondition", "Use Store order actions for this purchase.");
   return {ref: snapshot.ref, data: snapshot.data() || {}};
 }
 
@@ -92,6 +93,7 @@ async function transitionTrade(input: {
     const snapshot = await transaction.get(tradeRef);
     if (!snapshot.exists) throw new HttpsError("not-found", "Trade not found.");
     const trade = snapshot.data() || {};
+    if (trade.storeOrder === true) throw new HttpsError("failed-precondition", "Use Store order actions for this purchase.");
     if (input.actorRole === "buyer" && trade.buyerId !== input.actorId) throw new HttpsError("permission-denied", "Buyer action required.");
     if (input.actorRole === "seller" && trade.sellerId !== input.actorId) throw new HttpsError("permission-denied", "Seller action required.");
     if (input.actorRole === "participant") requireParticipant(trade, input.actorId);

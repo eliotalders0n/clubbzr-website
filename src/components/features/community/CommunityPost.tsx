@@ -6,9 +6,10 @@ import { Link } from 'react-router-dom';
 import { motion, AnimatePresence } from 'framer-motion';
 import { clsx } from 'clsx';
 import { twMerge } from 'tailwind-merge';
-import { ChevronLeft, ChevronRight, Expand, LogIn, MapPin, X } from 'lucide-react';
+import { ChevronLeft, ChevronRight, Expand, Lightbulb, LogIn, MapPin, Sparkles, X } from 'lucide-react';
 import type { CommunityPost as CommunityPostType, ReactionType, Comment } from '../../../../lib/schema';
 import { Timestamp } from 'firebase/firestore';
+import { MarketplaceAttachment } from '../store/MarketplaceAttachment';
 import { ReactionBar } from './ReactionBar';
 
 const cn = (...inputs: (string | undefined | null | false)[]) => twMerge(clsx(inputs));
@@ -799,6 +800,8 @@ export const CommunityPost: React.FC<CommunityPostProps> = ({
   const swipeDeltaRef = useRef({ x: 0, y: 0 });
 
   const isOwner = post.userId === currentUserId;
+  const communityNote = post.postType === 'community_note' ? post.communityNote : undefined;
+  const isCommunityNote = Boolean(communityNote);
   const mediaUrls = post.mediaUrls || [];
   const hasMedia = mediaUrls.length > 0;
   const displayCommentsCount = Math.max(post.commentsCount || 0, comments.length);
@@ -866,11 +869,23 @@ export const CommunityPost: React.FC<CommunityPostProps> = ({
       style={{
         backgroundColor: 'rgb(17, 17, 17)',
         borderRadius: '16px',
-        border: '1px solid rgba(38, 38, 38, 1)',
+        border: isCommunityNote
+          ? '1px solid rgba(255, 107, 53, 0.3)'
+          : '1px solid rgba(38, 38, 38, 1)',
         overflow: 'hidden',
       }}
       className={className}
     >
+      {isCommunityNote && (
+        <div
+          aria-hidden="true"
+          style={{
+            height: '4px',
+            background: 'linear-gradient(90deg, #FF6B35 0%, #F7B955 54%, #A78BFA 100%)',
+          }}
+        />
+      )}
+
       {/* Header */}
       <div style={{ padding: '20px', paddingBottom: '12px' }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
@@ -882,44 +897,97 @@ export const CommunityPost: React.FC<CommunityPostProps> = ({
               minWidth: 0,
             }}
           >
-            {/* Avatar */}
-            <Link to={getMemberHref(post.userId)} aria-label={`View ${post.userName}'s profile`}>
-              <CommentAvatar name={post.userName} photoURL={post.userPhotoURL} size={44} />
-            </Link>
-
-            {/* User info */}
-            <div style={{ minWidth: 0 }}>
-              <Link to={getMemberHref(post.userId)} style={{ textDecoration: 'none' }}>
-                <h3 style={{ color: '#fff', fontWeight: 500, fontSize: '15px', marginBottom: '2px' }}>
-                  {post.userName}
-                </h3>
-                <p style={{ fontSize: '13px', color: '#6B7280' }}>
-                  {formatTimestamp(post.createdAt)}
-                  {post.prompt && (
-                    <span style={{ marginLeft: '8px' }}>
-                      responding to <span style={{ color: '#A78BFA' }}>{post.prompt}</span>
-                    </span>
-                  )}
-                </p>
-              </Link>
-              {post.location?.coordinates && (
-                <a
-                  href={`https://www.google.com/maps/search/?api=1&query=${post.location.coordinates.latitude},${post.location.coordinates.longitude}`}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  onClick={(event) => event.stopPropagation()}
-                  style={{ display: 'inline-flex', alignItems: 'center', gap: '5px', marginTop: '5px', color: '#FF8A5F', fontSize: '12px', fontWeight: 500, textDecoration: 'none' }}
+            {isCommunityNote ? (
+              <>
+                <div
+                  style={{
+                    width: '44px',
+                    height: '44px',
+                    flex: '0 0 44px',
+                    borderRadius: '12px',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    color: '#111111',
+                    background: '#FF6B35',
+                    fontSize: '12px',
+                    fontWeight: 900,
+                    letterSpacing: '-0.04em',
+                  }}
                 >
-                  <MapPin size={13} />
-                  {post.location.name || 'View post location'}
-                </a>
-              )}
-            </div>
+                  BZR
+                </div>
+                <div style={{ minWidth: 0 }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+                    <h3 style={{ color: '#fff', fontWeight: 700, fontSize: '15px', margin: 0 }}>
+                      Community Notes
+                    </h3>
+                    <span
+                      style={{
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        gap: '5px',
+                        borderRadius: '9999px',
+                        padding: '4px 8px',
+                        background: 'rgba(167, 139, 250, 0.12)',
+                        color: '#C4B5FD',
+                        fontSize: '10px',
+                        fontWeight: 700,
+                        letterSpacing: '0.06em',
+                        textTransform: 'uppercase',
+                      }}
+                    >
+                      <Sparkles size={11} />
+                      AI-assisted
+                    </span>
+                  </div>
+                  <p style={{ fontSize: '13px', color: '#737373', marginTop: '3px' }}>
+                    Club BZR · {formatTimestamp(post.createdAt)}
+                  </p>
+                </div>
+              </>
+            ) : (
+              <>
+                {/* Avatar */}
+                <Link to={getMemberHref(post.userId)} aria-label={`View ${post.userName}'s profile`}>
+                  <CommentAvatar name={post.userName} photoURL={post.userPhotoURL} size={44} />
+                </Link>
+
+                {/* User info */}
+                <div style={{ minWidth: 0 }}>
+                  <Link to={getMemberHref(post.userId)} style={{ textDecoration: 'none' }}>
+                    <h3 style={{ color: '#fff', fontWeight: 500, fontSize: '15px', marginBottom: '2px' }}>
+                      {post.userName}
+                    </h3>
+                    <p style={{ fontSize: '13px', color: '#6B7280' }}>
+                      {formatTimestamp(post.createdAt)}
+                      {post.prompt && (
+                        <span style={{ marginLeft: '8px' }}>
+                          responding to <span style={{ color: '#A78BFA' }}>{post.prompt}</span>
+                        </span>
+                      )}
+                    </p>
+                  </Link>
+                  {post.location?.coordinates && (
+                    <a
+                      href={`https://www.google.com/maps/search/?api=1&query=${post.location.coordinates.latitude},${post.location.coordinates.longitude}`}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      onClick={(event) => event.stopPropagation()}
+                      style={{ display: 'inline-flex', alignItems: 'center', gap: '5px', marginTop: '5px', color: '#FF8A5F', fontSize: '12px', fontWeight: 500, textDecoration: 'none' }}
+                    >
+                      <MapPin size={13} />
+                      {post.location.name || 'View post location'}
+                    </a>
+                  )}
+                </div>
+              </>
+            )}
           </div>
 
           {/* Menu */}
           <PostMenu
-            isOwner={isOwner}
+            isOwner={isOwner && !isCommunityNote}
             onEdit={onEdit}
             onDelete={onDelete}
             onShare={onShare}
@@ -930,11 +998,74 @@ export const CommunityPost: React.FC<CommunityPostProps> = ({
       </div>
 
       {/* Content */}
-      <div style={{ padding: '0 20px 16px 20px' }}>
-        <p style={{ color: '#E5E7EB', whiteSpace: 'pre-wrap', wordBreak: 'break-word', fontSize: '15px', lineHeight: 1.6 }}>
-          {post.content}
-        </p>
-      </div>
+      {communityNote ? (
+        <div style={{ padding: '4px 20px 20px' }}>
+          <span
+            style={{
+              display: 'inline-block',
+              marginBottom: '10px',
+              borderRadius: '9999px',
+              padding: '5px 10px',
+              background: 'rgba(255, 107, 53, 0.12)',
+              color: '#FF9A70',
+              fontSize: '11px',
+              fontWeight: 700,
+              letterSpacing: '0.08em',
+              textTransform: 'uppercase',
+            }}
+          >
+            {communityNote.category}
+          </span>
+          <h2
+            style={{
+              margin: 0,
+              color: '#FAF9F6',
+              fontSize: 'clamp(22px, 4vw, 30px)',
+              fontWeight: 700,
+              letterSpacing: '-0.035em',
+              lineHeight: 1.14,
+            }}
+          >
+            {communityNote.title}
+          </h2>
+          <p style={{ color: '#D4D4D4', whiteSpace: 'pre-wrap', wordBreak: 'break-word', fontSize: '15px', lineHeight: 1.72, marginTop: '14px' }}>
+            {post.content}
+          </p>
+          <div
+            style={{
+              display: 'flex',
+              alignItems: 'flex-start',
+              gap: '10px',
+              marginTop: '18px',
+              padding: '14px 16px',
+              borderRadius: '14px',
+              border: '1px solid rgba(255, 107, 53, 0.2)',
+              background: 'rgba(255, 107, 53, 0.07)',
+            }}
+          >
+            <Lightbulb size={17} color="#FF8A5F" style={{ flex: '0 0 auto', marginTop: '2px' }} />
+            <div>
+              <span style={{ display: 'block', color: '#FF9A70', fontSize: '10px', fontWeight: 800, letterSpacing: '0.08em', textTransform: 'uppercase', marginBottom: '4px' }}>
+                Try this
+              </span>
+              <span style={{ color: '#E5E5E5', fontSize: '14px', lineHeight: 1.55 }}>
+                {communityNote.takeaway}
+              </span>
+            </div>
+          </div>
+          <p style={{ color: '#666666', fontSize: '11px', marginTop: '14px' }}>
+            {communityNote.groundingLabel}
+          </p>
+        </div>
+      ) : (
+        <div style={{ padding: '0 20px 16px 20px' }}>
+          <p style={{ color: '#E5E7EB', whiteSpace: 'pre-wrap', wordBreak: 'break-word', fontSize: '15px', lineHeight: 1.6 }}>
+            {post.content}
+          </p>
+        </div>
+      )}
+
+      {post.marketplace?.listingId && <div style={{padding: '0 20px 16px'}}><MarketplaceAttachment listingId={post.marketplace.listingId} /></div>}
 
       {/* Media */}
       {hasMedia && (

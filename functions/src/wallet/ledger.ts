@@ -9,6 +9,7 @@ import type {
 
 const emptyBalance = (walletId: string): BalanceRecord => ({
   walletId,
+  payout_pending: 0, paid: 0, reversed: 0,
   available: 0,
   locked: 0,
   pending: 0,
@@ -36,19 +37,26 @@ function assertLedgerInput(input: LedgerPostInput): void {
     throw new HttpsError("invalid-argument", "Ledger entries are invalid.");
   }
 
-  const sum = input.entries.reduce((total, entry) => total + entry.amount, 0);
-  if (sum !== 0 || input.entries.some((entry) => !Number.isSafeInteger(entry.amount))) {
+  if ((input.currency || "POINT") === "POINT" && input.entries.some((entry) => !["available", "locked", "pending"].includes(entry.bucket))) {
+    throw new HttpsError("invalid-argument", "Invalid Points bucket.");
+  }
+  if (input.entries.some((entry) => !Number.isSafeInteger(entry.amount))) throw new HttpsError("invalid-argument", "Ledger entries must be safe integers.");
+  const sum = input.entries.reduce((total, entry) => total + BigInt(entry.amount), BigInt(0));
+  if (sum !== BigInt(0) || input.entries.some((entry) => !Number.isSafeInteger(entry.amount))) {
     throw new HttpsError("internal", "Ledger entries do not balance.");
   }
 }
 
 export async function postLedgerTransaction(
-  input: LedgerPostInput
+  input: LedgerPostInput,
+  outerTransaction?: FirebaseFirestore.Transaction
 ): Promise<{transactionId: string; duplicate: boolean}> {
   assertLedgerInput(input);
   const transactionRef = db.collection("transactions").doc(input.transactionId);
 
-  return db.runTransaction(async (transaction) => {
+  const currency = input.currency || "POINT";
+  const projection = currency === "ZMW" ? "sellerPayables" : "balances";
+  const execute = async (transaction: FirebaseFirestore.Transaction) => {
     const existing = await transaction.get(transactionRef);
     if (existing.exists) {
       const current = existing.data() || {};
@@ -56,6 +64,7 @@ export async function postLedgerTransaction(
         [...(current.participants || [])].sort()
       ) === JSON.stringify([...input.participants].sort());
       if (
+        (current.currency || "POINT") !== currency ||
         current.type !== input.type ||
         current.amount !== input.amount ||
         current.fee !== input.fee ||
@@ -81,7 +90,7 @@ export async function postLedgerTransaction(
 
     const balanceSnapshots = new Map<string, FirebaseFirestore.DocumentSnapshot>();
     for (const accountId of entryGroups.keys()) {
-      const ref = db.collection("balances").doc(accountId);
+      const ref = db.collection(projection).doc(accountId);
       balanceSnapshots.set(accountId, await transaction.get(ref));
     }
 
@@ -127,7 +136,7 @@ export async function postLedgerTransaction(
     }
 
     for (const [accountId, buckets] of entryGroups) {
-      const ref = db.collection("balances").doc(accountId);
+      const ref = db.collection(projection).doc(accountId);
       const snapshot = balanceSnapshots.get(accountId);
       const current = snapshot?.exists ?
         {...emptyBalance(accountId), ...snapshot.data()} as BalanceRecord :
@@ -137,18 +146,22 @@ export async function postLedgerTransaction(
       for (const [bucket, delta] of buckets) {
         next[bucket] += delta;
       }
-      next.total = next.available + next.locked + next.pending;
+      next.total = next.available + next.locked + next.pending + next.payout_pending;
       next.ledgerSequence += 1;
+      if ([next.available, next.locked, next.pending, next.total, next.payout_pending, next.paid, next.reversed].some((value) => !Number.isSafeInteger(value))) {
+        throw new HttpsError("out-of-range", "Balance exceeds safe integer bounds.");
+      }
 
       if (
         !isSystemAccount(accountId) &&
-        (next.available < 0 || next.locked < 0 || next.pending < 0)
+        (next.available < 0 || next.locked < 0 || next.pending < 0 || next.payout_pending < 0 || next.paid < 0 || next.reversed < 0)
       ) {
-        throw new HttpsError("failed-precondition", "Insufficient points.");
+        throw new HttpsError("failed-precondition", currency === "POINT" ? "Insufficient points." : "Insufficient seller payable funds.");
       }
 
       transaction.set(ref, {
         ...next,
+        ...(currency === "ZMW" ? {currency, systemAccount: isSystemAccount(accountId)} : {}),
         updatedAt: admin.firestore.FieldValue.serverTimestamp(),
         ...(snapshot?.exists ? {} : {
           createdAt: admin.firestore.FieldValue.serverTimestamp(),
@@ -174,7 +187,7 @@ export async function postLedgerTransaction(
       ...(input.reversesTransactionId ? {
         reversesTransactionId: input.reversesTransactionId,
       } : {}),
-      currency: "POINT",
+      currency,
       schemaVersion: 1,
       createdAt: admin.firestore.FieldValue.serverTimestamp(),
     });
@@ -183,6 +196,7 @@ export async function postLedgerTransaction(
       transaction.create(
         db.collection("ledgerEntries").doc(`${input.transactionId}_${index}`),
         {
+          currency,
           transactionId: input.transactionId,
           accountId: entry.accountId,
           bucket: entry.bucket,
@@ -216,7 +230,8 @@ export async function postLedgerTransaction(
     }
 
     return {transactionId: input.transactionId, duplicate: false};
-  });
+  };
+  return outerTransaction ? execute(outerTransaction) : db.runTransaction(execute);
 }
 
 export function getSystemAccount(
