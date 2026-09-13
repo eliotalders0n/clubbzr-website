@@ -4,6 +4,7 @@ import { doc, getDoc } from 'firebase/firestore'
 import { Navigate } from 'react-router-dom'
 
 import { Header } from '@/components/layout/Header'
+import { BuyPointsModal } from '@/components/features/wallet/BuyPointsModal'
 import { useAuth } from '@/contexts/AuthContext'
 import { useWallet } from '@/contexts/WalletContext'
 import { db } from '../../lib/config'
@@ -13,9 +14,12 @@ interface PurchaseSettings {
   enabled: boolean
   minNgwee: number | null
   maxNgwee: number | null
+  pointsPerZmw: number | null
 }
 
 type Feedback = { type: 'error' | 'success'; message: string }
+
+type WalletTab = 'wallet' | 'history'
 
 function formatDate(value?: { seconds: number }) {
   return value ? new Date(value.seconds * 1000).toLocaleString() : 'Processing'
@@ -34,11 +38,21 @@ export default function Wallet() {
   const [purchasing, setPurchasing] = useState(false)
   const [purchaseFeedback, setPurchaseFeedback] = useState<Feedback | null>(null)
   const [purchaseSettings, setPurchaseSettings] = useState<PurchaseSettings | null>(null)
+  const [activeTab, setActiveTab] = useState<WalletTab>('wallet')
+  const [buyOpen, setBuyOpen] = useState(false)
   const balance = summary?.balance
   const canSubmit = useMemo(
     () => recipientId.trim().length >= 6 && Number.isSafeInteger(Number(amount)) && Number(amount) > 0,
     [amount, recipientId],
   )
+  // Mirrors calculatePurchasePoints on the server so the amount being bought is
+  // visible before the mobile-money prompt appears.
+  const previewPoints = useMemo(() => {
+    const zmw = Number(purchaseAmount)
+    const rate = purchaseSettings?.pointsPerZmw
+    if (!rate || !Number.isFinite(zmw) || zmw <= 0) return null
+    return Math.floor((Math.round(zmw * 100) * rate) / 100)
+  }, [purchaseAmount, purchaseSettings?.pointsPerZmw])
 
   useEffect(() => {
     if (!firebaseUser) return
@@ -48,8 +62,9 @@ export default function Wallet() {
         enabled: data?.economyEnabled === true && data?.pointPurchasesEnabled === true && data?.maintenanceMode !== true,
         minNgwee: Number.isSafeInteger(data?.minPurchaseNgwee) ? data.minPurchaseNgwee : null,
         maxNgwee: Number.isSafeInteger(data?.maxPurchaseNgwee) ? data.maxPurchaseNgwee : null,
+        pointsPerZmw: Number.isSafeInteger(data?.pointsPerZmw) ? data.pointsPerZmw : null,
       })
-    }).catch(() => setPurchaseSettings({ enabled: false, minNgwee: null, maxNgwee: null }))
+    }).catch(() => setPurchaseSettings({ enabled: false, minNgwee: null, maxNgwee: null, pointsPerZmw: null }))
   }, [firebaseUser])
 
   if (initialized && !firebaseUser) return <Navigate to="/auth/login" replace />
@@ -107,6 +122,10 @@ export default function Wallet() {
         const status = await checkPointPurchaseStatus(paymentId)
         if (status.status === 'successful') {
           setPurchaseFeedback({ type: 'success', message: `${status.points} points have been added to your wallet.` })
+          setPurchaseAmount('')
+          setPhone('')
+          // Close the prompt so the credited balance is what they land on.
+          setBuyOpen(false)
           await refreshWallet()
           return
         }
@@ -121,6 +140,11 @@ export default function Wallet() {
     setPurchaseFeedback({ type: 'success', message: 'Payment is still pending. Your wallet will update after confirmation.' })
   }
 
+  const walletTabs: { id: WalletTab; label: string; count?: number }[] = [
+    { id: 'wallet', label: 'Wallet' },
+    { id: 'history', label: 'Transaction history', count: transactions.length },
+  ]
+
   return (
     <Box minH="100vh" bg="#080808" color="white">
       <Header />
@@ -133,24 +157,55 @@ export default function Wallet() {
           {loading && <Spinner color="#f47742" />}
         </Flex>
 
-        <Box as="form" onSubmit={handlePurchase} mt={6} mb={{ base: 6, md: 8 }} bg="#151515" border="1px solid #2b2b2b" rounded="2xl" p={{ base: 5, md: 7 }}>
-          <Heading size="lg">Buy points</Heading>
-          <Text color="whiteAlpha.500" mt={1} mb={5}>Pay securely in ZMW using mobile money. Points are credited only after Lenco confirms payment.</Text>
-          <Box display="grid" gridTemplateColumns={{ base: '1fr', md: '1fr 1fr 1fr auto' }} gap={4} alignItems="end">
-            <Box as="label"><Text fontSize="sm" mb={2}>Amount (ZMW)</Text><input className="wallet-input" type="number" min={purchaseSettings?.minNgwee ? purchaseSettings.minNgwee / 100 : 1} max={purchaseSettings?.maxNgwee ? purchaseSettings.maxNgwee / 100 : undefined} step="0.01" value={purchaseAmount} onChange={(event) => setPurchaseAmount(event.currentTarget.value)} /></Box>
-            <Box as="label"><Text fontSize="sm" mb={2}>Mobile number</Text><input className="wallet-input" value={phone} onChange={(event) => setPhone(event.currentTarget.value)} placeholder="096…" /></Box>
-            <Box as="label"><Text fontSize="sm" mb={2}>Network</Text><select className="wallet-input" value={operator} onChange={(event) => setOperator(event.currentTarget.value as typeof operator)}><option value="mtn">MTN</option><option value="airtel">Airtel</option><option value="zamtel">Zamtel</option></select></Box>
-            <Button type="submit" disabled={purchasing || purchaseSettings?.enabled !== true || !purchaseAmount || !phone} bg="#f47742" color="white" rounded="full" px={7} h="52px">{purchasing ? 'Starting…' : 'Buy points'}</Button>
-          </Box>
-          {!purchaseSettings && <Text mt={4} color="whiteAlpha.500">Loading purchase limits…</Text>}
-          {purchaseSettings?.enabled === false && <Text mt={4} color="orange.200">Point purchases are currently unavailable.</Text>}
-          {purchaseFeedback && <Box mt={4} p={3} rounded="xl" bg={purchaseFeedback.type === 'error' ? 'red.950' : 'green.950'} border="1px solid" borderColor={purchaseFeedback.type === 'error' ? 'red.700' : 'green.700'}><Text color={purchaseFeedback.type === 'error' ? 'red.200' : 'green.200'}>{purchaseFeedback.message}</Text></Box>}
-        </Box>
+        <Flex
+          role="tablist"
+          aria-label="Wallet sections"
+          gap={2}
+          mb={{ base: 6, md: 8 }}
+          overflowX="auto"
+          pb={2}
+          css={{ scrollbarWidth: 'none', '&::-webkit-scrollbar': { display: 'none' } }}
+        >
+          {walletTabs.map((tab) => {
+            const active = activeTab === tab.id
+            return (
+              <Button
+                key={tab.id}
+                type="button"
+                role="tab"
+                id={`wallet-tab-${tab.id}`}
+                aria-selected={active}
+                aria-controls={`wallet-panel-${tab.id}`}
+                h="44px"
+                px={4}
+                flexShrink={0}
+                rounded="full"
+                bg={active ? '#f47742' : '#151515'}
+                color={active ? 'white' : 'whiteAlpha.700'}
+                border="1px solid"
+                borderColor={active ? '#f47742' : '#2b2b2b'}
+                fontSize="sm"
+                fontWeight="semibold"
+                _hover={{ bg: active ? '#e06a39' : 'whiteAlpha.100', color: 'white' }}
+                onClick={() => setActiveTab(tab.id)}
+              >
+                {tab.label}
+                {typeof tab.count === 'number' && (
+                  <Text as="span" ml={2} fontSize="xs" color={active ? 'whiteAlpha.800' : 'whiteAlpha.500'}>
+                    {tab.count}
+                  </Text>
+                )}
+              </Button>
+            )
+          })}
+        </Flex>
 
         {error && <Box bg="red.950" border="1px solid" borderColor="red.700" p={4} rounded="xl" mb={6}>{error}</Box>}
 
+        {activeTab === 'wallet' && (
+        <Box role="tabpanel" id="wallet-panel-wallet" aria-labelledby="wallet-tab-wallet">
         <Flex direction={{ base: 'column', lg: 'row' }} gap={{ base: 6, md: 8 }} align="stretch">
-          <Box flex="1" bg="#151515" border="1px solid #2b2b2b" rounded="2xl" p={{ base: 5, md: 7 }}>
+          <Flex direction="column" flex="1" bg="#151515" border="1px solid #2b2b2b" rounded="2xl" p={{ base: 5, md: 7 }}>
             <Text color="whiteAlpha.600">Available balance</Text>
             <Heading fontSize={{ base: '4xl', md: '6xl' }} mt={2}>{balance?.available ?? 0}</Heading>
             <Text color="whiteAlpha.500" mt={1}>points</Text>
@@ -159,7 +214,28 @@ export default function Wallet() {
               <Box><Text color="whiteAlpha.500" fontSize="sm">Pending</Text><Text fontSize="xl">{balance?.pending ?? 0}</Text></Box>
               <Box><Text color="whiteAlpha.500" fontSize="sm">Total</Text><Text fontSize="xl">{balance?.total ?? 0}</Text></Box>
             </Flex>
-          </Box>
+            <Box mt="auto" pt={8}>
+              <Button
+                type="button"
+                onClick={() => { setPurchaseFeedback(null); setBuyOpen(true) }}
+                disabled={purchaseSettings?.enabled !== true}
+                bg="#f47742"
+                color="white"
+                rounded="full"
+                px={7}
+                h="52px"
+                w={{ base: 'full', sm: 'auto' }}
+                _hover={{ bg: '#e06a39' }}
+              >
+                Buy points
+              </Button>
+              {!purchaseSettings && <Text mt={3} color="whiteAlpha.500" fontSize="sm">Checking whether points are on sale…</Text>}
+              {purchaseSettings?.enabled === false && <Text mt={3} color="orange.200" fontSize="sm">Point purchases are closed right now.</Text>}
+              {purchaseFeedback && !buyOpen && (
+                <Text mt={3} fontSize="sm" color={purchaseFeedback.type === 'error' ? 'red.200' : 'green.200'}>{purchaseFeedback.message}</Text>
+              )}
+            </Box>
+          </Flex>
 
           <Box as="form" onSubmit={handleTransfer} flex="1" bg="#151515" border="1px solid #2b2b2b" rounded="2xl" p={{ base: 5, md: 7 }}>
             <Heading size="lg">Send points</Heading>
@@ -176,19 +252,51 @@ export default function Wallet() {
             {transferFeedback && <Text mt={4} color={transferFeedback.type === 'error' ? 'red.200' : 'green.200'}>{transferFeedback.message}</Text>}
           </Box>
         </Flex>
-
-        <Box mt={10}>
-          <Heading size="xl" mb={5}>Transaction history</Heading>
-          <Box border="1px solid #292929" rounded="2xl" overflow="hidden">
-            {transactions.length === 0 && !loading ? <Text p={6} color="whiteAlpha.500">No transactions yet.</Text> : transactions.map((item) => (
-              <Flex key={item.id} px={{ base: 4, md: 6 }} py={4} gap={4} align="center" justify="space-between" borderBottom="1px solid #222" _last={{ borderBottom: 0 }}>
-                <Box minW={0}><Text fontWeight="semibold" textTransform="capitalize">{item.type.replaceAll('_', ' ')}</Text><Text color="whiteAlpha.500" fontSize="sm">{formatDate(item.createdAt)}</Text></Box>
-                <Text fontWeight="bold" color={item.receiverWalletId === firebaseUser?.uid ? 'green.300' : 'white'}>{item.receiverWalletId === firebaseUser?.uid ? '+' : '-'}{item.amount}</Text>
-              </Flex>
-            ))}
-          </Box>
         </Box>
+        )}
+
+        {activeTab === 'history' && (
+          <Box role="tabpanel" id="wallet-panel-history" aria-labelledby="wallet-tab-history" border="1px solid #292929" rounded="2xl" overflow="hidden">
+            {loading && transactions.length === 0 ? (
+              <Flex p={6} gap={3} align="center"><Spinner color="#f47742" size="sm" /><Text color="whiteAlpha.500">Loading your transactions…</Text></Flex>
+            ) : transactions.length === 0 ? (
+              <Box p={{ base: 6, md: 8 }}>
+                <Text fontWeight="semibold">Nothing here yet</Text>
+                <Text color="whiteAlpha.500" mt={1}>Points you earn, buy, or send will show up here.</Text>
+              </Box>
+            ) : transactions.map((item) => {
+              const incoming = item.receiverWalletId === firebaseUser?.uid
+              return (
+                <Flex key={item.id} px={{ base: 4, md: 6 }} py={4} gap={4} align="center" justify="space-between" borderBottom="1px solid #222" _last={{ borderBottom: 0 }}>
+                  <Box minW={0}>
+                    <Text fontWeight="semibold" textTransform="capitalize">{item.type.replaceAll('_', ' ')}</Text>
+                    <Text color="whiteAlpha.500" fontSize="sm">{formatDate(item.createdAt)}</Text>
+                  </Box>
+                  <Text fontWeight="bold" flexShrink={0} color={incoming ? 'green.300' : 'white'}>
+                    {incoming ? '+' : '-'}{item.amount}
+                  </Text>
+                </Flex>
+              )
+            })}
+          </Box>
+        )}
       </Box>
+      <BuyPointsModal
+        isOpen={buyOpen}
+        onClose={() => setBuyOpen(false)}
+        amount={purchaseAmount}
+        onAmountChange={setPurchaseAmount}
+        phone={phone}
+        onPhoneChange={setPhone}
+        operator={operator}
+        onOperatorChange={setOperator}
+        settings={purchaseSettings}
+        previewPoints={previewPoints}
+        purchasing={purchasing}
+        feedback={purchaseFeedback}
+        onSubmit={handlePurchase}
+      />
+
       <style>{`.wallet-input{width:100%;height:52px;padding:0 16px;border:1px solid #333;border-radius:12px;background:#0d0d0d;color:white;outline:none}.wallet-input:focus{border-color:#f47742}`}</style>
     </Box>
   )

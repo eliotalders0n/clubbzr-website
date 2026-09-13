@@ -1,3 +1,10 @@
+/* Establish the cascade order before anything registers a layer.
+   Tailwind declares `theme, base, components, utilities` and Chakra later
+   declares `reset, base, tokens, recipes`. Chakra's new names would otherwise
+   be appended after `utilities`, putting its `* { padding: 0 }` reset ahead of
+   every Tailwind spacing utility and silently disabling them app-wide. */
+@layer reset, theme, base, tokens, components, recipes, utilities;
+
 @import "tailwindcss";
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Space+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap');
 
@@ -49,10 +56,15 @@
 }
 
 /* Base Styles */
-* {
-  box-sizing: border-box;
-  margin: 0;
-  padding: 0;
+/* Layered so Tailwind utilities can override it. Unlayered declarations beat
+   every layered one regardless of specificity, so leaving this outside a layer
+   silently disables all `p-*` and `m-*` utilities across the app. */
+@layer base {
+  * {
+    box-sizing: border-box;
+    margin: 0;
+    padding: 0;
+  }
 }
 
 html {

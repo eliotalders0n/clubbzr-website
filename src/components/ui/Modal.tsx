@@ -17,6 +17,8 @@ interface ModalProps {
   onClose: () => void;
   children: ReactNode;
   title?: string;
+  /** Optional mark shown beside the title. */
+  icon?: ReactNode;
   description?: string;
   size?: 'sm' | 'md' | 'lg' | 'xl' | 'full';
   closeOnBackdrop?: boolean;
@@ -86,6 +88,7 @@ export function Modal({
   onClose,
   children,
   title,
+  icon,
   description,
   size = 'md',
   closeOnBackdrop = true,
@@ -171,8 +174,9 @@ export function Modal({
           className={cn(
             'fixed inset-0 flex justify-center',
             mobileSheet
+              // Above the fixed header (50) and the mobile bottom nav (60).
               ? 'z-[100] items-end p-0 md:items-center md:p-4'
-              : 'z-50 items-center p-4'
+              : 'z-[100] items-center p-4'
           )}
           role="presentation"
         >
@@ -218,7 +222,9 @@ export function Modal({
                 data-modal-header
               >
                 {title && (
-                  <div>
+                  <div className={cn(icon && 'flex items-start gap-3')}>
+                    {icon && <span className="mt-0.5 shrink-0">{icon}</span>}
+                    <div>
                     <h2
                       id="modal-title"
                       className="text-xl font-display font-semibold text-bzr-white"
@@ -233,6 +239,7 @@ export function Modal({
                         {description}
                       </p>
                     )}
+                    </div>
                   </div>
                 )}
 

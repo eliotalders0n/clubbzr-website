@@ -677,9 +677,12 @@ const Passport: React.FC = () => {
     user: authUser,
     firebaseUser,
   });
-  const authoritativePoints = pointBalance
-    ? numericValue(pointBalance.available)
-    : numericValue(passport.points);
+  // The ledger is the only source of spendable points. `passport.points` is a
+  // mirror that rewards increment but spending never decrements, so falling
+  // back to it would advertise a balance the wallet and store will refuse.
+  const authoritativePoints = numericValue(pointBalance?.available);
+  // Lifetime progression still counts everything ever earned, including
+  // pre-ledger awards that only ever landed on the passport.
   const progressionXp = Math.max(
     numericValue(passport.xp),
     numericValue(passport.points)

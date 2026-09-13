@@ -102,9 +102,27 @@ export default function Economy() {
     ['maxTransferPoints', 'Maximum peer transfer', 'Maximum points in one transfer.'],
     ['dailyTransferLimitPoints', 'Daily peer transfer limit', 'Atomic per-member daily cap.'],
     ['tradeFeeBasisPoints', 'Commercial fee (basis points)', '500 basis points = 5%.'],
-    ['rewardMultiplierBasisPoints', 'Quest reward multiplier', '10000 basis points = 1× rewards.'],
+    ['rewardMultiplierBasisPoints', 'Quest reward multiplier (basis points)', '10000 basis points = 1× rewards.'],
     ['escrowTimeoutHours', 'Escrow timeout (hours)', 'Unaccepted funded trades refund after this period.'],
   ]
+  // Basis points read like plain multipliers, so a typo silently zeroes every
+  // payout. Show what the entered value actually resolves to.
+  function resolvedValue(key: keyof EconomyForm): { text: string; warn: boolean } | null {
+    const basisPoints = Number(form[key])
+    if (!Number.isFinite(basisPoints)) return null
+    if (key === 'tradeFeeBasisPoints') {
+      return { text: `Resolves to a ${(basisPoints / 100).toFixed(2)}% fee.`, warn: false }
+    }
+    if (key === 'rewardMultiplierBasisPoints') {
+      const multiplier = basisPoints / 10000
+      const sample = Math.floor(50 * multiplier)
+      return {
+        text: `Resolves to ${multiplier}× rewards — a 50 point quest pays ${sample} points.`,
+        warn: sample === 0,
+      }
+    }
+    return null
+  }
 
   return (
     <AdminLayout>
@@ -123,7 +141,7 @@ export default function Economy() {
           </Box>
 
           <Box display="grid" gridTemplateColumns={{ base: '1fr', md: '1fr 1fr' }} gap={{ base: 5, md: 6 }} bg="gray.900" border="1px solid" borderColor="whiteAlpha.100" rounded="2xl" p={{ base: 5, md: 7 }}>
-            {fields.map(([key, label, help]) => <Box as="label" key={key}><Text color="white" fontWeight="medium" mb={2}>{label}</Text><input className="economy-input" type="number" min="0" step="1" value={String(form[key])} onChange={(event) => setForm({ ...form, [key]: event.currentTarget.value })} /><Text color="whiteAlpha.400" fontSize="xs" mt={2}>{help}</Text></Box>)}
+            {fields.map(([key, label, help]) => { const resolved = resolvedValue(key); return <Box as="label" key={key}><Text color="white" fontWeight="medium" mb={2}>{label}</Text><input className="economy-input" type="number" min="0" step="1" value={String(form[key])} onChange={(event) => setForm({ ...form, [key]: event.currentTarget.value })} /><Text color="whiteAlpha.400" fontSize="xs" mt={2}>{help}</Text>{resolved && <Text color={resolved.warn ? 'orange.300' : 'whiteAlpha.600'} fontSize="xs" mt={1} fontWeight={resolved.warn ? 'semibold' : 'normal'}>{resolved.text}</Text>}</Box> })}
           </Box>
 
           <Box as="label" display="block" mt={6}><Text mb={2}>Reason for changing the platform fee (required when the fee changes)</Text><input className="economy-input" value={reason} onChange={(event) => setReason(event.target.value)} minLength={10} maxLength={1000} /><Text mt={2} color="whiteAlpha.500" fontSize="sm">Allowed fee: 0–2,000 basis points. Existing orders retain their original fee. See Store administration for the immutable change history.</Text></Box>

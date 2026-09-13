@@ -81,8 +81,25 @@ export const evaluateQuestActivity = onDocumentCreated(
       .where("eventTypes", "array-contains", activity.type)
       .get();
 
-    await Promise.all(quests.docs.map(async (questDocument) => {
+    // Quests authored before `eventTypes` existed never match the query above,
+    // so a direct submission to one would award nothing. Resolve the target
+    // quest by id and evaluate it alongside the subscribed quests.
+    const questDocuments: FirebaseFirestore.DocumentSnapshot[] = [...quests.docs];
+    const submittedQuestId = activity.type === "quest.submitted" ?
+      String(activity.metadata?.questId || "").trim() : "";
+    if (
+      submittedQuestId &&
+      !questDocuments.some((document) => document.id === submittedQuestId)
+    ) {
+      const submittedQuest = await db.collection("quests")
+        .doc(submittedQuestId)
+        .get();
+      if (submittedQuest.exists) questDocuments.push(submittedQuest);
+    }
+
+    await Promise.all(questDocuments.map(async (questDocument) => {
       const quest = questDocument.data();
+      if (!quest) return;
       if (quest.status !== "active" && quest.isActive !== true) return;
       if (
         activity.type === "quest.submitted" &&
@@ -162,9 +179,19 @@ export const processQuestReward = onDocumentCreated(
     }
     const settings = await getEconomySettings();
     const multiplier = settings.rewardMultiplierBasisPoints / 10000;
-    const points = Math.floor(rewards
+    const configuredPoints = rewards
       .filter((reward) => reward.type === "points")
-      .reduce((sum, reward) => sum + Number(reward.amount || 0), 0) * multiplier);
+      .reduce((sum, reward) => sum + Number(reward.amount || 0), 0);
+    const points = Math.floor(configuredPoints * multiplier);
+    if (configuredPoints > 0 && points === 0) {
+      logger.warn("Quest reward rounded down to zero points", {
+        grantId: event.params.grantId,
+        userId: grant.userId,
+        questId: grant.questId,
+        configuredPoints,
+        rewardMultiplierBasisPoints: settings.rewardMultiplierBasisPoints,
+      });
+    }
     const rewardTransactionId = deterministicId(
       "quest_reward",
       grant.userId,
@@ -185,7 +212,7 @@ export const processQuestReward = onDocumentCreated(
         createdBy: "quest_engine",
         idempotencyKey: event.params.grantId,
         entries: [
-          {accountId: getSystemAccount("rewards", event.params.grantId), bucket: "available", amount: -points},
+          {accountId: getSystemAccount("rewards", rewardTransactionId), bucket: "available", amount: -points},
           {accountId: grant.userId, bucket: "available", amount: points},
         ],
       });
@@ -520,6 +547,12 @@ export const adminBackfillQuestRewards = onCall({
       .filter((reward) => reward.type === "points")
       .reduce((sum, reward) => sum + Number(reward.amount || 0), 0) *
       multiplier);
+    // A grant processed under a bad multiplier credited zero XP to the
+    // passport as well, so repair both in the same transaction.
+    const xp = Math.floor(grantRewards
+      .filter((reward) => reward.type === "xp")
+      .reduce((sum, reward) => sum + Number(reward.amount || 0), 0) *
+      multiplier);
     if (!Number.isSafeInteger(points) || points <= 0) {
       skipped += 1;
       continue;
@@ -558,7 +591,7 @@ export const adminBackfillQuestRewards = onCall({
         idempotencyKey: document.id,
         entries: [
           {
-            accountId: getSystemAccount("rewards", document.id),
+            accountId: getSystemAccount("rewards", transactionId),
             bucket: "available",
             amount: -points,
           },
@@ -573,8 +606,37 @@ export const adminBackfillQuestRewards = onCall({
           questId,
           userId,
           points,
+          xp,
           reason: "Historical quest reward repair",
         },
+        linkedWrites: [
+          {
+            collection: "creativePassports",
+            id: userId,
+            mode: "set",
+            data: {
+              userId,
+              points: admin.firestore.FieldValue.increment(points),
+              ...(xp > 0 ? {
+                xp: admin.firestore.FieldValue.increment(xp),
+              } : {}),
+              updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+            },
+          },
+          ...(typeof grant.completionSourceId === "string" &&
+            grant.completionSourceId &&
+            grant.completionSourceType === "questSubmission" ? [{
+              collection: "questSubmissions",
+              id: grant.completionSourceId,
+              mode: "set" as const,
+              data: {
+                pointsAwarded: points,
+                rewardTransactionId: transactionId,
+                rewardedAt: admin.firestore.FieldValue.serverTimestamp(),
+                updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+              },
+            }] : []),
+        ],
       });
       if (result.duplicate) {
         alreadyRewarded += 1;

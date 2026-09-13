@@ -8,6 +8,7 @@ import {
   type WalletSummary,
   type WalletTransaction,
 } from '../../lib/economy'
+import { useRealtime } from '@/hooks/useFirestore'
 import { useAuth } from './AuthContext'
 
 interface WalletContextValue {
@@ -55,20 +56,55 @@ export function WalletProvider({ children }: { children: ReactNode }) {
     return () => window.clearTimeout(timer)
   }, [refresh])
 
+  // The summary callable is fetched once when the provider mounts, so a
+  // balance that changes afterwards (a reward, a purchase, another device)
+  // would leave the wallet showing a stale figure while the passport, which
+  // subscribes to the same document, shows the current one. Follow the
+  // balance live and pull fresh transactions whenever the ledger advances.
+  const { data: liveBalance } = useRealtime('balances', firebaseUser?.uid, {
+    skip: !firebaseUser?.uid,
+  })
+  const ledgerSequence = liveBalance?.ledgerSequence
+  useEffect(() => {
+    if (ledgerSequence === undefined) return
+    let cancelled = false
+    void getWalletTransactions()
+      .then((next) => { if (!cancelled) setTransactions(next) })
+      .catch(() => { /* the balance is still correct; history retries on refresh */ })
+    return () => { cancelled = true }
+  }, [ledgerSequence])
+
   const transfer = useCallback(async (recipientId: string, amount: number) => {
     const idempotencyKey = crypto.randomUUID()
     await sendPoints({ recipientId, amount, idempotencyKey })
     await refresh()
   }, [refresh])
 
+  const liveSummary = useMemo<WalletSummary | null>(() => {
+    if (!summary) return null
+    if (!liveBalance) return summary
+    return {
+      ...summary,
+      balance: {
+        ...summary.balance,
+        walletId: liveBalance.walletId ?? summary.balance.walletId,
+        available: liveBalance.available,
+        locked: liveBalance.locked,
+        pending: liveBalance.pending,
+        total: liveBalance.total,
+        ledgerSequence: liveBalance.ledgerSequence,
+      },
+    }
+  }, [summary, liveBalance])
+
   const value = useMemo(() => ({
-    summary,
+    summary: liveSummary,
     transactions,
     loading,
     error,
     refresh,
     transfer,
-  }), [summary, transactions, loading, error, refresh, transfer])
+  }), [liveSummary, transactions, loading, error, refresh, transfer])
 
   return <WalletContext.Provider value={value}>{children}</WalletContext.Provider>
 }
