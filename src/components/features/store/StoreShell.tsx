@@ -5,12 +5,12 @@ import { Header } from '@/components/layout/Header'
 import { Footer } from '@/components/layout/Footer'
 import './store.css'
 
-export function StoreShell({ title, description, children }: { title: string; description?: string; children: ReactNode }) {
+export function StoreShell({ title, description, children }: { title?: string; description?: string; children: ReactNode }) {
   const { pathname } = useLocation()
   useEffect(() => { window.scrollTo({ top: 0, behavior: 'instant' }) }, [pathname])
-  return <Box minH="100vh" bg="gray.950" color="white"><Header /><Container maxW="1280px" w="full" mx="auto" px={{ base: 5, md: 8 }} pt={{ base: 28, md: 36 }} pb={32} className="store-ui">
-    <Flex as="nav" aria-label="Store" gap={5} wrap="wrap" mb={10} color="whiteAlpha.700" fontSize="sm"><Link to="/store">Store</Link><Link to="/store/purchases">My purchases</Link><Link to="/store/library">Download library</Link><Link to="/store/manage">Manage Shop</Link></Flex>
-    <Heading as="h1" fontSize={{ base: '3xl', md: '5xl' }} letterSpacing="tight" mb={3}>{title}</Heading>
+  return <Box minH="100vh" bg="gray.950" color="white"><Header /><Container maxW="1280px" w="full" mx="auto" px={{ base: 5, md: 8 }} pt={{ base: 20, md: 26 }} pb={20} className="store-ui">
+    <Flex as="nav" aria-label="Store" gap={5} wrap="wrap" mb={6} color="whiteAlpha.700" fontSize="sm"><Link to="/store">Store</Link><Link to="/store/purchases">My purchases</Link><Link to="/store/library">Download library</Link></Flex>
+    {title && <Heading as="h1" fontSize={{ base: '3xl', md: '5xl' }} letterSpacing="tight" mb={3}>{title}</Heading>}
     {description && <Text color="whiteAlpha.600" maxW="3xl" mb={9}>{description}</Text>}{children}
   </Container><Footer /></Box>
 }

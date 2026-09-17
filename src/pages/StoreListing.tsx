@@ -6,7 +6,52 @@ import { useStoreQuery } from '@/hooks/useStoreQuery'
 import { StoreLoading, StoreNotice, StoreShell } from '@/components/features/store/StoreShell'
 import { StoreCatalog } from '@/components/features/store/StoreCatalog'
 import { BriefFields } from '@/components/features/store/BriefFields'
-import { storeAmount, storeCall, storeKey, storeLabels, type CheckoutInput, type PaymentRail, type PriceSnapshot, type StoreConfig, type StoreListing as Listing } from '../../lib/store'
+import { STORE_SHOP_NAME, storeAmount, storeCall, storeKey, storeLabels, type CheckoutInput, type PaymentRail, type PriceSnapshot, type StoreConfig, type StoreListing as Listing } from '../../lib/store'
+
+function Gallery({ listing }: { listing: Listing }) {
+  const views = [listing.coverImage, ...listing.images].filter((image, index, all) => image && all.indexOf(image) === index)
+  const [active, setActive] = useState(listing.coverImage)
+  const current = views.includes(active) ? active : views[0]
+  return <Box>
+    {/* Every view stays mounted so selecting one is a style change, not a fresh
+        fetch and decode of a full-size image. The active view sits in normal
+        flow and sets the frame height; the rest are stacked behind it. */}
+    <Box position="relative" bg="gray.900" rounded="xl" overflow="hidden">
+      {views.map((image) => <Image
+        key={image}
+        src={image}
+        alt={image === current ? listing.title : ''}
+        aria-hidden={image === current ? undefined : true}
+        position={image === current ? 'static' : 'absolute'}
+        inset={image === current ? undefined : 0}
+        opacity={image === current ? 1 : 0}
+        pointerEvents={image === current ? undefined : 'none'}
+        w="full"
+        maxH="650px"
+        objectFit="contain"
+        transition="opacity 0.2s ease"
+      />)}
+    </Box>
+    {views.length > 1 && <Flex gap={3} mt={4} wrap="wrap" role="group" aria-label={`${listing.title} views`}>{views.map((image, index) => <Box
+      key={image}
+      as="button"
+      onClick={() => setActive(image)}
+      aria-label={`Show view ${index + 1} of ${views.length}`}
+      aria-current={image === current ? 'true' : undefined}
+      p={0}
+      lineHeight={0}
+      rounded="lg"
+      overflow="hidden"
+      cursor="pointer"
+      border="2px solid"
+      borderColor={image === current ? 'brand.500' : 'transparent'}
+      opacity={image === current ? 1 : 0.65}
+      transition="opacity 0.2s ease, border-color 0.2s ease"
+      _hover={{ opacity: 1 }}
+      _focusVisible={{ outline: '2px solid', outlineColor: 'brand.500', outlineOffset: '2px' }}
+    ><Image src={image} alt="" boxSize="100px" objectFit="cover" /></Box>)}</Flex>}
+  </Box>
+}
 
 function Checkout({ listing }: { listing: Listing }) {
   const { firebaseUser } = useAuth()
@@ -52,12 +97,12 @@ export default function StoreListing() {
   const { listingId = '' } = useParams()
   const { data, loading, error } = useStoreQuery<{ listing: Listing | null; unavailable?: string }>('getStoreListing', { listingId })
   const listing = data?.listing
-  return <StoreShell title={listing?.title || 'Artist release'} description={listing ? `${storeLabels[listing.productType]} · by ${listing.sellerName}` : undefined}>
+  return <StoreShell title={listing?.title || 'Artist release'} description={listing ? `${storeLabels[listing.productType]} · by ${STORE_SHOP_NAME}` : undefined}>
     {loading && <StoreLoading />}{error && <StoreNotice error>{error}</StoreNotice>}{data && !listing && <StoreNotice>{data.unavailable || 'Release unavailable.'}</StoreNotice>}
-    {listing && <><Grid templateColumns={{ base: '1fr', lg: 'minmax(0,1.35fr) minmax(0,1fr)' }} gap={{ base: 7, lg: 12 }} alignItems="start"><Box><Image src={listing.coverImage} alt={listing.title} w="full" maxH="650px" objectFit="contain" bg="gray.900" rounded="xl" /><Flex gap={3} mt={4} wrap="wrap">{listing.images.map((image) => <a key={image} href={image} target="_blank" rel="noreferrer"><Image src={image} alt={`${listing.title} additional view`} boxSize="100px" objectFit="cover" rounded="lg" /></a>)}</Flex>
-      <Flex align="center" gap={3} my={7}>{listing.sellerPhotoURL && <Image src={listing.sellerPhotoURL} alt="" boxSize="44px" rounded="full" />}<Link to={`/members/${listing.sellerId}`}>{listing.sellerName} · View artist</Link></Flex><Text whiteSpace="pre-wrap" color="whiteAlpha.800" lineHeight="tall">{listing.description}</Text>
+    {listing && <><Grid templateColumns={{ base: '1fr', lg: 'minmax(0,1.35fr) minmax(0,1fr)' }} gap={{ base: 7, lg: 12 }} alignItems="start"><Box><Gallery key={listing.id} listing={listing} />
+      <Flex align="center" gap={3} my={7}><Text color="whiteAlpha.700">By {STORE_SHOP_NAME}</Text></Flex><Text whiteSpace="pre-wrap" color="whiteAlpha.800" lineHeight="tall">{listing.description}</Text>
       <Box mt={8}><Heading as="h2" size="lg" mb={3}>Included in this release</Heading>{listing.files.map((file, i) => <Text key={i} color="whiteAlpha.600">{file.name} · {Math.ceil(file.size / 1024)} KB</Text>)}{listing.productType === 'bespoke_request' && <Text color="whiteAlpha.600">Estimated delivery: {listing.fulfilment.estimatedDays} days · {listing.fulfilment.revisionRounds} revision rounds. The artist has 72 hours to accept your funded brief.</Text>}{listing.productType === 'physical_original' && <Text color="whiteAlpha.600">{listing.fulfilment.dimensions} · {listing.fulfilment.materials} · {listing.fulfilment.framed ? 'Framed' : 'Unframed'} · {listing.fulfilment.condition}. Preparation: {listing.fulfilment.estimatedDays} days.</Text>}{listing.productType === 'gated_collection' && <Text color="whiteAlpha.600">One purchase unlocks this collection and its published updates while it remains available.</Text>}</Box>
       <Box mt={8}><Heading as="h2" size="lg" mb={3}>{listing.licence.kind === 'personal' ? 'Personal' : 'Commercial'} licence</Heading><Text color="whiteAlpha.600">{listing.licence.text}</Text></Box>
-    </Box><Checkout key={`${listing.id}:${listing.version}`} listing={listing} /></Grid><Box mt={16}><Heading as="h2" size="xl" mb={6}>More from {listing.sellerName}</Heading><StoreCatalog sellerId={listing.sellerId} /></Box></>}
+    </Box><Checkout key={`${listing.id}:${listing.version}`} listing={listing} /></Grid><Box mt={16}><Heading as="h2" size="xl" mb={6}>More from {STORE_SHOP_NAME}</Heading><StoreCatalog sellerId={listing.sellerId} /></Box></>}
   </StoreShell>
 }

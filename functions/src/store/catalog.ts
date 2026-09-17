@@ -32,11 +32,14 @@ function strings(value: unknown, max = 20): string[] {
   return value.map((item) => requireString(item, "Item", {max: 100}));
 }
 export const ALLOWED_ASSET_TYPES = ["image/jpeg", "image/png", "image/webp", "application/pdf", "application/zip", "application/x-zip-compressed", "video/mp4", "audio/mpeg", "application/octet-stream"];
-export async function verifyAssets(value: unknown, ownerId: string): Promise<StoreAsset[]> {
+export async function verifyAssets(value: unknown, ownerId: string | null): Promise<StoreAsset[]> {
   if (!Array.isArray(value) || value.length > 20) throw new HttpsError("invalid-argument", "Choose up to 20 files.");
   return Promise.all(value.map(async (item) => {
     const path = requireString(item?.path, "Asset path", {max: 500});
-    if (!path.startsWith(`store-private/${ownerId}/`) || path.includes("..")) throw new HttpsError("permission-denied", "Asset ownership is invalid.");
+    // A null ownerId means any administrator upload is acceptable, so that one
+    // administrator can edit a house listing another one created.
+    const owned = ownerId === null ? /^store-private\/[A-Za-z0-9_-]+\//.test(path) : path.startsWith(`store-private/${ownerId}/`);
+    if (!owned || path.includes("..")) throw new HttpsError("permission-denied", "Asset ownership is invalid.");
     const [metadata] = await admin.storage().bucket().file(path).getMetadata();
     const contentType = String(metadata.contentType || "");
     if (!ALLOWED_ASSET_TYPES.includes(contentType) || metadata.metadata?.firebaseStorageDownloadTokens) throw new HttpsError("invalid-argument", "Unsupported or publicly tokenized file.");
@@ -59,11 +62,32 @@ export async function uploadAccess(actorId: string, input: Record<string, unknow
   return {path, uploadUrl, headers, expiresAt};
 }
 
+export const HOUSE_SELLER_ID = "clubbzr_house";
+const HOUSE_SHOP_NAME = "Club BZR";
+/**
+ * Club BZR posts every Store release from one shared house shop, so the
+ * catalogue shows a single consistent seller no matter which administrator
+ * created the listing. The backing records are provisioned on first save.
+ */
+function ensureHouseShop(
+  t: FirebaseFirestore.Transaction,
+  user: FirebaseFirestore.DocumentSnapshot,
+  profile: FirebaseFirestore.DocumentSnapshot
+) {
+  if (!user.exists) {
+    t.set(user.ref, {displayName: HOUSE_SHOP_NAME, email: null, photoURL: "", role: "member", isActive: true, accountStatus: "active", systemAccount: true, createdAt: now(), updatedAt: now()});
+  }
+  if (!profile.exists) {
+    t.set(profile.ref, {sellerId: HOUSE_SELLER_ID, displayName: HOUSE_SHOP_NAME, photoURL: "", description: "Official releases from Club BZR.", available: true, verified: true, createdAt: now(), updatedAt: now()});
+  }
+  return {displayName: String(profile.data()?.displayName || HOUSE_SHOP_NAME), photoURL: String(profile.data()?.photoURL || "")};
+}
+
 export async function saveListing(actor: AuthenticatedActor, input: Record<string, unknown>) {
   const config = await settings();
   requireCapability(config, String(input.productType));
   const listingId = input.id ? identifier(input.id) : randomUUID();
-  const files = await verifyAssets(input.assets || [], actor.uid);
+  const files = await verifyAssets(input.assets || [], null);
   const postsInput = input.collectionPosts || [];
   if (!Array.isArray(postsInput) || postsInput.length > 30) throw new HttpsError("invalid-argument", "Use up to 30 collection posts.");
   const posts = postsInput.map((post) => ({id: identifier(post.id), title: requireString(post.title, "Collection post title", {max: 200}), body: requireString(post.body, "Collection post", {max: 12000})}));
@@ -111,19 +135,20 @@ export async function saveListing(actor: AuthenticatedActor, input: Record<strin
     fulfilment, promoteOnPublish: input.promoteOnPublish === true,
   };
   return db.runTransaction(async (t) => {
-    const [old, profile, user] = await t.getAll(ref("storeListings", listingId), ref("storeSellerProfiles", actor.uid), ref("users", actor.uid));
-    if (!active(user.data()) || !profile.exists) throw new HttpsError("failed-precondition", "Set up your shop first.");
-    if (old.exists && old.data()?.sellerId !== actor.uid) throw new HttpsError("permission-denied", "Only the seller can edit this listing.");
+    const [old, profile, houseUser, actingUser] = await t.getAll(ref("storeListings", listingId), ref("storeSellerProfiles", HOUSE_SELLER_ID), ref("users", HOUSE_SELLER_ID), ref("users", actor.uid));
+    if (!active(actingUser.data())) throw new HttpsError("failed-precondition", "This account is not active.");
+    const house = ensureHouseShop(t, houseUser, profile);
+    if (old.exists && old.data()?.sellerId !== HOUSE_SELLER_ID) throw new HttpsError("permission-denied", "This listing belongs to another shop.");
     if (old.exists && input.version !== old.data()?.version) throw new HttpsError("aborted", "This listing changed. Reload before saving.");
     if (old.exists && ["published", "pending_review", "archived"].includes(old.data()?.status)) throw new HttpsError("failed-precondition", "Pause the listing before editing. Archived listings cannot be edited.");
     if (old.exists && (old.data()?.reserved > 0 || old.data()?.sold > 0) && (old.data()?.productType !== kind || (old.data()?.inventory === null) !== (listingData.inventory === null))) throw new HttpsError("failed-precondition", "Product type and inventory mode cannot change after orders exist.");
     if (fulfilment.oneOfOne && Number(listingData.inventory || 0) + Number(old.data()?.reserved || 0) + Number(old.data()?.sold || 0) > 1) throw new HttpsError("invalid-argument", "A one-of-one artwork cannot have more than one available, reserved or sold item.");
     const version = Number(old.data()?.version || 0) + 1;
-    const listing = {...listingData, sellerId: actor.uid, sellerName: String(profile.data()?.displayName), sellerPhotoURL: String(profile.data()?.photoURL || ""),
+    const listing = {...listingData, sellerId: HOUSE_SELLER_ID, sellerName: house.displayName, sellerPhotoURL: house.photoURL,
       status: "draft", featured: false, publishedVersion: old.data()?.publishedVersion || null, version, reserved: old.data()?.reserved || 0, sold: old.data()?.sold || 0,
       createdAt: old.data()?.createdAt || now(), updatedAt: now(), publishedAt: old.data()?.publishedAt || null};
     t.set(ref("storeListings", listingId), {...listing, discoveryKeys: discoveryKeys({...listing, id: listingId} as unknown as StoreListing)});
-    t.create(ref("storeListingAssets", `${listingId}_v${version}`), {sellerId: actor.uid, listingId, version, files, posts: kind === "gated_collection" ? posts : [], createdAt: now()});
+    t.create(ref("storeListingAssets", `${listingId}_v${version}`), {sellerId: HOUSE_SELLER_ID, listingId, version, files, posts: kind === "gated_collection" ? posts : [], createdAt: now()});
     return {listingId, version};
   });
 }
@@ -137,11 +162,12 @@ export async function moderateListing(actor: AuthenticatedActor, input: Record<s
     const listing = snapshot.data() as StoreListing;
     const [seller, assets] = await t.getAll(ref("users", listing.sellerId), ref("storeListingAssets", `${id}_v${listing.version}`));
     if (!actor.admin && actor.uid !== listing.sellerId) throw new HttpsError("permission-denied", "Seller or admin access required.");
-    if (!active(seller.data()) && ["submit", "approve"].includes(action)) throw new HttpsError("permission-denied", "Seller is unavailable.");
+    if (!active(seller.data()) && ["submit", "approve", "publish"].includes(action)) throw new HttpsError("permission-denied", "Seller is unavailable.");
     const rules: Record<string, {from: string[]; to: string; admin?: boolean}> = {
       feature: {from: ["published"], to: "published", admin: true},
       unfeature: {from: ["published"], to: "published", admin: true},
       submit: {from: ["draft", "paused", "sold_out"], to: "pending_review"},
+      publish: {from: ["draft", "paused", "sold_out", "pending_review"], to: "published", admin: true},
       approve: {from: ["pending_review"], to: "published", admin: true},
       reject: {from: ["pending_review"], to: "draft", admin: true},
       pause: {from: ["published"], to: "paused"},
@@ -155,14 +181,15 @@ export async function moderateListing(actor: AuthenticatedActor, input: Record<s
     const reason = needsModerationReason || (actor.admin && input.reason !== undefined) ?
       requireString(input.reason, "Moderation reason", {min: 10, max: 1000}) :
       action === "submit" ? "Seller submitted listing for review" : "Seller updated availability";
-    if (["submit", "approve"].includes(action)) {
+    if (["submit", "approve", "publish"].includes(action)) {
       requireCapability({...STORE_DEFAULTS, ...configSnap.data()}, listing.productType);
       if (["digital_release", "gated_collection"].includes(listing.productType) && !autoDeliveryReady(listing.productType, assets.data())) throw new HttpsError("failed-precondition", "Upload the protected release files first.");
       if (listing.inventory !== null && listing.inventory < 1) throw new HttpsError("failed-precondition", "Add inventory before publication.");
     }
     const promotionId = deterministicId("store_promotion", id, String(listing.version));
-    const promotion = action === "approve" && listing.promoteOnPublish ? await t.get(ref("communityPosts", promotionId)) : null;
-    t.update(snapshot.ref, {status: rule.to, ...(["feature", "unfeature"].includes(action) ? {featured: action === "feature"} : {}), moderation: {actorId: actor.uid, reason, action, at: now()}, updatedAt: now(), ...(action === "approve" ? {publishedAt: now(), publishedVersion: listing.version} : {})});
+    const published = ["approve", "publish"].includes(action);
+    const promotion = published && listing.promoteOnPublish ? await t.get(ref("communityPosts", promotionId)) : null;
+    t.update(snapshot.ref, {status: rule.to, ...(["feature", "unfeature"].includes(action) ? {featured: action === "feature"} : {}), moderation: {actorId: actor.uid, reason, action, at: now()}, updatedAt: now(), ...(published ? {publishedAt: now(), publishedVersion: listing.version} : {})});
     if (promotion && !promotion.exists) {
       t.create(promotion.ref, {
         userId: listing.sellerId, userName: listing.sellerName, userPhotoURL: listing.sellerPhotoURL,

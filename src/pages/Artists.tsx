@@ -49,55 +49,7 @@ function ArtworkCard({ artwork, index }: { artwork: DiscoveryArtwork; index: num
         role="group"
         cursor="pointer"
       >
-        <Box display={{ base: 'block', md: 'none' }} bg="gray.950" borderBottom="1px solid" borderColor="whiteAlpha.100">
-          <HStack gap={3} minW={0} px={4} py={3}>
-            <Box
-              w={10}
-              h={10}
-              borderRadius="lg"
-              bg="brand.500"
-              overflow="hidden"
-              display="flex"
-              alignItems="center"
-              justifyContent="center"
-              flexShrink={0}
-            >
-              {artwork.credit.avatarUrl ? (
-                <Image src={artwork.credit.avatarUrl} alt={artwork.credit.name} w="full" h="full" objectFit="cover" />
-              ) : (
-                <Text color="white" fontSize="sm" fontWeight="bold">
-                  {artwork.credit.name.charAt(0)}
-                </Text>
-              )}
-            </Box>
-            <Box minW={0} flex={1}>
-              <Heading as="h3" color="white" fontSize="md" fontFamily="heading" lineClamp={1}>
-                {artwork.title}
-              </Heading>
-              <Text color="whiteAlpha.600" fontSize="sm" lineClamp={1}>
-                By {artwork.credit.name}
-              </Text>
-            </Box>
-            <Badge
-              bg="whiteAlpha.100"
-              color="whiteAlpha.800"
-              borderRadius="full"
-              px={2.5}
-              py={1}
-              fontSize="2xs"
-              textTransform="capitalize"
-              flexShrink={0}
-            >
-              {formatMedium(artwork.medium)}
-            </Badge>
-          </HStack>
-          <Box position="relative" aspectRatio="5 / 4" bg="gray.900" overflow="hidden">
-            <Image src={artwork.imageUrl} alt={artwork.title} w="full" h="full" objectFit="cover" />
-          </Box>
-        </Box>
-
         <Box
-          display={{ base: 'none', md: 'block' }}
           position="relative"
           aspectRatio="4 / 5"
           bg="gray.900"
@@ -124,31 +76,31 @@ function ArtworkCard({ artwork, index }: { artwork: DiscoveryArtwork; index: num
           />
           <Badge
             position="absolute"
-            top={{ base: 2.5, md: 3 }}
-            left={{ base: 2.5, md: 3 }}
+            top={{ base: 2, md: 3 }}
+            left={{ base: 2, md: 3 }}
             bg="rgba(8, 8, 8, 0.68)"
             backdropFilter="blur(8px)"
             color="whiteAlpha.900"
             border="1px solid"
             borderColor="whiteAlpha.200"
             borderRadius="full"
-            px={2.5}
-            py={1}
-            fontSize="xs"
+            px={{ base: 2, md: 2.5 }}
+            py={{ base: 0.5, md: 1 }}
+            fontSize={{ base: '2xs', md: 'xs' }}
             fontWeight="medium"
             textTransform="capitalize"
           >
             {formatMedium(artwork.medium)}
           </Badge>
 
-          <Box position="absolute" left={0} right={0} bottom={0} p={{ base: 3, md: 4 }}>
-            <Heading as="h3" color="white" fontSize={{ base: 'sm', md: 'md' }} fontFamily="heading" lineClamp={1} mb={1}>
+          <Box position="absolute" left={0} right={0} bottom={0} p={{ base: 2.5, md: 4 }}>
+            <Heading as="h3" color="white" fontSize={{ base: 'xs', md: 'md' }} fontFamily="heading" lineClamp={1} mb={1}>
               {artwork.title}
             </Heading>
-            <HStack gap={2} minW={0}>
+            <HStack gap={{ base: 1.5, md: 2 }} minW={0}>
               <Box
-                w={6}
-                h={6}
+                w={{ base: 5, md: 6 }}
+                h={{ base: 5, md: 6 }}
                 borderRadius="full"
                 bg="brand.500"
                 overflow="hidden"
@@ -160,12 +112,12 @@ function ArtworkCard({ artwork, index }: { artwork: DiscoveryArtwork; index: num
                 {artwork.credit.avatarUrl ? (
                   <Image src={artwork.credit.avatarUrl} alt={artwork.credit.name} w="full" h="full" objectFit="cover" />
                 ) : (
-                  <Text color="white" fontSize="xs" fontWeight="bold">
+                  <Text color="white" fontSize="2xs" fontWeight="bold">
                     {artwork.credit.name.charAt(0)}
                   </Text>
                 )}
               </Box>
-              <Text color="whiteAlpha.800" fontSize="xs" fontWeight="medium" lineClamp={1}>
+              <Text color="whiteAlpha.800" fontSize={{ base: '2xs', md: 'xs' }} fontWeight="medium" lineClamp={1}>
                 {artwork.credit.name}
               </Text>
             </HStack>
@@ -356,7 +308,7 @@ export default function Artists() {
             animate={{ opacity: 1, y: 0 }}
             transition={{ duration: 0.35 }}
             display={{ base: 'block', md: 'none' }}
-            mx={4}
+            mx={3}
             mb={4}
           >
             <HStack
@@ -583,9 +535,9 @@ export default function Artists() {
             </VStack>
           </MotionBox>
 
-          <Box mb={16}>
+          <Box mb={16} px={{ base: 3, md: 0 }}>
             {visibleArtworks.length > 0 ? (
-              <SimpleGrid columns={{ base: 1, md: 3, lg: 4, xl: 5 }} gap={{ base: 0, md: 4 }}>
+              <SimpleGrid columns={{ base: 2, md: 3, lg: 4, xl: 5 }} gap={{ base: 2.5, md: 4 }}>
                 {visibleArtworks.map((artwork, index) => (
                   <ArtworkCard key={artwork.id} artwork={artwork} index={index} />
                 ))}

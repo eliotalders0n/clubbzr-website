@@ -1,6 +1,7 @@
 import { useState, type FormEvent } from 'react'
-import { Link, useNavigate, useParams } from 'react-router-dom'
+import { Link, useLocation, useNavigate, useParams } from 'react-router-dom'
 import { Heading, Image } from '@chakra-ui/react'
+import { AdminLayout } from '@/components/layout/AdminLayout'
 import { useAuth } from '@/contexts/AuthContext'
 import { useStoreQuery } from '@/hooks/useStoreQuery'
 import { StoreLoading, StoreNotice, StoreShell } from '@/components/features/store/StoreShell'
@@ -8,7 +9,7 @@ import { StoreFiles } from '@/components/features/store/StoreFiles'
 import { parseStorePrice, storeAmount, storeCall, storeKey, storeLabels, uploadStoreCover, type ProductType, type StoreAsset, type StoreConfig, type StoreListing } from '../../lib/store'
 
 const defaultFulfilment: StoreListing['fulfilment'] = { estimatedDays: 7, revisionRounds: 1, questions: [], addOns: [], dimensions: '', weightGrams: null, materials: '', framed: false, condition: '', oneOfOne: false, deliveryOptions: [], pickup: false }
-function EditorForm({ listing, assets, config, uid, collectionPosts }: { listing?: StoreListing; assets: StoreAsset[]; config: StoreConfig; uid: string; collectionPosts: Array<{ id: string; title: string; body: string }> }) {
+function EditorForm({ listing, assets, config, uid, collectionPosts, backHref }: { listing?: StoreListing; assets: StoreAsset[]; config: StoreConfig; uid: string; collectionPosts: Array<{ id: string; title: string; body: string }>; backHref: string }) {
   const navigate = useNavigate()
   const [kind, setKind] = useState<ProductType>(listing?.productType || 'digital_release')
   const [title, setTitle] = useState(listing?.title || '')
@@ -35,7 +36,7 @@ function EditorForm({ listing, assets, config, uid, collectionPosts }: { listing
     event.preventDefault(); setBusy(true); setError('')
     try {
       const result = await storeCall<{ listingId: string }>('saveStoreListing', { id: savedId, version: listing?.version, productType: kind, title, description, coverImage: cover, images, tags: tags.split(',').map((s) => s.trim()).filter(Boolean), priceNgwee: parseStorePrice(price), pricePoints: usePoints ? Number(points) : null, acceptedPaymentMethods: [...(usePoints ? ['POINT'] : []), ...(useZmw ? ['ZMW'] : [])], inventory: inventory === '' ? null : Number(inventory), licenceKind: licence, assets: files, collectionPosts: posts, downloadLimit: limit === '' ? null : Number(limit), fulfilment, promoteOnPublish: promote })
-      navigate(`/store/manage?listing=${result.listingId}`)
+      navigate(`${backHref}${backHref.includes('?') ? '&' : '?'}listing=${result.listingId}`)
     } catch (cause) { setError(cause instanceof Error ? cause.message : 'Listing could not be saved.') }
     finally { setBusy(false) }
   }
@@ -56,14 +57,21 @@ function EditorForm({ listing, assets, config, uid, collectionPosts }: { listing
       {kind === 'bespoke_request' && <fieldset className="store-stack"><legend>Optional add-ons</legend>{fulfilment.addOns.map((a, i) => <div className="store-grid" key={a.id}><label>Add-on title<input required value={a.title} onChange={(e) => setFulfilment({ ...fulfilment, addOns: fulfilment.addOns.map((item, index) => i === index ? { ...item, title: e.target.value } : item) })} /></label>{(['priceNgwee', 'pricePoints'] as const).map((field) => <label key={field}>{field === 'priceNgwee' ? 'Additional price (ngwee)' : 'Additional Points'}<input type="number" min="0" value={a[field]} onChange={(e) => setFulfilment({ ...fulfilment, addOns: updateAddOnPrice(fulfilment.addOns, i, field, Number(e.target.value)) })} /></label>)}<button type="button" className="store-button" onClick={() => setFulfilment({ ...fulfilment, addOns: fulfilment.addOns.filter((_, index) => index !== i) })}>Remove add-on</button></div>)}<button type="button" className="store-button" onClick={() => setFulfilment({ ...fulfilment, addOns: [...fulfilment.addOns, { id: storeKey(), title: '', priceNgwee: 0, pricePoints: 0 }] })}>Add optional extra</button></fieldset>}
     </div>}
     <label className="store-inline"><input type="checkbox" checked={promote} onChange={(e) => setPromote(e.target.checked)} />Share a Community Wall post when this version is approved.</label>
-    {error && <StoreNotice error>{error}</StoreNotice>}<div className="store-actions"><button className="store-button primary" type="submit" disabled={busy || !cover}>{busy ? 'Saving…' : 'Save draft'}</button><Link className="store-button" to="/store/manage">Back to shop</Link></div>
+    {error && <StoreNotice error>{error}</StoreNotice>}<div className="store-actions"><button className="store-button primary" type="submit" disabled={busy || !cover}>{busy ? 'Saving…' : 'Save draft'}</button><Link className="store-button" to={backHref}>Back to listings</Link></div>
   </form>
 }
 function updateAddOnPrice(items: StoreListing['fulfilment']['addOns'], index: number, field: 'priceNgwee' | 'pricePoints', value: number) { return items.map((item, i) => i === index ? { ...item, [field]: value } : item) }
 export default function StoreEditor() {
   const { listingId } = useParams()
+  const { pathname } = useLocation()
   const { firebaseUser, initialized } = useAuth()
   const config = useStoreQuery<StoreConfig>('getStoreConfig')
   const listing = useStoreQuery<{ listing: StoreListing; assets: StoreAsset[]; collectionPosts: Array<{ id: string; title: string; body: string }> }>('getStoreListing', { listingId }, !!listingId && !!firebaseUser)
-  return <StoreShell title={listingId ? 'Edit your release.' : 'Create a release.'} description="Make something worth keeping. Prepare a draft, then send it to Club BZR for review.">{(!initialized || config.loading || listing.loading) && <StoreLoading />}{(config.error || listing.error) && <StoreNotice error>{config.error || listing.error}</StoreNotice>}{initialized && !firebaseUser ? <StoreNotice><Link to="/auth/login">Sign in to manage your shop.</Link></StoreNotice> : config.data && firebaseUser && (!listingId || listing.data) ? <EditorForm key={listingId || 'new'} uid={firebaseUser.uid} config={config.data} listing={listing.data?.listing} assets={listing.data?.assets || []} collectionPosts={listing.data?.collectionPosts || []} /> : null}</StoreShell>
+  const inAdmin = pathname.startsWith('/admin')
+  const backHref = inAdmin ? '/admin/store?tab=admin_listings' : '/store/manage'
+  const title = listingId ? 'Edit release.' : 'Create a release.'
+  const description = 'Prepare the release, then publish it to the Club BZR Store.'
+  const body = <>{(!initialized || config.loading || listing.loading) && <StoreLoading />}{(config.error || listing.error) && <StoreNotice error>{config.error || listing.error}</StoreNotice>}{initialized && !firebaseUser ? <StoreNotice><Link to="/auth/login">Sign in to manage the Store.</Link></StoreNotice> : config.data && firebaseUser && (!listingId || listing.data) ? <EditorForm key={listingId || 'new'} uid={firebaseUser.uid} config={config.data} listing={listing.data?.listing} assets={listing.data?.assets || []} collectionPosts={listing.data?.collectionPosts || []} backHref={backHref} /> : null}</>
+  if (!inAdmin) return <StoreShell title={title} description={description}>{body}</StoreShell>
+  return <AdminLayout><div className="store-ui" style={{ padding: '32px 24px', color: '#faf9f6' }}><Heading as="h1" size="2xl" mb={3}>{title}</Heading><p className="store-muted">{description}</p><div style={{ marginTop: 28 }}>{body}</div></div></AdminLayout>
 }

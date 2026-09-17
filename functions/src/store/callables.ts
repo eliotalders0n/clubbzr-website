@@ -27,9 +27,9 @@ export const getStoreConfig = onCall(options, async () => {
 });
 export const browseStore = onCall(options, (request) => browse(request.data || {}));
 export const getStoreListing = onCall(options, async (request) => listingDetail(identifier(request.data?.listingId), request.auth ? await requireActiveUser(request) : undefined));
-export const saveStoreListing = onCall(options, async (request) => saveListing(await requireActiveUser(request), request.data || {}));
-export const moderateStoreListing = onCall(options, async (request) => moderateListing(await requireActiveUser(request), request.data || {}));
-export const createStoreUpload = onCall(options, async (request) => uploadAccess((await requireActiveUser(request)).uid, request.data || {}));
+export const saveStoreListing = onCall(options, async (request) => saveListing(await requireAdmin(request), request.data || {}));
+export const moderateStoreListing = onCall(options, async (request) => moderateListing(await requireAdmin(request), request.data || {}));
+export const createStoreUpload = onCall(options, async (request) => uploadAccess((await (request.data?.orderId ? requireActiveUser(request) : requireAdmin(request))).uid, request.data || {}));
 export const quoteStoreOrder = onCall(options, async (request) => {
   await requireActiveUser(request);
   const input = request.data as CheckoutInput;
@@ -162,7 +162,7 @@ export const adminStoreSummary = onCall(options, async (request) => {
 });
 
 export const saveStoreSeller = onCall(options, async (request) => {
-  const actor = await requireActiveUser(request);
+  const actor = await requireAdmin(request);
   requireCapability(await settings());
   const data = request.data || {};
   return db.runTransaction(async (t) => {
@@ -223,7 +223,7 @@ export const adminUpdateStoreSettings = onCall(options, async (request) => {
   });
   return {success: true};
 });
-export const requestStorePayout = onCall(paymentOptions, async (request) => requestPayout(await requireActiveUser(request), request.data || {}));
+export const requestStorePayout = onCall(paymentOptions, async (request) => requestPayout(await requireAdmin(request), request.data || {}));
 export const checkStorePayment = onCall(paymentOptions, async (request) => {
   const actor = await requireActiveUser(request);
   const id = identifier(request.data?.orderId);

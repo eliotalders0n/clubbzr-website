@@ -9,6 +9,10 @@ export type StoreCursor = { id: string; value: number } | null
 export const storeCall = <T>(name: string, input: unknown = {}) =>
   httpsCallable<unknown, T>(functions, name)(input).then((result) => result.data)
 export const storeKey = () => crypto.randomUUID()
+// Every Store release is published by Club BZR, so listings credit the house
+// shop rather than the administrator who created them.
+export const STORE_SHOP_NAME = 'Club BZR'
+
 export const storeLabels = {
   digital_release: 'Digital', bespoke_request: 'Bespoke', physical_original: 'Physical', gated_collection: 'Collections',
 }

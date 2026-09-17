@@ -36,7 +36,6 @@ const Store = lazy(() => import('@/pages/Store'))
 const StoreListing = lazy(() => import('@/pages/StoreListing'))
 const StorePurchases = lazy(() => import('@/pages/StorePurchases'))
 const StoreOrder = lazy(() => import('@/pages/StoreOrder'))
-const StoreManage = lazy(() => import('@/pages/StoreManage'))
 const StoreEditor = lazy(() => import('@/pages/StoreEditor'))
 const StoreAdmin = lazy(() => import('@/pages/admin/Store'))
 
@@ -111,11 +110,13 @@ function App() {
           <Route path="/store/purchases" element={<StorePurchases />} />
           <Route path="/store/library" element={<StorePurchases />} />
           <Route path="/store/orders/:orderId" element={<StoreOrder />} />
-          <Route path="/store/manage" element={<StoreManage />} />
-          <Route path="/store/manage/new" element={<StoreEditor />} />
-          <Route path="/store/manage/:listingId/edit" element={<StoreEditor />} />
+          {/* Store posting moved to the admin console; the seller shop surface is retired for now. */}
+          <Route path="/store/manage/new" element={<AdminRoute><Navigate to="/admin/store/new" replace /></AdminRoute>} />
+          <Route path="/store/manage/*" element={<AdminRoute><Navigate to="/admin/store?tab=admin_listings" replace /></AdminRoute>} />
           <Route path="/store/:listingId" element={<StoreListing />} />
           <Route path="/admin/store" element={<AdminRoute><StoreAdmin /></AdminRoute>} />
+          <Route path="/admin/store/new" element={<AdminRoute><StoreEditor /></AdminRoute>} />
+          <Route path="/admin/store/:listingId/edit" element={<AdminRoute><StoreEditor /></AdminRoute>} />
 
           {/* Quests */}
           <Route path="/quests" element={<Quests />} />
