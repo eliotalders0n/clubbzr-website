@@ -7,7 +7,6 @@ import {
   Container as ChakraContainer,
   Flex,
   Heading,
-  Image,
   Text,
   Button as ChakraButton,
   VStack,
@@ -45,6 +44,7 @@ import type {
   Session,
   SessionRegistration,
 } from '../../lib/schema';
+import { SafeImage } from '@/components/ui/SafeImage'
 
 const numericValue = (value: unknown) => (typeof value === 'number' && Number.isFinite(value) ? value : 0);
 
@@ -136,7 +136,7 @@ const ArtworkStrip: React.FC<ArtworkStripProps> = ({ title, icon, items, isLoadi
               transition="transform 160ms ease, border-color 160ms ease, background 160ms ease"
             >
               <Box aspectRatio={1} bg="gray.800" overflow="hidden">
-                <img
+                <SafeImage
                   src={artwork.imageUrl}
                   alt={artwork.title}
                   loading="lazy"
@@ -805,7 +805,7 @@ const Passport: React.FC = () => {
                 flexShrink={0}
               >
                 {displayUser.avatar ? (
-                  <img src={displayUser.avatar} alt={displayUser.displayName} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                  <SafeImage src={displayUser.avatar} alt={displayUser.displayName} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
                 ) : (
                   <Text color="white" fontSize="3xl" fontWeight="bold">
                     {displayUser.displayName.charAt(0)}
@@ -1094,7 +1094,7 @@ const Passport: React.FC = () => {
                             <Flex gap={4} align="flex-start" direction={{ base: 'column', sm: 'row' }}>
                               {thumbnail && (
                                 <Box w={{ base: 'full', sm: '120px' }} h={{ base: '180px', sm: '120px' }} borderRadius="lg" overflow="hidden" bg="gray.800" flexShrink={0}>
-                                  <Image src={thumbnail} alt="Community post media" w="full" h="full" objectFit="cover" />
+                                  <SafeImage src={thumbnail} alt="Community post media" w="full" h="full" objectFit="cover" />
                                 </Box>
                               )}
                               <Box flex={1} minW={0}>

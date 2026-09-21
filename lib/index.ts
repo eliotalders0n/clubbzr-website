@@ -217,3 +217,12 @@ export type {
   ValidationOptions,
   ValidationResult,
 } from './storage';
+
+// Media URL guards
+export {
+  isPersistentMediaUrl,
+  filterPersistentMediaUrls,
+  assertPersistentMediaUrls,
+  hasRenderableMedia,
+  MediaUrlError,
+} from './media';

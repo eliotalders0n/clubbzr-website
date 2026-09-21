@@ -38,6 +38,7 @@ import eventImg5 from '@/assets/images/events/IMG_9814.jpeg'
 import eventImg6 from '@/assets/images/events/IMG_7447.jpeg'
 import logoWhite from '@/assets/logos/Club BZR logo (WHITE).png'
 import type { Quest, Session } from '../../lib/schema'
+import { SafeImage } from '@/components/ui/SafeImage'
 
 const MotionBox = motion.create(Box)
 const MotionFlex = motion.create(Flex)
@@ -387,7 +388,7 @@ function HeroSection({ nextEvent }: { nextEvent: EventSummary | null }) {
             position="relative"
           >
             <Box position="relative" minH={{ base: '520px', md: '620px' }}>
-              <Image
+              <SafeImage
                 src={featuredEvent.image}
                 alt={featuredEvent.title}
                 position="absolute"
@@ -398,7 +399,7 @@ function HeroSection({ nextEvent }: { nextEvent: EventSummary | null }) {
                 borderRadius="lg"
               />
               <Box position="absolute" inset={0} borderRadius="lg" bg="linear-gradient(180deg, rgba(0,0,0,0.08), rgba(0,0,0,0.78))" />
-              <Image
+              <SafeImage
                 src={eventImg5}
                 alt="Club BZR artwork closeup"
                 position="absolute"
@@ -493,7 +494,7 @@ function PastEventsSection({ events }: { events: EventSummary[] }) {
                   transition="border-color 0.2s"
                 >
                   <Box h={{ base: '260px', md: '320px' }} overflow="hidden">
-                    <Image
+                    <SafeImage
                       src={event.image}
                       alt={event.title}
                       w="full"

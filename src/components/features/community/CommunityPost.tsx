@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { Link } from 'react-router-dom';
 import { motion, AnimatePresence } from 'framer-motion';
@@ -11,6 +11,7 @@ import type { CommunityPost as CommunityPostType, ReactionType, Comment } from '
 import { Timestamp } from 'firebase/firestore';
 import { MarketplaceAttachment } from '../store/MarketplaceAttachment';
 import { ReactionBar } from './ReactionBar';
+import { SafeImage } from '@/components/ui/SafeImage';
 
 const cn = (...inputs: (string | undefined | null | false)[]) => twMerge(clsx(inputs));
 const getMemberHref = (userId: string) => `/members/${userId}`;
@@ -43,6 +44,8 @@ interface CommunityPostProps {
   onShare?: () => void;
   isFollowingAuthor?: boolean;
   onToggleFollow?: () => void | Promise<void>;
+  /** Called when the post's media turns out to be unreachable. */
+  onMediaUnavailable?: (postId: string) => void;
   className?: string;
 }
 
@@ -194,7 +197,7 @@ const CommentAvatar: React.FC<{
 
   if (photoURL) {
     return (
-      <img
+      <SafeImage
         src={photoURL}
         alt={name}
         style={{
@@ -229,7 +232,8 @@ const MediaPreview: React.FC<{
   className?: string;
   controls?: boolean;
   onLoad?: (aspectRatio: number) => void;
-}> = ({ url, mediaType, className, controls = false, onLoad }) => {
+  onUnavailable?: () => void;
+}> = ({ url, mediaType, className, controls = false, onLoad, onUnavailable }) => {
   if (isVideoMedia(mediaType)) {
     return (
       <video
@@ -247,7 +251,7 @@ const MediaPreview: React.FC<{
   }
 
   return (
-    <img
+    <SafeImage
       src={url}
       alt=""
       className={cn('h-full w-full object-cover', className)}
@@ -255,6 +259,7 @@ const MediaPreview: React.FC<{
         const image = event.currentTarget;
         onLoad?.(image.naturalWidth / image.naturalHeight);
       }}
+      onSourcesExhausted={onUnavailable}
     />
   );
 };
@@ -408,7 +413,7 @@ const FullscreenMediaViewer: React.FC<{
             playsInline
           />
         ) : (
-          <img
+          <SafeImage
             src={currentUrl}
             alt=""
             className="h-full w-full select-none object-contain"
@@ -789,8 +794,13 @@ export const CommunityPost: React.FC<CommunityPostProps> = ({
   onShare,
   isFollowingAuthor,
   onToggleFollow,
+  onMediaUnavailable,
   className,
 }) => {
+  const reportMediaUnavailable = useCallback(() => {
+    onMediaUnavailable?.(post.id);
+  }, [onMediaUnavailable, post.id]);
+
   const [showComments, setShowComments] = useState(false);
   const [imageLoaded, setImageLoaded] = useState(false);
   const [singleMediaAspectRatio, setSingleMediaAspectRatio] = useState<number | null>(null);
@@ -1092,6 +1102,7 @@ export const CommunityPost: React.FC<CommunityPostProps> = ({
                       setSingleMediaAspectRatio(aspectRatio);
                       setImageLoaded(true);
                     }}
+                    onUnavailable={reportMediaUnavailable}
                   />
                   <button
                     type="button"
@@ -1117,6 +1128,7 @@ export const CommunityPost: React.FC<CommunityPostProps> = ({
                       setSingleMediaAspectRatio(aspectRatio);
                       setImageLoaded(true);
                     }}
+                    onUnavailable={reportMediaUnavailable}
                   />
                   <span className="absolute right-3 top-3 flex h-9 w-9 items-center justify-center rounded-full border border-white/15 bg-black/55 text-white opacity-0 backdrop-blur-md transition group-hover:opacity-100">
                     <Expand size={17} strokeWidth={2.3} />
@@ -1178,6 +1190,7 @@ export const CommunityPost: React.FC<CommunityPostProps> = ({
                           mediaType={post.mediaType}
                           className="object-contain"
                           controls={isVideoMedia(post.mediaType) && index === safeActiveMediaIndex}
+                          onUnavailable={reportMediaUnavailable}
                         />
                       </div>
                     ))}
@@ -1219,7 +1232,7 @@ export const CommunityPost: React.FC<CommunityPostProps> = ({
                     onClick={() => setLightboxIndex(index)}
                     className="group relative aspect-square cursor-zoom-in overflow-hidden bg-bzr-gray-900"
                   >
-                    <MediaPreview url={url} mediaType={post.mediaType} />
+                    <MediaPreview url={url} mediaType={post.mediaType} onUnavailable={reportMediaUnavailable} />
                     <span className="absolute right-3 top-3 flex h-8 w-8 items-center justify-center rounded-full border border-white/15 bg-black/55 text-white opacity-0 backdrop-blur-md transition group-hover:opacity-100">
                       <Expand size={16} strokeWidth={2.3} />
                     </span>

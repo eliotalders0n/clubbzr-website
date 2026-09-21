@@ -21,7 +21,6 @@ import {
   Grid,
   Heading,
   HStack,
-  Image,
   SimpleGrid,
   Spinner,
   Text,
@@ -50,6 +49,7 @@ import { useDocument } from '@/hooks/useFirestore'
 import galleryRoomImage from '@/assets/images/backgrounds/shot-panoramic-composition-living-room.jpg'
 import { addToArray, incrementField, removeFromArray } from '../../lib/firestore'
 import type { Exhibition as FirebaseExhibition, ExhibitionArtwork } from '../../lib/schema'
+import { SafeImage } from '@/components/ui/SafeImage'
 
 interface Artwork {
   id: string
@@ -386,17 +386,22 @@ function InitialAvatar({ name, src, size = 12 }: { name: string; src?: string; s
       overflow="hidden"
       flexShrink={0}
     >
-      {src ? (
-        <Image src={src} alt={name} w="full" h="full" objectFit="cover" />
-      ) : (
-        <Text color="white" fontWeight="bold">
-          {name
-            .split(' ')
-            .map((part) => part[0])
-            .join('')
-            .slice(0, 2)}
-        </Text>
-      )}
+      <SafeImage
+        src={src}
+        alt={name}
+        w="full"
+        h="full"
+        objectFit="cover"
+        fallback={
+          <Text color="white" fontWeight="bold">
+            {name
+              .split(' ')
+              .map((part) => part[0])
+              .join('')
+              .slice(0, 2)}
+          </Text>
+        }
+      />
     </Flex>
   )
 }
@@ -1250,7 +1255,7 @@ export default function ExhibitionView() {
                 <AspectRatio ratio={{ base: 4 / 3, md: 16 / 10 }}>
                   <Box position="relative" bg="black">
                     {currentArtwork?.image ? (
-                      <Image src={currentArtwork.image} alt={currentArtwork.title} w="full" h="full" objectFit="contain" />
+                      <SafeImage src={currentArtwork.image} alt={currentArtwork.title} w="full" h="full" objectFit="contain" />
                     ) : (
                       <EmptyArtwork />
                     )}
@@ -1345,11 +1350,16 @@ export default function ExhibitionView() {
                         transition="opacity 0.2s, border-color 0.2s"
                         _hover={{ opacity: 1, borderColor: 'brand.500' }}
                       >
-                        {artwork.image ? (
-                          <Image src={artwork.image} alt={artwork.title} w="full" h="full" objectFit="cover" />
-                        ) : (
-                          <EmptyArtwork />
-                        )}
+                        <SafeImage
+                          src={artwork.image}
+                          alt={artwork.title}
+                          w="full"
+                          h="full"
+                          objectFit="cover"
+                          fallback={
+                            <EmptyArtwork />
+                          }
+                        />
                       </Box>
                     )
                   })}

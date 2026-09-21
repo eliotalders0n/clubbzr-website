@@ -29,6 +29,7 @@ import { useCollection, useDocument } from '@/hooks/useFirestore'
 import { resolveProfileIdentity } from '@/lib/profileIdentity'
 import { db, executeTransaction, increment, serverTimestamp } from '../../lib/firestore'
 import type { Artist, ArtMedium, PortfolioItem } from '../../lib/schema'
+import { SafeImage } from '@/components/ui/SafeImage'
 
 const MotionBox = motion.create(Box)
 
@@ -262,17 +263,16 @@ export default function ArtistProfile() {
                   justifyContent="center"
                   overflow="hidden"
                 >
-                  {identity.avatar ? (
-                    <img
-                      src={identity.avatar}
-                      alt={displayName}
-                      style={{ width: '100%', height: '100%', objectFit: 'cover' }}
-                    />
-                  ) : (
-                    <Text color="white" fontSize="3xl" fontWeight="bold">
-                      {displayName.split(' ').map(n => n[0]).join('')}
-                    </Text>
-                  )}
+                  <SafeImage
+                    src={identity.avatar}
+                    alt={displayName}
+                    style={{ width: '100%', height: '100%', objectFit: 'cover' }}
+                    fallback={
+                      <Text color="white" fontSize="3xl" fontWeight="bold">
+                        {displayName.split(' ').map(n => n[0]).join('')}
+                      </Text>
+                    }
+                  />
                 </Box>
 
                 <Heading as="h1" fontSize={{ base: 'xl', md: '2xl' }} color="white" fontFamily="heading" mb={2}>
@@ -451,15 +451,14 @@ export default function ArtistProfile() {
                           justifyContent="center"
                           overflow="hidden"
                         >
-                          {item.thumbnailUrl ? (
-                            <img
-                              src={item.thumbnailUrl}
-                              alt={item.title}
-                              style={{ width: '100%', height: '100%', objectFit: 'cover' }}
-                            />
-                          ) : (
-                            <Text color="whiteAlpha.300">Artwork</Text>
-                          )}
+                          <SafeImage
+                            src={item.thumbnailUrl}
+                            alt={item.title}
+                            style={{ width: '100%', height: '100%', objectFit: 'cover' }}
+                            fallback={
+                              <Text color="whiteAlpha.300">Artwork</Text>
+                            }
+                          />
 
                           <Box
                             position="absolute"

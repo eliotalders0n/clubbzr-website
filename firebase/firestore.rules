@@ -50,6 +50,27 @@ service cloud.firestore {
       return request.resource.data.keys().hasAll(fields);
     }
 
+    // A media URL other members can still fetch later. Object URLs
+    // (blob:/data:) die with the tab that created them and are what put
+    // broken images on the community wall, so they never belong in a document.
+    function isPersistentMediaUrl(url) {
+      return url is string && url.matches('https?://.*');
+    }
+
+    // Rules cannot iterate a list, so this checks the entries the feed
+    // actually renders: the thumbnail and the first media item. The client
+    // validates every entry before writing (lib/media.ts); this is the
+    // backstop a modified or out-of-date client cannot skip.
+    function hasPersistentMedia(data) {
+      return (!('thumbnailUrl' in data.keys())
+          || data.thumbnailUrl == null
+          || isPersistentMediaUrl(data.thumbnailUrl))
+        && (!('mediaUrls' in data.keys())
+          || data.mediaUrls == null
+          || (data.mediaUrls is list
+            && (data.mediaUrls.size() == 0 || isPersistentMediaUrl(data.mediaUrls[0]))));
+    }
+
     function currentUserData() {
       return get(/databases/$(database)/documents/users/$(request.auth.uid)).data;
     }
@@ -374,15 +395,18 @@ service cloud.firestore {
       // Anyone can read submissions
       allow read: if true;
 
-      // Authenticated users can create submissions
+      // Authenticated users can create submissions, as long as any media they
+      // reference will still load for every other member.
       allow create: if isActiveAccount() &&
         request.resource.data.userId == request.auth.uid
         && request.resource.data.approved == false
-        && request.resource.data.pointsAwarded == 0;
+        && request.resource.data.pointsAwarded == 0
+        && hasPersistentMedia(request.resource.data);
 
       // Users can update their own submissions, admins can update any.
       // Any authenticated member can update only the aggregate vote fields.
-      allow update: if isActiveAccount() && (
+      allow update: if isActiveAccount() &&
+        hasPersistentMedia(request.resource.data) && (
         (
           isOwner(resource.data.userId)
           && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
@@ -415,11 +439,13 @@ service cloud.firestore {
       // notes are written by trusted server code through the Admin SDK.
       allow create: if isActiveAccount() &&
         request.resource.data.userId == request.auth.uid &&
+        hasPersistentMedia(request.resource.data) &&
         !request.resource.data.keys().hasAny(['postType', 'communityNote', 'marketplace']);
 
       // Post author can update their own posts, admins can update any
       // Also allow updates for reactions/comments counters
-      allow update: if isActiveAccount() && (
+      allow update: if isActiveAccount() &&
+        hasPersistentMedia(request.resource.data) && (
         (isOwner(resource.data.userId) &&
           !request.resource.data.diff(resource.data).affectedKeys().hasAny([
             'postType', 'communityNote', 'marketplace'

@@ -9,7 +9,6 @@ import {
   Button,
   Flex,
   HStack,
-  Image,
   Text,
   VStack,
 } from '@chakra-ui/react'
@@ -18,6 +17,7 @@ import { Award, CalendarDays, CheckCircle2, ExternalLink, Trophy } from 'lucide-
 import { SubmissionVoteButtons, type SubmissionVoteValue } from '@/components/features/quests'
 import { getBadgeVisual } from '../../../../lib/badges'
 import type { Badge as PassportBadge, Exhibition, Quest, QuestSubmission } from '../../../../lib/schema'
+import { SafeImage } from '@/components/ui/SafeImage'
 
 type ActivityTimestamp = QuestSubmission['createdAt'] | Exhibition['createdAt'] | Exhibition['startDate']
 
@@ -49,6 +49,8 @@ interface WallActivityCardProps {
   item: WallActivityItem
   currentUserId?: string | null
   onSubmissionVote: (submission: QuestSubmission, vote: SubmissionVoteValue) => void | Promise<void>
+  /** Called when the card's media turns out to be unreachable. */
+  onMediaUnavailable?: (itemId: string) => void
 }
 
 const getInitial = (name?: string) => (name?.trim()?.charAt(0) || '?').toUpperCase()
@@ -102,13 +104,18 @@ const Avatar = ({ name, photoURL }: { name?: string; photoURL?: string }) => (
     alignItems="center"
     justifyContent="center"
   >
-    {photoURL ? (
-      <Image src={photoURL} alt={name || 'Member'} w="full" h="full" objectFit="cover" />
-    ) : (
-      <Text color="white" fontWeight="bold">
-        {getInitial(name)}
-      </Text>
-    )}
+    <SafeImage
+      src={photoURL}
+      alt={name || 'Member'}
+      w="full"
+      h="full"
+      objectFit="cover"
+      fallback={
+        <Text color="white" fontWeight="bold">
+          {getInitial(name)}
+        </Text>
+      }
+    />
   </Box>
 )
 
@@ -126,7 +133,12 @@ const CardShell = ({ children }: { children: ReactNode }) => (
   </Box>
 )
 
-export function WallActivityCard({ item, currentUserId, onSubmissionVote }: WallActivityCardProps) {
+export function WallActivityCard({
+  item,
+  currentUserId,
+  onSubmissionVote,
+  onMediaUnavailable,
+}: WallActivityCardProps) {
   if (item.type === 'badge_earned') {
     const visual = getBadgeVisual(item.badge.id)
 
@@ -185,7 +197,14 @@ export function WallActivityCard({ item, currentUserId, onSubmissionVote }: Wall
               overflow="hidden"
               flexShrink={0}
             >
-              <Image src={cover} alt={exhibition.title} w="full" h="full" objectFit="cover" />
+              <SafeImage
+                src={cover}
+                alt={exhibition.title}
+                w="full"
+                h="full"
+                objectFit="cover"
+                onSourcesExhausted={() => onMediaUnavailable?.(item.id)}
+              />
             </Box>
           )}
           <VStack align="stretch" gap={4} p={{ base: 4, md: 5 }} flex={1}>
@@ -241,7 +260,14 @@ export function WallActivityCard({ item, currentUserId, onSubmissionVote }: Wall
       <VStack align="stretch" gap={0}>
         {mediaUrl && (
           <AspectRatio ratio={16 / 10} bg="black">
-            <Image src={mediaUrl} alt={submission.title || questTitle} objectFit="cover" />
+            <SafeImage
+              src={mediaUrl}
+              fallbackSrcs={submission.mediaUrls}
+              alt={submission.title || questTitle}
+              objectFit="cover"
+              placeholderLabel="Image unavailable"
+              onSourcesExhausted={() => onMediaUnavailable?.(item.id)}
+            />
           </AspectRatio>
         )}
 

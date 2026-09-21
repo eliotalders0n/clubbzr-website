@@ -31,8 +31,15 @@ const LENCO_REPORTING_TIME_ZONE = "Africa/Lusaka";
 const WHATSAPP_API_BASE = "https://graph.facebook.com/v25.0";
 const WHATSAPP_REQUEST_TIMEOUT_MS = 15000;
 const CLUB_BZR_WHATSAPP_BUSINESS_NUMBER = "260960912464";
+// Keep this pointing at a template that exists in Meta and is categorised
+// UTILITY. Deleting the configured template fails every send with (#132001);
+// a MARKETING one gets dropped for frequent recipients with (#131049)
+// "not delivered to maintain healthy ecosystem engagement", which utility
+// templates are exempt from. A confirmation is transactional, so it belongs
+// in UTILITY regardless. Its three body variables are the default branch in
+// getSessionConfirmationWhatsAppBodyParameters below.
 const WHATSAPP_CONFIRMATION_TEMPLATE_NAME =
-  process.env.WHATSAPP_CONFIRMATION_TEMPLATE_NAME || "session_confirmation_v1";
+  process.env.WHATSAPP_CONFIRMATION_TEMPLATE_NAME || "session_confirmation_v3";
 const WHATSAPP_PAYMENT_SUCCESS_ADMIN_TEMPLATE_NAME =
   process.env.WHATSAPP_PAYMENT_SUCCESS_ADMIN_TEMPLATE_NAME ||
   "session_payment_success_admin_v1";
@@ -47,9 +54,18 @@ const GEOCODING_SEARCH_URL = process.env.GEOCODING_SEARCH_URL ||
   "https://nominatim.openstreetmap.org/search";
 const GEOCODING_REQUEST_TIMEOUT_MS = 10000;
 const GEOCODING_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
+// Set the env var to an empty string when the configured template has a
+// text header or none: sending an image component to a template that does
+// not declare one fails the same way a missing one does (#132012).
 const WHATSAPP_CONFIRMATION_HEADER_IMAGE_URL =
-  process.env.WHATSAPP_CONFIRMATION_HEADER_IMAGE_URL ||
+  process.env.WHATSAPP_CONFIRMATION_HEADER_IMAGE_URL ??
   "https://club-bzr.web.app/whatsapp/session-confirmation-header.png";
+// session_payment_success_admin_v1 is registered in Meta with an IMAGE
+// header, so every send must supply one or Meta rejects it with (#132012)
+// "Format mismatch, expected IMAGE, received UNKNOWN".
+const WHATSAPP_PAYMENT_SUCCESS_ADMIN_HEADER_IMAGE_URL =
+  process.env.WHATSAPP_PAYMENT_SUCCESS_ADMIN_HEADER_IMAGE_URL ??
+  WHATSAPP_CONFIRMATION_HEADER_IMAGE_URL;
 const SESSIONS_COLLECTION = "sessions";
 const SESSION_REGISTRATIONS_COLLECTION = "sessionRegistrations";
 const SESSION_PAYMENT_TRANSACTIONS_COLLECTION = "sessionPaymentTransactions";
@@ -61,6 +77,21 @@ const SESSION_EXTERNAL_FUND_MOVEMENTS_COLLECTION =
   "sessionExternalFundMovements";
 const MESSAGE_JOBS_COLLECTION = "messageJobs";
 const WHATSAPP_WEBHOOK_EVENTS_COLLECTION = "whatsappWebhookEvents";
+const WHATSAPP_MAX_DELIVERY_RETRIES = 5;
+// Backoff per attempt, in minutes. The tail is long on purpose: the failure
+// this exists for (unsettled Meta billing) took three days to clear.
+const WHATSAPP_RETRY_BACKOFF_MINUTES = [15, 60, 240, 720, 1440];
+// Delivery failures worth another attempt. Everything else Meta reports
+// (number not on WhatsApp, recipient opted out, template mismatch) will fail
+// identically forever, so retrying only burns quota.
+const RETRYABLE_WHATSAPP_ERROR_CODES = new Set([
+  130429, // Rate limit hit
+  131042, // Business eligibility / unsettled payments
+  131048, // Spam rate limit hit
+  131056, // Pair rate limit hit
+  133015, // Account temporarily unavailable
+  134011, // Service temporarily unavailable
+]);
 const MAIL_COLLECTION = "mail";
 
 type MobileMoneyOperator = "mtn" | "airtel" | "zamtel";
@@ -1204,30 +1235,71 @@ async function sendWhatsAppTemplate(
   );
 }
 
+/**
+ * "No payment amount recorded" is the right phrase for a missing charge, but
+ * the wrong one on a confirmation for a session that was always free.
+ */
+function formatConfirmationAmount(
+  registrationData: FirebaseFirestore.DocumentData
+): string {
+  const paymentStatus = normalizeOptionalString(registrationData.paymentStatus);
+  const numericAmount = Number(registrationData.paymentAmount);
+  const hasCharge = Number.isFinite(numericAmount) && numericAmount > 0;
+
+  if (!hasCharge && paymentStatus === "not_required") {
+    return "No payment required";
+  }
+
+  return formatMoney(
+    registrationData.paymentAmount,
+    registrationData.paymentCurrency
+  );
+}
+
+/**
+ * How many body variables each confirmation template declares. This used to
+ * be inferred from a "_v2" name suffix, which silently sends the wrong
+ * parameter count the moment a template is renamed or replaced. Declare the
+ * shape per template instead, so a mismatch is a visible edit here.
+ *
+ *   compact  -> {{1}} name, {{2}} session, {{3}} date and time
+ *   detailed -> {{1}} name, {{2}} session, {{3}} date, {{4}} time,
+ *               {{5}} venue, {{6}} amount paid
+ */
+const WHATSAPP_CONFIRMATION_TEMPLATE_SHAPES: Record<
+  string,
+  "compact" | "detailed"
+> = {
+  session_confirmation_v2: "detailed",
+  session_confirmation_v3: "detailed",
+};
+
 function getSessionConfirmationWhatsAppBodyParameters(input: {
   templateName: string;
   memberName: string;
   session: SessionEmailSummary;
   registrationData: FirebaseFirestore.DocumentData;
 }): string[] {
-  if (input.templateName.endsWith("_v2")) {
+  // An unlisted template is a configuration mistake; assume the fuller
+  // payload rather than quietly dropping half the booking details.
+  const shape = WHATSAPP_CONFIRMATION_TEMPLATE_SHAPES[input.templateName] ??
+    "detailed";
+
+  if (shape === "compact") {
     return [
       input.memberName,
       input.session.title,
-      input.session.dateOnlyText,
-      input.session.timeText,
-      input.session.locationText,
-      formatMoney(
-        input.registrationData.paymentAmount,
-        input.registrationData.paymentCurrency
-      ),
+      input.session.dateText,
     ];
   }
 
   return [
     input.memberName,
     input.session.title,
-    input.session.dateText,
+    input.session.dateOnlyText,
+    input.session.timeText,
+    input.session.locationText,
+    formatConfirmationAmount(input.registrationData),
   ];
 }
 
@@ -1344,7 +1416,9 @@ async function queueUserConfirmationWhatsApp(input: {
     to: recipient,
     templateName: WHATSAPP_CONFIRMATION_TEMPLATE_NAME,
     languageCode: WHATSAPP_TEMPLATE_LANGUAGE,
-    headerImageUrl: WHATSAPP_CONFIRMATION_HEADER_IMAGE_URL,
+    ...(WHATSAPP_CONFIRMATION_HEADER_IMAGE_URL ?
+      {headerImageUrl: WHATSAPP_CONFIRMATION_HEADER_IMAGE_URL} :
+      {}),
     bodyParameters: getSessionConfirmationWhatsAppBodyParameters({
       templateName: WHATSAPP_CONFIRMATION_TEMPLATE_NAME,
       memberName,
@@ -1540,6 +1614,9 @@ async function queueAdminPaymentSuccessWhatsApp(input: {
         to: recipient,
         templateName: WHATSAPP_PAYMENT_SUCCESS_ADMIN_TEMPLATE_NAME,
         languageCode: WHATSAPP_TEMPLATE_LANGUAGE,
+        ...(WHATSAPP_PAYMENT_SUCCESS_ADMIN_HEADER_IMAGE_URL ?
+          {headerImageUrl: WHATSAPP_PAYMENT_SUCCESS_ADMIN_HEADER_IMAGE_URL} :
+          {}),
         bodyParameters,
         tag: "payment_success_admin",
         metadata: {
@@ -1560,6 +1637,7 @@ async function queueAdminPaymentSuccessWhatsApp(input: {
           to: recipient,
           templateName: message.templateName,
           languageCode: message.languageCode,
+          headerImageUrl: message.headerImageUrl,
           bodyParameters: message.bodyParameters,
           metadata: message.metadata,
           attempts: admin.firestore.FieldValue.increment(1),
@@ -2543,6 +2621,75 @@ function getWhatsAppStatusError(statusRecord: Record<string, unknown>): string {
   return parts.join(": ") || "WhatsApp delivery failed.";
 }
 
+function getWhatsAppStatusErrorCode(
+  statusRecord: Record<string, unknown>
+): number | null {
+  const errors = Array.isArray(statusRecord.errors) ?
+    statusRecord.errors :
+    [];
+  const firstError = errors.find((entry) =>
+    entry && typeof entry === "object"
+  ) as Record<string, unknown> | undefined;
+
+  if (!firstError) return null;
+
+  const rawCode = firstError.code;
+  const code = typeof rawCode === "number" ?
+    rawCode :
+    Number(normalizeOptionalString(rawCode));
+
+  return Number.isFinite(code) ? code : null;
+}
+
+/**
+ * Decide what happens to a job whose delivery Meta just reported as failed.
+ * A retryable code gets a future attempt with backoff; anything else is
+ * recorded as given up so it stops consuming the retry queue.
+ */
+function buildWhatsAppRetryPatch(
+  jobData: FirebaseFirestore.DocumentData,
+  statusRecord: Record<string, unknown>
+): Record<string, unknown> {
+  const code = getWhatsAppStatusErrorCode(statusRecord);
+  const attempts = typeof jobData.retryAttempts === "number" ?
+    jobData.retryAttempts :
+    0;
+  const isRetryable = code !== null &&
+    RETRYABLE_WHATSAPP_ERROR_CODES.has(code);
+
+  if (!isRetryable || attempts >= WHATSAPP_MAX_DELIVERY_RETRIES) {
+    return {
+      deliveryErrorCode: code,
+      retryPending: false,
+      retryGaveUpAt: admin.firestore.FieldValue.serverTimestamp(),
+      retryGaveUpReason: isRetryable ? "max_attempts" : "permanent_error",
+    };
+  }
+
+  const delayMinutes = WHATSAPP_RETRY_BACKOFF_MINUTES[
+    Math.min(attempts, WHATSAPP_RETRY_BACKOFF_MINUTES.length - 1)
+  ];
+
+  return {
+    deliveryErrorCode: code,
+    retryPending: true,
+    nextRetryAt: admin.firestore.Timestamp.fromMillis(
+      Date.now() + delayMinutes * 60 * 1000
+    ),
+    retryGaveUpAt: admin.firestore.FieldValue.delete(),
+    retryGaveUpReason: admin.firestore.FieldValue.delete(),
+  };
+}
+
+function getWhatsAppRetrySuccessPatch(): Record<string, unknown> {
+  return {
+    retryPending: false,
+    nextRetryAt: admin.firestore.FieldValue.delete(),
+    retryGaveUpAt: admin.firestore.FieldValue.delete(),
+    retryGaveUpReason: admin.firestore.FieldValue.delete(),
+  };
+}
+
 function getRegistrationIdFromMessageJob(
   jobSnapshot: FirebaseFirestore.QueryDocumentSnapshot
 ): string | null {
@@ -2626,6 +2773,11 @@ async function applyWhatsAppStatusUpdates(
       }
 
       const statusEvent = serializeForCallable(statusRecord);
+      // A failure Meta can recover from is queued for another attempt;
+      // any other status means there is nothing left to retry.
+      const retryPatch = status === "failed" ?
+        buildWhatsAppRetryPatch(jobSnapshot.data() || {}, statusRecord) :
+        getWhatsAppRetrySuccessPatch();
       const jobUpdate = jobSnapshot.ref.set(
         {
           deliveryStatus: status,
@@ -2636,6 +2788,7 @@ async function applyWhatsAppStatusUpdates(
           ),
           updatedAt: admin.firestore.FieldValue.serverTimestamp(),
           ...timestampPatch,
+          ...retryPatch,
         },
         {merge: true}
       );
@@ -2685,6 +2838,193 @@ async function applyWhatsAppStatusUpdates(
     }));
   }));
 }
+
+/**
+ * Re-send one job whose delivery failed for a reason that can clear on its
+ * own. The job document already carries everything the send needs, so this
+ * works for member confirmations and admin alerts alike.
+ */
+async function retryWhatsAppMessageJob(
+  jobSnapshot: FirebaseFirestore.QueryDocumentSnapshot
+): Promise<void> {
+  const jobData = jobSnapshot.data() || {};
+  const to = normalizeOptionalString(jobData.to);
+  const templateName = normalizeOptionalString(jobData.templateName);
+  const bodyParameters = Array.isArray(jobData.bodyParameters) ?
+    jobData.bodyParameters.map((entry) => String(entry)) :
+    [];
+
+  if (!to || !templateName) {
+    await jobSnapshot.ref.set(
+      {
+        retryPending: false,
+        retryGaveUpAt: admin.firestore.FieldValue.serverTimestamp(),
+        retryGaveUpReason: "incomplete_job",
+        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      },
+      {merge: true}
+    );
+    return;
+  }
+
+  const attempts = typeof jobData.retryAttempts === "number" ?
+    jobData.retryAttempts :
+    0;
+  const headerImageUrl = normalizeOptionalString(jobData.headerImageUrl);
+  const message: QueuedWhatsAppTemplate = {
+    to,
+    templateName,
+    languageCode: normalizeOptionalString(jobData.languageCode) ||
+      WHATSAPP_TEMPLATE_LANGUAGE,
+    ...(headerImageUrl ? {headerImageUrl} : {}),
+    bodyParameters,
+    tag: normalizeOptionalString(jobData.tag) || "whatsapp_retry",
+    metadata: (jobData.metadata as Record<string, string | null>) || {},
+  };
+
+  const registrationId = getRegistrationIdFromMessageJob(jobSnapshot);
+
+  try {
+    const responseData = await sendWhatsAppTemplate(message);
+    const messageId = getWhatsAppMessageId(responseData);
+
+    await jobSnapshot.ref.set(
+      {
+        status: "sent",
+        provider: "meta_whatsapp_cloud_api",
+        providerMessageId: messageId,
+        ...(messageId ? {
+          providerMessageIds:
+            admin.firestore.FieldValue.arrayUnion(messageId),
+        } : {}),
+        providerResponse: serializeForCallable(responseData),
+        // The new send has no delivery verdict yet; the webhook will set one.
+        deliveryStatus: admin.firestore.FieldValue.delete(),
+        sentAt: admin.firestore.FieldValue.serverTimestamp(),
+        retryAttempts: attempts + 1,
+        lastRetryAt: admin.firestore.FieldValue.serverTimestamp(),
+        ...getWhatsAppRetrySuccessPatch(),
+        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      },
+      {merge: true}
+    );
+
+    if (registrationId) {
+      await db
+        .collection(SESSION_REGISTRATIONS_COLLECTION)
+        .doc(registrationId)
+        .set(
+          {
+            confirmationWhatsAppSentAt:
+              admin.firestore.FieldValue.serverTimestamp(),
+            confirmationWhatsAppMessageId: messageId,
+            confirmationWhatsAppFailedAt:
+              admin.firestore.FieldValue.delete(),
+            confirmationWhatsAppError: admin.firestore.FieldValue.delete(),
+            confirmationWhatsAppDeliveryStatus:
+              admin.firestore.FieldValue.delete(),
+            confirmationWhatsAppDeliveryFailedAt:
+              admin.firestore.FieldValue.delete(),
+            confirmationWhatsAppDeliveryError:
+              admin.firestore.FieldValue.delete(),
+            updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+          },
+          {merge: true}
+        );
+    }
+
+    logger.info("WhatsApp delivery retry accepted by Meta", {
+      jobId: jobSnapshot.id,
+      attempt: attempts + 1,
+      messageId,
+      recipientLast4: to.slice(-4),
+    });
+  } catch (error) {
+    const errorMessage = getErrorMessage(error);
+    const nextAttempts = attempts + 1;
+    const exhausted = nextAttempts >= WHATSAPP_MAX_DELIVERY_RETRIES;
+    const delayMinutes = WHATSAPP_RETRY_BACKOFF_MINUTES[
+      Math.min(nextAttempts, WHATSAPP_RETRY_BACKOFF_MINUTES.length - 1)
+    ];
+
+    await jobSnapshot.ref.set(
+      {
+        status: "failed",
+        lastError: errorMessage,
+        failedAt: admin.firestore.FieldValue.serverTimestamp(),
+        retryAttempts: nextAttempts,
+        lastRetryAt: admin.firestore.FieldValue.serverTimestamp(),
+        retryPending: !exhausted,
+        ...(exhausted ? {
+          nextRetryAt: admin.firestore.FieldValue.delete(),
+          retryGaveUpAt: admin.firestore.FieldValue.serverTimestamp(),
+          retryGaveUpReason: "max_attempts",
+        } : {
+          nextRetryAt: admin.firestore.Timestamp.fromMillis(
+            Date.now() + delayMinutes * 60 * 1000
+          ),
+        }),
+        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      },
+      {merge: true}
+    );
+
+    logger.warn("WhatsApp delivery retry failed", {
+      jobId: jobSnapshot.id,
+      attempt: nextAttempts,
+      exhausted,
+      errorMessage,
+    });
+  }
+}
+
+/**
+ * Nothing used to re-send a message Meta accepted and then failed to
+ * deliver, so an outage took confirmations down silently. This sweeps the
+ * jobs the webhook marked retryable.
+ */
+export const retryFailedWhatsAppMessages = onSchedule(
+  {
+    schedule: "every 15 minutes",
+    secrets: [whatsappAccessToken, whatsappPhoneNumberId],
+    timeoutSeconds: 180,
+  },
+  async () => {
+    const pendingJobs = await db
+      .collection(MESSAGE_JOBS_COLLECTION)
+      .where("retryPending", "==", true)
+      .limit(25)
+      .get();
+
+    if (pendingJobs.empty) return;
+
+    const nowMillis = Date.now();
+    let retried = 0;
+
+    for (const jobSnapshot of pendingJobs.docs) {
+      const nextRetryAt = (jobSnapshot.data() || {}).nextRetryAt;
+      const isDue = !(nextRetryAt instanceof admin.firestore.Timestamp) ||
+        nextRetryAt.toMillis() <= nowMillis;
+
+      if (!isDue) continue;
+
+      try {
+        await retryWhatsAppMessageJob(jobSnapshot);
+        retried += 1;
+      } catch (error) {
+        logger.warn("WhatsApp retry sweep entry failed", {
+          jobId: jobSnapshot.id,
+          error: getErrorMessage(error),
+        });
+      }
+    }
+
+    logger.info("WhatsApp retry sweep finished", {
+      candidates: pendingJobs.size,
+      retried,
+    });
+  }
+);
 
 export const whatsappWebhook = onRequest(
   {

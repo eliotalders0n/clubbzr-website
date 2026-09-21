@@ -11,7 +11,6 @@ import {
   Grid,
   Heading,
   HStack,
-  Image,
   SimpleGrid,
   Spinner,
   Text,
@@ -39,6 +38,7 @@ import {
   type DiscoveryArtwork,
 } from '@/lib/artworkDiscovery'
 import { addToArray, removeFromArray } from '../../lib/firestore'
+import { SafeImage } from '@/components/ui/SafeImage'
 
 const MotionBox = motion.create(Box)
 
@@ -75,13 +75,18 @@ function InitialAvatar({ artwork, size = 11 }: { artwork: DiscoveryArtwork; size
       overflow="hidden"
       flexShrink={0}
     >
-      {artwork.credit.avatarUrl ? (
-        <Image src={artwork.credit.avatarUrl} alt={artwork.credit.name} w="full" h="full" objectFit="cover" />
-      ) : (
-        <Text color="white" fontWeight="bold">
-          {artwork.credit.name.charAt(0)}
-        </Text>
-      )}
+      <SafeImage
+        src={artwork.credit.avatarUrl}
+        alt={artwork.credit.name}
+        w="full"
+        h="full"
+        objectFit="cover"
+        fallback={
+          <Text color="white" fontWeight="bold">
+            {artwork.credit.name.charAt(0)}
+          </Text>
+        }
+      />
     </Flex>
   )
 }
@@ -134,7 +139,7 @@ function ArtistWorkCard({ artwork }: { artwork: DiscoveryArtwork }) {
         borderColor="whiteAlpha.100"
         _hover={{ borderColor: 'whiteAlpha.300' }}
       >
-        <Image
+        <SafeImage
           src={artwork.imageUrl}
           alt={artwork.title}
           w="full"
@@ -411,7 +416,7 @@ export default function ArtworkDetail() {
                 overflow="hidden"
               >
                 <Flex minH={{ base: '420px', md: '72vh' }} align="center" justify="center" bg="black">
-                  <Image
+                  <SafeImage
                     src={artwork.imageUrl}
                     alt={artwork.title}
                     w="full"

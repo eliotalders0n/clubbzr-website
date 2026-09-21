@@ -10,7 +10,6 @@ import {
   Flex,
   Heading,
   HStack,
-  Image,
   Input,
   SimpleGrid,
   Spinner,
@@ -33,6 +32,7 @@ import {
   type DiscoveryArtwork,
 } from '@/lib/artworkDiscovery'
 import type { ArtMedium } from '../../lib/schema'
+import { SafeImage } from '@/components/ui/SafeImage'
 
 const MotionBox = motion.create(Box)
 
@@ -60,7 +60,7 @@ function ArtworkCard({ artwork, index }: { artwork: DiscoveryArtwork; index: num
           _hover={{ borderColor: 'whiteAlpha.400', transform: 'translateY(-2px)' }}
           transition="border-color 0.25s ease, transform 0.25s ease"
         >
-          <Image
+          <SafeImage
             src={artwork.imageUrl}
             alt={artwork.title}
             w="full"
@@ -109,13 +109,18 @@ function ArtworkCard({ artwork, index }: { artwork: DiscoveryArtwork; index: num
                 justifyContent="center"
                 flexShrink={0}
               >
-                {artwork.credit.avatarUrl ? (
-                  <Image src={artwork.credit.avatarUrl} alt={artwork.credit.name} w="full" h="full" objectFit="cover" />
-                ) : (
-                  <Text color="white" fontSize="2xs" fontWeight="bold">
-                    {artwork.credit.name.charAt(0)}
-                  </Text>
-                )}
+                <SafeImage
+                  src={artwork.credit.avatarUrl}
+                  alt={artwork.credit.name}
+                  w="full"
+                  h="full"
+                  objectFit="cover"
+                  fallback={
+                    <Text color="white" fontSize="2xs" fontWeight="bold">
+                      {artwork.credit.name.charAt(0)}
+                    </Text>
+                  }
+                />
               </Box>
               <Text color="whiteAlpha.800" fontSize={{ base: '2xs', md: 'xs' }} fontWeight="medium" lineClamp={1}>
                 {artwork.credit.name}

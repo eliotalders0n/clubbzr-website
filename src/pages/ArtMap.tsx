@@ -49,6 +49,7 @@ import {
 } from '@/components/map'
 import { Button } from '@/components/ui/Button'
 import { Modal, ModalBody, ModalFooter } from '@/components/ui/Modal'
+import { SafeImage } from '@/components/ui/SafeImage'
 import { useAuth } from '@/contexts/AuthContext'
 import { useCollection, useMutation } from '@/hooks/useFirestore'
 import type { ArtLocation, ArtLocationType, Session } from '../../lib/schema'
@@ -1520,7 +1521,7 @@ function LocationRow({
           selected ? 'opacity-100' : 'opacity-0'
         }`}
       />
-      <img
+      <SafeImage
         src={venue.image || fallbackImageByType[venue.type]}
         alt=""
         className="h-[78px] w-[96px] flex-none rounded-xl object-cover"
@@ -1606,7 +1607,7 @@ function VenueInspector({
           <ArrowLeft size={16} />
           Back to places
         </button>
-        <img
+        <SafeImage
           src={images[0] || fallbackImageByType[venue.type]}
           alt={`${venue.name} interior`}
           className="art-map-inspector__hero"
@@ -1614,7 +1615,7 @@ function VenueInspector({
         {images.length > 1 && (
           <div className="art-map-inspector__collage">
             {images.slice(1, 3).map((image, index) => (
-              <img
+              <SafeImage
                 key={image}
                 src={image}
                 alt={`${venue.name} gallery view ${index + 2}`}
@@ -1767,7 +1768,7 @@ function DesktopVenueSheet({
       animate={{ opacity: 1, y: 0 }}
       className="art-map-detail-card m-6 grid grid-cols-1 rounded-[22px] border border-white/[0.11] bg-[#111111]/95 shadow-[0_24px_80px_rgba(0,0,0,0.5)] backdrop-blur-2xl"
     >
-      <img
+      <SafeImage
         src={venue.image || fallbackImageByType[venue.type]}
         alt={`${venue.name} interior`}
         className="art-map-detail-card__image hidden rounded-2xl object-cover"
@@ -1894,7 +1895,7 @@ function MobileVenueCard({
           : 'border-bzr-orange/20'
       }`}
     >
-      <img
+      <SafeImage
         src={venue.image || fallbackImageByType[venue.type]}
         alt=""
         className="art-map-mobile-card__image h-[140px] w-full object-cover"
@@ -1993,7 +1994,7 @@ function MobileVenueSheet({
         <X size={17} />
       </button>
       <div className="grid h-52 grid-cols-3 gap-1 overflow-hidden rounded-2xl">
-        <img
+        <SafeImage
           src={images[0] || fallbackImageByType[venue.type]}
           alt={`${venue.name} interior`}
           className="col-span-2 h-full w-full object-cover"
@@ -2003,7 +2004,7 @@ function MobileVenueSheet({
             ? images.slice(1, 3)
             : [images[0], images[0]]
           ).map((image, index) => (
-            <img
+            <SafeImage
               key={`${image}-${index}`}
               src={image || fallbackImageByType[venue.type]}
               alt={`${venue.name} gallery view ${index + 2}`}
@@ -2125,7 +2126,7 @@ function VenueGridCard({
         aria-label={`Open details for ${venue.name}`}
       >
         <div className="art-map-grid-card__media">
-          <img
+          <SafeImage
             src={venue.image || fallbackImageByType[venue.type]}
             alt=""
           />

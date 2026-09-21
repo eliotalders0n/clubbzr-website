@@ -18,7 +18,6 @@ import {
   Spinner,
   Center,
   AspectRatio,
-  Image,
 } from '@chakra-ui/react'
 import { Modal, ModalBody } from '@/components/ui/Modal'
 import { motion } from 'framer-motion'
@@ -27,6 +26,7 @@ import { Header } from '@/components/layout/Header'
 import { Footer } from '@/components/layout/Footer'
 import { useCollection } from '@/hooks/useFirestore'
 import type { Quest, QuestCategory, QuestDifficulty } from '../../lib/schema'
+import { SafeImage } from '@/components/ui/SafeImage'
 
 const MotionBox = motion.create(Box)
 
@@ -106,7 +106,7 @@ function QuestCard({ quest, featured = false }: { quest: Quest; featured?: boole
             border="1px solid"
             borderColor="whiteAlpha.100"
           >
-            <Image
+            <SafeImage
               src={questImage}
               alt={quest.title}
               w="full"

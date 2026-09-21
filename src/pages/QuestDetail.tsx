@@ -17,7 +17,6 @@ import {
   Textarea,
   Spinner,
   Center,
-  Image,
 } from '@chakra-ui/react'
 import { AnimatePresence, motion } from 'framer-motion'
 import { Send } from 'lucide-react'
@@ -29,10 +28,12 @@ import { useAuth } from '@/contexts/AuthContext'
 import { SubmissionVoteButtons, type SubmissionVoteValue } from '@/components/features/quests'
 import { getBadgeVisual } from '../../lib/badges'
 import { uploadMultiple, STORAGE_PATHS } from '../../lib/storage'
+import { assertPersistentMediaUrls } from '../../lib/media'
 import { addToArray, removeFromArray, incrementField } from '../../lib/firestore'
 import { updateQuestSubmissionVote } from '../../lib/submissionVotes'
 import type { Badge as PassportBadge, QuestSubmission, ReactionType } from '../../lib/schema'
 import { Timestamp } from 'firebase/firestore'
+import { SafeImage } from '@/components/ui/SafeImage'
 
 const MotionBox = motion.create(Box)
 
@@ -108,7 +109,7 @@ function InspirationLink({ link, index }: { link: string; index: number }) {
             justifyContent="center"
             bg="blackAlpha.400"
           >
-            <Image
+            <SafeImage
               src={trimmedLink}
               alt={`Quest inspiration ${index + 1}`}
               w="full"
@@ -189,7 +190,7 @@ function SubmissionCard({
     >
       {submission.mediaUrls && submission.mediaUrls.length > 0 ? (
         <Box aspectRatio={1} overflow="hidden">
-          <Image
+          <SafeImage
             src={submission.mediaUrls[0]}
             alt={submission.title || 'Submission'}
             w="full"
@@ -214,13 +215,18 @@ function SubmissionCard({
             justifyContent="center"
             overflow="hidden"
           >
-            {submission.userPhotoURL ? (
-              <Image src={submission.userPhotoURL} alt={submission.userName} w="full" h="full" objectFit="cover" />
-            ) : (
-              <Text color="white" fontSize="sm" fontWeight="bold">
-                {submission.userName?.charAt(0) || '?'}
-              </Text>
-            )}
+            <SafeImage
+              src={submission.userPhotoURL}
+              alt={submission.userName}
+              w="full"
+              h="full"
+              objectFit="cover"
+              fallback={
+                <Text color="white" fontSize="sm" fontWeight="bold">
+                  {submission.userName?.charAt(0) || '?'}
+                </Text>
+              }
+            />
           </Box>
           <Text color="white" fontSize="sm" fontWeight="medium">
             {submission.userName}
@@ -335,7 +341,13 @@ export default function QuestDetail() {
       if (selectedFiles.length > 0) {
         const uploadResult = await uploadMultiple(selectedFiles, `${STORAGE_PATHS.QUESTS}/${id}`, { compress: true })
         if (uploadResult.success) {
-          mediaUrls = uploadResult.urls
+          // Never write a URL the next visitor cannot fetch.
+          mediaUrls = assertPersistentMediaUrls(uploadResult.urls, 'This submission')
+
+          if (mediaUrls.length !== selectedFiles.length) {
+            throw new Error('Some media did not finish uploading. Please try again.')
+          }
+
           thumbnailUrl = mediaUrls[0]
         } else {
           const failedUpload = uploadResult.results.find((result) => !result.success)
@@ -565,7 +577,7 @@ export default function QuestDetail() {
                   overflow="hidden"
                   boxShadow="0 24px 70px rgba(0, 0, 0, 0.32)"
                 >
-                  <Image
+                  <SafeImage
                     src={questImage}
                     alt={`${quest.title} quest artwork`}
                     display="block"

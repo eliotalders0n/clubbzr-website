@@ -5,6 +5,7 @@ import { motion, AnimatePresence } from 'framer-motion';
 import { clsx } from 'clsx';
 import { twMerge } from 'tailwind-merge';
 import type { GalleryItem } from '../../../../lib/schema';
+import { SafeImage } from '@/components/ui/SafeImage';
 
 const cn = (...inputs: (string | undefined | null | false)[]) => twMerge(clsx(inputs));
 
@@ -205,7 +206,7 @@ const Lightbox: React.FC<{
           transition={{ duration: 0.2 }}
           onClick={(e) => e.stopPropagation()}
         >
-          <img
+          <SafeImage
             src={item.url}
             alt={item.caption || 'Gallery image'}
             className="max-h-[70vh] max-w-full rounded-lg object-contain sm:max-h-[78vh]"
@@ -247,7 +248,7 @@ const Lightbox: React.FC<{
             whileHover={{ scale: 1.1 }}
             whileTap={{ scale: 0.9 }}
           >
-            <img
+            <SafeImage
               src={thumbItem.thumbnailUrl || thumbItem.url}
               alt=""
               className="w-full h-full object-cover"

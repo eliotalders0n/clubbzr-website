@@ -11,7 +11,6 @@ import {
   Grid,
   Heading,
   HStack,
-  Image,
   Input,
   SimpleGrid,
   Spinner,
@@ -29,6 +28,7 @@ import { createDocumentWithId, updateDocument } from '../../lib/firestore'
 import { upsertPublicProfile } from '../../lib/publicProfiles'
 import { STORAGE_PATHS, uploadFileSimple, validateFile, VALIDATION_PRESETS } from '../../lib/storage'
 import type { Artist, ArtMedium, CreateDocument, UpdateDocument } from '../../lib/schema'
+import { SafeImage } from '@/components/ui/SafeImage'
 
 type Feedback = { type: 'error' | 'success'; message: string } | null
 
@@ -668,17 +668,22 @@ export default function ArtistCreate() {
                       border="1px solid"
                       borderColor="whiteAlpha.200"
                     >
-                      {profilePhotoUrl ? (
-                        <Image src={profilePhotoUrl} alt={displayName} w="full" h="full" objectFit="cover" />
-                      ) : (
-                        <Text color="white" fontSize="3xl" fontWeight="bold">
-                          {displayName
-                            .split(' ')
-                            .map((part) => part[0])
-                            .join('')
-                            .slice(0, 2)}
-                        </Text>
-                      )}
+                      <SafeImage
+                        src={profilePhotoUrl}
+                        alt={displayName}
+                        w="full"
+                        h="full"
+                        objectFit="cover"
+                        fallback={
+                          <Text color="white" fontSize="3xl" fontWeight="bold">
+                            {displayName
+                              .split(' ')
+                              .map((part) => part[0])
+                              .join('')
+                              .slice(0, 2)}
+                          </Text>
+                        }
+                      />
                     </Flex>
 
                     <Box flex={1} minW={0}>
@@ -908,17 +913,16 @@ export default function ArtistCreate() {
                         align="center"
                         justify="center"
                       >
-                        {featuredWorkImageUrl ? (
-                          <Image
-                            src={featuredWorkImageUrl}
-                            alt={form.featuredWorkTitle || 'Featured work'}
-                            w="full"
-                            h="full"
-                            objectFit="cover"
-                          />
-                        ) : (
-                          <ImagePlus size={28} color="rgba(255,255,255,0.35)" />
-                        )}
+                        <SafeImage
+                          src={featuredWorkImageUrl}
+                          alt={form.featuredWorkTitle || 'Featured work'}
+                          w="full"
+                          h="full"
+                          objectFit="cover"
+                          fallback={
+                            <ImagePlus size={28} color="rgba(255,255,255,0.35)" />
+                          }
+                        />
                       </Flex>
                       <VStack align="stretch" gap={3} flex={1} minW={0}>
                         <Input
@@ -1018,7 +1022,7 @@ export default function ArtistCreate() {
                               _hover={{ borderColor: 'brand.400' }}
                               aria-label={`Use ${work.title} as featured work`}
                             >
-                              <Image src={work.imageUrl} alt={work.title} w="full" h="full" objectFit="cover" />
+                              <SafeImage src={work.imageUrl} alt={work.title} w="full" h="full" objectFit="cover" />
                             </Button>
                           ))}
                         </SimpleGrid>
@@ -1120,23 +1124,22 @@ export default function ArtistCreate() {
                   overflow="hidden"
                   mb={5}
                 >
-                  {profilePhotoUrl ? (
-                    <Image
-                      src={profilePhotoUrl}
-                      alt={displayName}
-                      w="full"
-                      h="full"
-                      objectFit="cover"
-                    />
-                  ) : (
-                    <Text color="white" fontSize="2xl" fontWeight="bold">
-                      {displayName
-                        .split(' ')
-                        .map((part) => part[0])
-                        .join('')
-                        .slice(0, 2)}
-                    </Text>
-                  )}
+                  <SafeImage
+                    src={profilePhotoUrl}
+                    alt={displayName}
+                    w="full"
+                    h="full"
+                    objectFit="cover"
+                    fallback={
+                      <Text color="white" fontSize="2xl" fontWeight="bold">
+                        {displayName
+                          .split(' ')
+                          .map((part) => part[0])
+                          .join('')
+                          .slice(0, 2)}
+                      </Text>
+                    }
+                  />
                 </Flex>
                 <Heading as="h2" color="white" fontSize="xl" mb={2}>
                   {displayName}

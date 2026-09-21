@@ -8,7 +8,6 @@ import {
   Heading,
   Text,
   Button,
-  Image,
   Input,
   Textarea,
   VStack,
@@ -49,6 +48,7 @@ import type {
   QuestSubmission,
   UpdateDocument,
 } from '../../../lib/schema'
+import { SafeImage } from '@/components/ui/SafeImage'
 
 const MotionBox = motion.create(Box)
 
@@ -744,7 +744,7 @@ function QuestFormFields({
                     <SimpleGrid columns={{ base: 2, md: 3 }} gap={3}>
                       {exampleImages.map((url) => (
                         <Box key={url} position="relative" overflow="hidden" borderRadius="lg" border="1px solid" borderColor="whiteAlpha.100" bg="blackAlpha.300">
-                          <Image src={url} alt="Quest inspiration" w="full" h="92px" objectFit="cover" />
+                          <SafeImage src={url} alt="Quest inspiration" w="full" h="92px" objectFit="cover" />
                           <Button
                             type="button"
                             position="absolute"

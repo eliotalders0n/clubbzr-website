@@ -6,6 +6,7 @@ import { clsx } from 'clsx';
 import { twMerge } from 'tailwind-merge';
 import type { Session, SessionType, SessionStatus } from '../../../../lib/schema';
 import { Timestamp } from 'firebase/firestore';
+import { SafeImage } from '@/components/ui/SafeImage';
 
 const cn = (...inputs: (string | undefined | null | false)[]) => twMerge(clsx(inputs));
 
@@ -175,7 +176,7 @@ export const SessionCard: React.FC<SessionCardProps> = ({
               scale: 1.1,
             }}
           >
-            <img
+            <SafeImage
               src={session.coverImage}
               alt={session.title}
               className={cn(
@@ -303,19 +304,18 @@ export const SessionCard: React.FC<SessionCardProps> = ({
         <div className="flex items-center justify-between pt-4 border-t border-bzr-gray-800">
           {/* Facilitator */}
           <div className="flex items-center gap-2">
-            {session.facilitator.photoURL ? (
-              <img
-                src={session.facilitator.photoURL}
-                alt={session.facilitator.name}
-                className="w-6 h-6 rounded-full object-cover"
-              />
-            ) : (
-              <div className="w-6 h-6 rounded-full bg-bzr-gray-700 flex items-center justify-center">
-                <span className="text-xs text-bzr-gray-400">
-                  {session.facilitator.name.charAt(0)}
-                </span>
-              </div>
-            )}
+            <SafeImage
+              src={session.facilitator.photoURL}
+              alt={session.facilitator.name}
+              className="w-6 h-6 rounded-full object-cover"
+              fallback={
+                <div className="w-6 h-6 rounded-full bg-bzr-gray-700 flex items-center justify-center">
+                  <span className="text-xs text-bzr-gray-400">
+                    {session.facilitator.name.charAt(0)}
+                  </span>
+                </div>
+              }
+            />
             <span className="text-sm text-bzr-gray-400 truncate max-w-[120px]">
               {session.facilitator.name}
             </span>

@@ -13,7 +13,6 @@ import {
   Grid,
   Heading,
   HStack,
-  Image,
   SimpleGrid,
   Spinner,
   Text,
@@ -29,6 +28,7 @@ import { useAuth } from '@/contexts/AuthContext'
 import { useCollection, useDocument } from '@/hooks/useFirestore'
 import { db, executeTransaction, serverTimestamp } from '../../lib/firestore'
 import type { Artwork, CommunityPost, Quest, QuestSubmission } from '../../lib/schema'
+import { SafeImage } from '@/components/ui/SafeImage'
 
 const MotionBox = motion.create(Box)
 
@@ -81,13 +81,18 @@ function ProfileAvatar({ name, photoURL }: { name: string; photoURL?: string | n
       borderColor="whiteAlpha.200"
       flexShrink={0}
     >
-      {photoURL ? (
-        <Image src={photoURL} alt={name} w="full" h="full" objectFit="cover" />
-      ) : (
-        <Text fontSize={{ base: '2xl', md: '3xl' }} fontWeight="bold">
-          {getInitials(name)}
-        </Text>
-      )}
+      <SafeImage
+        src={photoURL}
+        alt={name}
+        w="full"
+        h="full"
+        objectFit="cover"
+        fallback={
+          <Text fontSize={{ base: '2xl', md: '3xl' }} fontWeight="bold">
+            {getInitials(name)}
+          </Text>
+        }
+      />
     </Flex>
   )
 }
@@ -135,7 +140,7 @@ function MemberPostCard({ post }: { post: CommunityPost }) {
           {post.mediaType === 'video' ? (
             <video src={primaryMedia} controls style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
           ) : (
-            <Image src={primaryMedia} alt="" w="full" h="full" objectFit="cover" />
+            <SafeImage src={primaryMedia} alt="" w="full" h="full" objectFit="cover" />
           )}
         </AspectRatio>
       )}
@@ -463,7 +468,7 @@ export default function MemberProfile() {
                     <SimpleGrid columns={3} gap={2} mt={5}>
                       {displayArtworks.slice(0, 3).map((artwork) => (
                         <AspectRatio key={artwork.id} ratio={1} bg="gray.800" borderRadius="md" overflow="hidden">
-                          <Image src={artwork.thumbnailUrl || artwork.imageUrl} alt={artwork.title} objectFit="cover" />
+                          <SafeImage src={artwork.thumbnailUrl || artwork.imageUrl} alt={artwork.title} objectFit="cover" />
                         </AspectRatio>
                       ))}
                     </SimpleGrid>

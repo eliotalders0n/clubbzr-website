@@ -8,6 +8,8 @@ import { GeoPoint } from 'firebase/firestore';
 import { LocateFixed, MapPin } from 'lucide-react';
 import type { ArtLocation, MediaType, CreateDocument, CommunityPost } from '../../../../lib/schema';
 import { uploadMultiple, STORAGE_PATHS } from '../../../../lib/storage';
+import { assertPersistentMediaUrls } from '../../../../lib/media';
+import { SafeImage } from '@/components/ui/SafeImage';
 
 const cn = (...inputs: (string | undefined | null | false)[]) => twMerge(clsx(inputs));
 
@@ -268,7 +270,12 @@ export const PostForm: React.FC<PostFormProps> = ({
           throw new Error(uploadResult.error?.message || 'Failed to upload media');
         }
 
-        mediaUrls = uploadResult.urls;
+        // Never write a URL the next visitor cannot fetch.
+        mediaUrls = assertPersistentMediaUrls(uploadResult.urls, 'This post');
+
+        if (mediaUrls.length !== filesToUpload.length) {
+          throw new Error('Some media did not finish uploading. Please try again.');
+        }
       }
 
       const postData: CreateDocument<CommunityPost> = {
@@ -349,26 +356,25 @@ export const PostForm: React.FC<PostFormProps> = ({
         {/* User info and text input */}
         <div style={{ display: 'flex', gap: '16px' }}>
           {/* Avatar */}
-          {userPhotoURL ? (
-            <img
-              src={userPhotoURL}
-              alt={userName}
-              style={{ width: '44px', height: '44px', borderRadius: '50%', objectFit: 'cover', flexShrink: 0 }}
-            />
-          ) : (
-            <div style={{
-              width: '44px',
-              height: '44px',
-              borderRadius: '50%',
-              backgroundColor: '#374151',
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              flexShrink: 0
-            }}>
-              <span style={{ fontSize: '16px', fontWeight: 500, color: '#9CA3AF' }}>{userName.charAt(0)}</span>
-            </div>
-          )}
+          <SafeImage
+            src={userPhotoURL}
+            alt={userName}
+            style={{ width: '44px', height: '44px', borderRadius: '50%', objectFit: 'cover', flexShrink: 0 }}
+            fallback={
+              <div style={{
+                width: '44px',
+                height: '44px',
+                borderRadius: '50%',
+                backgroundColor: '#374151',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                flexShrink: 0
+              }}>
+                <span style={{ fontSize: '16px', fontWeight: 500, color: '#9CA3AF' }}>{userName.charAt(0)}</span>
+              </div>
+            }
+          />
 
           {/* Text input */}
           <textarea

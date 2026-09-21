@@ -9,7 +9,6 @@ import {
   Grid,
   Heading,
   HStack,
-  Image,
   Input,
   SimpleGrid,
   Spinner,
@@ -42,6 +41,7 @@ import type {
   TracklistItem,
   UpdateDocument,
 } from '../../../lib/schema'
+import { SafeImage } from '@/components/ui/SafeImage'
 
 const MotionBox = motion.create(Box)
 
@@ -575,7 +575,7 @@ function RadioCard({
       overflow="hidden"
     >
       <Grid templateColumns={{ base: '1fr', sm: '120px minmax(0, 1fr)', md: '150px minmax(0, 1fr)' }}>
-        <Image src={content.coverImage || fallbackCoverImage} alt={content.title} w="full" h="full" minH={{ base: '180px', sm: '154px' }} objectFit="cover" />
+        <SafeImage src={content.coverImage || fallbackCoverImage} alt={content.title} w="full" h="full" minH={{ base: '180px', sm: '154px' }} objectFit="cover" />
         <Flex direction="column" p={5} gap={3} minW={0}>
           <HStack gap={2} flexWrap="wrap">
             <Badge bg={content.isPublished !== false ? 'green.500' : 'yellow.500'} color={content.isPublished !== false ? 'white' : 'black'} borderRadius="full">

@@ -5,6 +5,8 @@ import { motion, AnimatePresence } from 'framer-motion';
 import { clsx } from 'clsx';
 import { twMerge } from 'tailwind-merge';
 import type { Quest, MediaType, CreateDocument, QuestSubmission } from '../../../../lib/schema';
+import { uploadMultiple, STORAGE_PATHS } from '../../../../lib/storage';
+import { assertPersistentMediaUrls } from '../../../../lib/media';
 
 const cn = (...inputs: (string | undefined | null | false)[]) => twMerge(clsx(inputs));
 
@@ -270,9 +272,10 @@ export const QuestSubmissionForm: React.FC<QuestSubmissionFormProps> = ({
     setIsSubmitting(true);
     setError(null);
 
+    let progressInterval: ReturnType<typeof setInterval> | undefined;
+
     try {
-      // Simulate upload progress
-      const progressInterval = setInterval(() => {
+      progressInterval = setInterval(() => {
         setUploadProgress((prev) => {
           if (prev >= 90) {
             clearInterval(progressInterval);
@@ -282,9 +285,28 @@ export const QuestSubmissionForm: React.FC<QuestSubmissionFormProps> = ({
         });
       }, 200);
 
-      // In a real implementation, you would upload files to storage here
-      // and get back URLs. For now, we'll use placeholder URLs.
-      const mediaUrls = files.map((f) => f.url);
+      // The previews are object URLs that die with this tab, so the files have
+      // to reach Storage before anything is written to Firestore.
+      const uploadResult = await uploadMultiple(
+        files.map((f) => f.file),
+        `${STORAGE_PATHS.QUESTS}/${quest.id}`,
+        { compress: true }
+      );
+
+      if (!uploadResult.success) {
+        const failedUpload = uploadResult.results.find((result) => !result.success);
+        throw new Error(
+          failedUpload?.error?.message ||
+            uploadResult.error?.message ||
+            'Failed to upload files'
+        );
+      }
+
+      const mediaUrls = assertPersistentMediaUrls(uploadResult.urls, 'This submission');
+
+      if (mediaUrls.length !== files.length) {
+        throw new Error('Some media did not finish uploading. Please try again.');
+      }
 
       const submissionData: CreateDocument<QuestSubmission> = {
         questId: quest.id,
@@ -295,7 +317,7 @@ export const QuestSubmissionForm: React.FC<QuestSubmissionFormProps> = ({
         content: content.trim(),
         mediaUrls,
         mediaType: files[0]?.type || 'image',
-        thumbnailUrl: files[0]?.url,
+        thumbnailUrl: mediaUrls[0],
         reactions: {},
         reactionsCount: 0,
         commentsCount: 0,
@@ -322,7 +344,9 @@ export const QuestSubmissionForm: React.FC<QuestSubmissionFormProps> = ({
       }, 500);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to submit. Please try again.');
+      setUploadProgress(0);
     } finally {
+      clearInterval(progressInterval);
       setIsSubmitting(false);
     }
   };

@@ -12,7 +12,6 @@ import {
   Grid,
   Heading,
   HStack,
-  Image,
   SimpleGrid,
   Spinner,
   Text,
@@ -27,6 +26,7 @@ import { Footer } from '@/components/layout/Footer'
 import { useAuth } from '@/contexts/AuthContext'
 import { useCollection } from '@/hooks/useFirestore'
 import type { Exhibition as FirebaseExhibition } from '../../lib/schema'
+import { SafeImage } from '@/components/ui/SafeImage'
 
 const MotionBox = motion.create(Box)
 
@@ -172,7 +172,7 @@ function ExhibitionCard({ exhibition, index }: { exhibition: Exhibition; index: 
       >
         <AspectRatio ratio={16 / 10}>
           <Box overflow="hidden">
-            <Image
+            <SafeImage
               src={exhibition.coverImage}
               alt={exhibition.title}
               w="full"
@@ -334,7 +334,7 @@ function FeaturedExhibition({ exhibition }: { exhibition: Exhibition }) {
                 borderColor="gray.900"
                 bg="gray.800"
               >
-                <Image src={image.src} alt="" w="full" h="full" objectFit="cover" />
+                <SafeImage src={image.src} alt="" w="full" h="full" objectFit="cover" />
               </Box>
             ))}
             {remainingWorks > 0 && (
@@ -398,7 +398,7 @@ function FeaturedExhibition({ exhibition }: { exhibition: Exhibition }) {
         </Flex>
 
         <Box position="relative" minH={{ base: '320px', md: '420px', lg: 'auto' }}>
-          <Image
+          <SafeImage
             src={exhibition.coverImage}
             alt={exhibition.title}
             position="absolute"

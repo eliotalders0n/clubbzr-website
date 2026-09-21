@@ -16,6 +16,7 @@ import {
 import { useAuth } from '@/contexts/AuthContext'
 import { addToArray, removeFromArray } from '../../../../lib/firestore'
 import type { PortfolioItem, ArtMedium } from '../../../../lib/schema'
+import { SafeImage } from '@/components/ui/SafeImage'
 
 interface PortfolioGalleryProps {
   items: PortfolioItem[]
@@ -70,7 +71,7 @@ function MediaRenderer({ item, isActive }: { item: PortfolioItem; isActive: bool
   }
 
   return (
-    <img
+    <SafeImage
       src={mediaUrl}
       alt={item.title}
       className="max-h-[62vh] max-w-full rounded-xl object-contain md:max-h-[calc(100vh-230px)]"
@@ -457,7 +458,7 @@ export const PortfolioGallery: React.FC<PortfolioGalleryProps> = ({
                   }`}
                   whileTap={{ scale: 0.96 }}
                 >
-                  <img src={item.thumbnailUrl} alt={item.title} className="h-full w-full object-cover" />
+                  <SafeImage src={item.thumbnailUrl} alt={item.title} className="h-full w-full object-cover" />
                 </motion.button>
               ))}
             </div>
@@ -485,7 +486,7 @@ export const PortfolioGallery: React.FC<PortfolioGalleryProps> = ({
                     <div className="grid grid-cols-3 gap-2">
                       {currentItem.mediaUrls.slice(0, 6).map((url, index) => (
                         <div key={`${url}-${index}`} className="aspect-square overflow-hidden rounded-lg bg-white/[0.06]">
-                          <img src={url} alt="" className="h-full w-full object-cover" />
+                          <SafeImage src={url} alt="" className="h-full w-full object-cover" />
                         </div>
                       ))}
                     </div>

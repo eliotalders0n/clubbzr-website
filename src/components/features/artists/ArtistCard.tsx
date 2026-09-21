@@ -5,6 +5,7 @@ import { motion, useMotionValue, useTransform, useSpring } from 'framer-motion';
 import { clsx } from 'clsx';
 import { twMerge } from 'tailwind-merge';
 import type { Artist, ArtMedium, PortfolioItem } from '../../../../lib/schema';
+import { SafeImage } from '@/components/ui/SafeImage';
 
 const cn = (...inputs: (string | undefined | null | false)[]) => twMerge(clsx(inputs));
 
@@ -82,7 +83,7 @@ const PortfolioPreview: React.FC<{
             }}
             transition={{ delay: index * 0.05, duration: 0.2 }}
           >
-            <img
+            <SafeImage
               src={item.thumbnailUrl}
               alt={item.title}
               className="w-full h-full object-cover"
@@ -176,19 +177,18 @@ export const ArtistCard: React.FC<ArtistCardProps> = ({
 
       {/* Avatar section */}
       <div className="relative aspect-square overflow-hidden">
-        {artist.photoURL ? (
-          <img
-            src={artist.photoURL}
-            alt={displayName}
-            className="w-full h-full object-cover transition-transform duration-500 group-hover:scale-110"
-          />
-        ) : (
-          <div className="w-full h-full bg-gradient-to-br from-bzr-gray-800 to-bzr-gray-900 flex items-center justify-center">
-            <span className="text-6xl font-display text-bzr-gray-600">
-              {displayName.charAt(0).toUpperCase()}
-            </span>
-          </div>
-        )}
+        <SafeImage
+          src={artist.photoURL}
+          alt={displayName}
+          className="w-full h-full object-cover transition-transform duration-500 group-hover:scale-110"
+          fallback={
+            <div className="w-full h-full bg-gradient-to-br from-bzr-gray-800 to-bzr-gray-900 flex items-center justify-center">
+              <span className="text-6xl font-display text-bzr-gray-600">
+                {displayName.charAt(0).toUpperCase()}
+              </span>
+            </div>
+          }
+        />
 
         {/* Gradient overlay */}
         <div className="absolute inset-0 bg-gradient-to-t from-bzr-black via-bzr-black/20 to-transparent" />

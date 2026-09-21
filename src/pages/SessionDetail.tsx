@@ -10,7 +10,6 @@ import {
   Heading,
   Text,
   Button,
-  Image,
   VStack,
   HStack,
   Badge,
@@ -40,6 +39,7 @@ import type { SessionReflection, SessionRegistrationStatus, SessionType } from '
 
 // Fallback image
 import eventImgFallback from '@/assets/images/events/IMG_9074.jpeg'
+import { SafeImage } from '@/components/ui/SafeImage'
 
 const MotionBox = motion.create(Box)
 
@@ -455,7 +455,7 @@ export default function SessionDetail() {
         <Box position="relative" minH={{ base: '50vh', md: '60vh' }} overflow="hidden">
           {/* Background Image */}
           <Box position="absolute" inset={0}>
-            <Image
+            <SafeImage
               src={session.coverImage || eventImgFallback}
               alt={session.title}
               objectFit="cover"

@@ -10,7 +10,6 @@ import {
   Heading,
   Text,
   Button,
-  Image,
   HStack,
   SimpleGrid,
   AspectRatio,
@@ -27,6 +26,7 @@ import type { Session, SessionType } from '../../lib/schema'
 
 // Fallback image for sessions without cover
 import eventImgFallback from '@/assets/images/events/IMG_9074.jpeg'
+import { SafeImage } from '@/components/ui/SafeImage'
 
 const MotionBox = motion.create(Box)
 
@@ -70,7 +70,7 @@ function SessionCard({ session }: { session: Session }) {
         cursor="pointer"
       >
         <AspectRatio ratio={16 / 9}>
-          <Image
+          <SafeImage
             src={session.coverImage || eventImgFallback}
             alt={session.title}
             objectFit="cover"
@@ -307,7 +307,7 @@ export default function Sessions() {
                   >
                     <Grid templateColumns={{ base: '1fr', md: 'repeat(2, 1fr)' }}>
                       <AspectRatio ratio={16 / 9} minH={{ md: '300px' }}>
-                        <Image
+                        <SafeImage
                           src={featuredSession.coverImage || eventImgFallback}
                           alt={featuredSession.title}
                           objectFit="cover"

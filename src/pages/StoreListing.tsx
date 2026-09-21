@@ -1,12 +1,13 @@
 import { useRef, useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
-import { Box, Flex, Grid, Heading, Image, Text } from '@chakra-ui/react'
+import { Box, Flex, Grid, Heading, Text } from '@chakra-ui/react'
 import { useAuth } from '@/contexts/AuthContext'
 import { useStoreQuery } from '@/hooks/useStoreQuery'
 import { StoreLoading, StoreNotice, StoreShell } from '@/components/features/store/StoreShell'
 import { StoreCatalog } from '@/components/features/store/StoreCatalog'
 import { BriefFields } from '@/components/features/store/BriefFields'
 import { STORE_SHOP_NAME, storeAmount, storeCall, storeKey, storeLabels, type CheckoutInput, type PaymentRail, type PriceSnapshot, type StoreConfig, type StoreListing as Listing } from '../../lib/store'
+import { SafeImage } from '@/components/ui/SafeImage'
 
 function Gallery({ listing }: { listing: Listing }) {
   const views = [listing.coverImage, ...listing.images].filter((image, index, all) => image && all.indexOf(image) === index)
@@ -17,7 +18,7 @@ function Gallery({ listing }: { listing: Listing }) {
         fetch and decode of a full-size image. The active view sits in normal
         flow and sets the frame height; the rest are stacked behind it. */}
     <Box position="relative" bg="gray.900" rounded="xl" overflow="hidden">
-      {views.map((image) => <Image
+      {views.map((image) => <SafeImage
         key={image}
         src={image}
         alt={image === current ? listing.title : ''}
@@ -49,7 +50,7 @@ function Gallery({ listing }: { listing: Listing }) {
       transition="opacity 0.2s ease, border-color 0.2s ease"
       _hover={{ opacity: 1 }}
       _focusVisible={{ outline: '2px solid', outlineColor: 'brand.500', outlineOffset: '2px' }}
-    ><Image src={image} alt="" boxSize="100px" objectFit="cover" /></Box>)}</Flex>}
+    ><SafeImage src={image} alt="" boxSize="100px" objectFit="cover" /></Box>)}</Flex>}
   </Box>
 }
 

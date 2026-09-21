@@ -5,6 +5,7 @@ import { Link, useLocation } from 'react-router-dom';
 import { motion, AnimatePresence, Variants } from 'framer-motion';
 import { cn } from '../../utils/cn';
 import { MagneticButton } from '../animations/MagneticButton';
+import { SafeImage } from '@/components/ui/SafeImage';
 
 // Navigation link type
 export interface NavLink {
@@ -256,19 +257,18 @@ export const MobileNavigation: React.FC<MobileNavigationProps> = ({
               {user ? (
                 <div className="space-y-4">
                   <div className="flex items-center gap-3">
-                    {user.photoURL ? (
-                      <img
-                        src={user.photoURL}
-                        alt=""
-                        className="w-12 h-12 rounded-full object-cover"
-                      />
-                    ) : (
-                      <div className="w-12 h-12 rounded-full bg-bzr-blue flex items-center justify-center">
-                        <span className="text-lg font-medium text-white">
-                          {(user.displayName || user.email || 'U')[0].toUpperCase()}
-                        </span>
-                      </div>
-                    )}
+                    <SafeImage
+                      src={user.photoURL}
+                      alt=""
+                      className="w-12 h-12 rounded-full object-cover"
+                      fallback={
+                        <div className="w-12 h-12 rounded-full bg-bzr-blue flex items-center justify-center">
+                          <span className="text-lg font-medium text-white">
+                            {(user.displayName || user.email || 'U')[0].toUpperCase()}
+                          </span>
+                        </div>
+                      }
+                    />
                     <div>
                       <p className="text-lg font-medium text-bzr-white">
                         {user.displayName || 'User'}

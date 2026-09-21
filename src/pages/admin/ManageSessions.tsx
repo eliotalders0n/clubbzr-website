@@ -13,7 +13,6 @@ import {
   Badge,
   Input,
   Textarea,
-  Image,
   Spinner,
   Menu,
   Portal,
@@ -49,6 +48,7 @@ import type {
   UpdateDocument,
   User as FirestoreUser,
 } from '../../../lib/schema'
+import { SafeImage } from '@/components/ui/SafeImage'
 
 const MotionBox = motion.create(Box)
 
@@ -1172,13 +1172,18 @@ function SessionCard({
   return (
     <MotionBox initial={{ opacity: 0, y: 18 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, scale: 0.96 }} transition={{ delay: index * 0.04 }} layout>
       <Box bg="gray.900" border="1px solid" borderColor="whiteAlpha.100" borderRadius="2xl" overflow="hidden" role="group" _hover={{ borderColor: 'whiteAlpha.200' }}>
-        {session.coverImage ? (
-          <Image src={session.coverImage} alt={session.title} w="full" h="160px" objectFit="cover" />
-        ) : (
-          <Flex h="160px" bg="whiteAlpha.50" align="center" justify="center" color="whiteAlpha.400">
-            <CalendarDays size={42} />
-          </Flex>
-        )}
+        <SafeImage
+          src={session.coverImage}
+          alt={session.title}
+          w="full"
+          h="160px"
+          objectFit="cover"
+          fallback={
+            <Flex h="160px" bg="whiteAlpha.50" align="center" justify="center" color="whiteAlpha.400">
+              <CalendarDays size={42} />
+            </Flex>
+          }
+        />
         <Box p={5}>
           <HStack gap={2} mb={3}>
             <SessionTypeBadge type={session.type} />
@@ -1558,13 +1563,19 @@ function RegistrationRow({
     <Box px={{ base: 4, md: 5 }} py={{ base: 4, lg: 4.5 }} borderBottom="1px solid" borderColor="whiteAlpha.100" _last={{ borderBottom: 0 }} _hover={{ bg: 'whiteAlpha.25' }} transition="background 160ms ease">
       <Box display={{ base: 'flex', lg: 'grid' }} flexDirection="column" gridTemplateColumns="minmax(205px,1.35fr) minmax(125px,.7fr) minmax(145px,.8fr) minmax(160px,.9fr) minmax(180px,1fr) minmax(120px,.55fr)" gap={{ base: 4, lg: 4 }} alignItems="center">
         <HStack gap={3} minW={0}>
-          {registration.photoURL ? (
-            <Image src={registration.photoURL} alt={registration.displayName} boxSize="44px" borderRadius="full" objectFit="cover" flexShrink={0} />
-          ) : (
-            <Flex boxSize="44px" borderRadius="full" bg="brand.500/18" color="brand.200" align="center" justify="center" flexShrink={0}>
-              <Users size={18} />
-            </Flex>
-          )}
+          <SafeImage
+            src={registration.photoURL}
+            alt={registration.displayName}
+            boxSize="44px"
+            borderRadius="full"
+            objectFit="cover"
+            flexShrink={0}
+            fallback={
+              <Flex boxSize="44px" borderRadius="full" bg="brand.500/18" color="brand.200" align="center" justify="center" flexShrink={0}>
+                <Users size={18} />
+              </Flex>
+            }
+          />
           <Box minW={0}>
             <Text color="white" fontWeight="semibold" overflow="hidden" textOverflow="ellipsis" whiteSpace="nowrap">{registration.displayName}</Text>
             <Text color="whiteAlpha.500" fontSize="xs" overflow="hidden" textOverflow="ellipsis" whiteSpace="nowrap">{registration.email || registration.userId}</Text>
@@ -2013,7 +2024,7 @@ function SessionFormFields({
         <VStack align="stretch" gap={3}>
           {coverImage && (
             <Box position="relative" overflow="hidden" borderRadius="xl" border="1px solid" borderColor="whiteAlpha.150" bg="whiteAlpha.50">
-              <Image src={coverImage} alt="Session cover preview" w="full" h="112px" objectFit="cover" />
+              <SafeImage src={coverImage} alt="Session cover preview" w="full" h="112px" objectFit="cover" />
               <Button
                 type="button"
                 position="absolute"
@@ -2098,7 +2109,7 @@ function SessionFormFields({
             <SimpleGrid columns={{ base: 2, md: 3 }} gap={3}>
               {galleryItems.map((item) => (
                 <Box key={item.id} position="relative" overflow="hidden" borderRadius="xl" border="1px solid" borderColor="whiteAlpha.150" bg="whiteAlpha.50">
-                  <Image src={item.thumbnailUrl || item.url} alt={item.caption || 'Session gallery image'} w="full" h="92px" objectFit="cover" />
+                  <SafeImage src={item.thumbnailUrl || item.url} alt={item.caption || 'Session gallery image'} w="full" h="92px" objectFit="cover" />
                   <Button
                     type="button"
                     position="absolute"

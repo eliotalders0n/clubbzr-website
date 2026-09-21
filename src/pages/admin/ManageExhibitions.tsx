@@ -9,7 +9,6 @@ import {
   Grid,
   Heading,
   HStack,
-  Image,
   Input,
   SimpleGrid,
   Spinner,
@@ -44,6 +43,7 @@ import type {
   ExhibitionArtwork,
   UpdateDocument,
 } from '../../../lib/schema'
+import { SafeImage } from '@/components/ui/SafeImage'
 
 const MotionBox = motion.create(Box)
 
@@ -595,7 +595,7 @@ function ExhibitionFormFields({
 
         {coverImage && (
           <Box mt={3} position="relative" overflow="hidden" borderRadius="xl" border="1px solid" borderColor="whiteAlpha.150" bg="whiteAlpha.50">
-            <Image src={coverImage} alt="Exhibition cover preview" w="full" h="150px" objectFit="cover" />
+            <SafeImage src={coverImage} alt="Exhibition cover preview" w="full" h="150px" objectFit="cover" />
             <Button
               type="button"
               position="absolute"
@@ -693,7 +693,7 @@ function ExhibitionCard({
   return (
     <MotionBox whileHover={{ y: -4 }} bg="gray.900" border="1px solid" borderColor="whiteAlpha.100" borderRadius="2xl" overflow="hidden">
       <Box position="relative" h="180px" bg="whiteAlpha.100">
-        <Image src={exhibition.coverImage || fallbackCoverImage} alt={exhibition.title} w="full" h="full" objectFit="cover" />
+        <SafeImage src={exhibition.coverImage || fallbackCoverImage} alt={exhibition.title} w="full" h="full" objectFit="cover" />
         <Badge position="absolute" top={3} right={3} bg={statusColor.bg} color={statusColor.color} borderRadius="full" px={3}>
           {status}
         </Badge>

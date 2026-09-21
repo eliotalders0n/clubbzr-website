@@ -37,6 +37,7 @@ import { createDocumentWithId, updateDocument } from '../../lib/firestore'
 import { upsertPublicProfile } from '../../lib/publicProfiles'
 import { STORAGE_PATHS, uploadFileSimple, validateFile, VALIDATION_PRESETS } from '../../lib/storage'
 import type { CreativePassport } from '../../lib/schema'
+import { SafeImage } from '@/components/ui/SafeImage'
 
 type Feedback = { type: 'success' | 'error'; message: string } | null
 
@@ -448,17 +449,16 @@ function ProfileFormScreen({
                     border="1px solid"
                     borderColor="whiteAlpha.200"
                   >
-                    {avatarUrl ? (
-                      <img
-                        src={avatarUrl}
-                        alt={form.displayName || 'Profile'}
-                        style={{ width: '100%', height: '100%', objectFit: 'cover' }}
-                      />
-                    ) : (
-                      <Text color="white" fontSize="3xl" fontWeight="bold">
-                        {(form.displayName || user?.email || firebaseUser.email || 'U').charAt(0).toUpperCase()}
-                      </Text>
-                    )}
+                    <SafeImage
+                      src={avatarUrl}
+                      alt={form.displayName || 'Profile'}
+                      style={{ width: '100%', height: '100%', objectFit: 'cover' }}
+                      fallback={
+                        <Text color="white" fontSize="3xl" fontWeight="bold">
+                          {(form.displayName || user?.email || firebaseUser.email || 'U').charAt(0).toUpperCase()}
+                        </Text>
+                      }
+                    />
                   </Flex>
 
                   <Box>

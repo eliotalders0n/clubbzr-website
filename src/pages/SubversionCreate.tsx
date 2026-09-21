@@ -10,7 +10,6 @@ import {
   Grid,
   Heading,
   HStack,
-  Image,
   Input,
   SimpleGrid,
   Spinner,
@@ -28,6 +27,7 @@ import { useDocument } from '@/hooks/useFirestore'
 import { createDocument, updateDocument } from '../../lib/firestore'
 import { STORAGE_PATHS, uploadFileSimple, validateFile, VALIDATION_PRESETS } from '../../lib/storage'
 import type { Artist, Artwork, ArtMedium, CreateDocument, UpdateDocument } from '../../lib/schema'
+import { SafeImage } from '@/components/ui/SafeImage'
 
 type Feedback = { type: 'error' | 'success'; message: string } | null
 
@@ -314,14 +314,19 @@ export default function SubversionCreate() {
             <Grid templateColumns={{ base: '1fr', lg: '320px minmax(0, 1fr)' }} gap={{ base: 6, lg: 8 }}>
               <Box>
                 <Box aspectRatio={1} borderRadius="xl" overflow="hidden" bg="gray.800" border="1px solid" borderColor="whiteAlpha.200" display="flex" alignItems="center" justifyContent="center" mb={4}>
-                  {imageUrl ? (
-                    <Image src={imageUrl} alt={form.title || 'Subversion preview'} w="full" h="full" objectFit="cover" />
-                  ) : (
-                    <VStack gap={2} color="whiteAlpha.400">
-                      <ImagePlus size={30} />
-                      <Text fontSize="sm">Subversion preview</Text>
-                    </VStack>
-                  )}
+                  <SafeImage
+                    src={imageUrl}
+                    alt={form.title || 'Subversion preview'}
+                    w="full"
+                    h="full"
+                    objectFit="cover"
+                    fallback={
+                      <VStack gap={2} color="whiteAlpha.400">
+                        <ImagePlus size={30} />
+                        <Text fontSize="sm">Subversion preview</Text>
+                      </VStack>
+                    }
+                  />
                 </Box>
                 <Input ref={inputRef} type="file" accept="image/jpeg,image/png,image/webp,image/gif" display="none" onChange={handleInput} />
                 <HStack gap={3} flexWrap="wrap">

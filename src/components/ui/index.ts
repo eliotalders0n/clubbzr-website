@@ -86,3 +86,7 @@ export type {
   CardSkeletonProps,
   LoaderSize,
 } from './Loader';
+
+// SafeImage
+export { SafeImage } from './SafeImage';
+export type { SafeImageProps } from './SafeImage';

@@ -37,6 +37,7 @@ import { Footer } from '@/components/layout/Footer'
 import { CommunityPost, CommunityPostSkeleton, PostForm, WallActivityCard, type WallActivityItem } from '@/components/features/community'
 import { Modal } from '@/components/ui/Modal'
 import { useCollection, useInfinitePagination } from '@/hooks'
+import { hasRenderableMedia } from '../../lib/media'
 import { useAuth } from '@/contexts/AuthContext'
 import { db } from '../../lib/config'
 import { createDocument, deleteDocument, executeTransaction, getDocumentCount, updateDocument } from '../../lib/firestore'
@@ -60,6 +61,7 @@ import type {
   ReactionType,
   Reactions,
 } from '../../lib/schema'
+import { SafeImage } from '@/components/ui/SafeImage'
 
 const MotionBox = motion.create(Box)
 const POST_PAGE_SIZE = 8
@@ -532,16 +534,39 @@ export default function CommunityWall() {
     return new Map((quests as Quest[]).map((quest) => [quest.id, quest]))
   }, [quests])
 
+  // Media that turned out to be unreachable once the browser tried to fetch
+  // it. Only the browser can discover this, so the feed collects the misses
+  // and drops those items rather than showing a hole where an image should be.
+  const [unavailableMediaItemIds, setUnavailableMediaItemIds] = useState<Set<string>>(
+    () => new Set()
+  )
+
+  const handleMediaUnavailable = useCallback((itemId: string) => {
+    setUnavailableMediaItemIds((current) => {
+      if (current.has(itemId)) return current
+      const next = new Set(current)
+      next.add(itemId)
+      return next
+    })
+  }, [])
+
   const feedItems = useMemo<FeedItem[]>(() => {
-    const items: FeedItem[] = posts.map((post) => ({
-      type: 'post',
-      id: `post:${post.id}`,
-      timestamp: toMillis(post.createdAt),
-      post,
-    }))
+    const items: FeedItem[] = posts
+      .filter((post) => hasRenderableMedia(post) && !unavailableMediaItemIds.has(`post:${post.id}`))
+      .map((post) => ({
+        type: 'post',
+        id: `post:${post.id}`,
+        timestamp: toMillis(post.createdAt),
+        post,
+      }))
 
     ;(rawQuestSubmissions as QuestSubmission[])
       .filter((submission) => submission.approved !== false && submission.showOnWall !== false)
+      .filter(
+        (submission) =>
+          hasRenderableMedia(submission) &&
+          !unavailableMediaItemIds.has(`quest_completed:${submission.id}`)
+      )
       .forEach((submission) => {
         const quest = questMap.get(submission.questId)
         const voteState = localSubmissionVotes[submission.id]
@@ -576,7 +601,15 @@ export default function CommunityWall() {
       .filter((exhibition) => {
         const isPublished = (exhibition as Exhibition & { isPublished?: boolean }).isPublished
         const endTime = toMillis(exhibition.endDate)
-        return isPublished !== false && (!endTime || endTime >= wallLoadedAtMs)
+        const coverIsRenderable =
+          !exhibition.coverImage || hasRenderableMedia({ thumbnailUrl: exhibition.coverImage })
+
+        return (
+          isPublished !== false &&
+          (!endTime || endTime >= wallLoadedAtMs) &&
+          coverIsRenderable &&
+          !unavailableMediaItemIds.has(`exhibition:${exhibition.id}`)
+        )
       })
       .forEach((exhibition) => {
         const startTime = toMillis(exhibition.startDate)
@@ -590,7 +623,15 @@ export default function CommunityWall() {
       })
 
     return items.sort((a, b) => b.timestamp - a.timestamp)
-  }, [localSubmissionVotes, posts, questMap, rawExhibitions, rawQuestSubmissions, wallLoadedAtMs])
+  }, [
+    localSubmissionVotes,
+    posts,
+    questMap,
+    rawExhibitions,
+    rawQuestSubmissions,
+    unavailableMediaItemIds,
+    wallLoadedAtMs,
+  ])
 
   const recentBadgeAwardsCount = useMemo(() => {
     return feedItems.filter((item) => item.type === 'badge_earned').length
@@ -1111,7 +1152,7 @@ export default function CommunityWall() {
                       border="1px solid"
                       borderColor="whiteAlpha.200"
                     >
-                      <img
+                      <SafeImage
                         src={currentUserPhoto}
                         alt=""
                         className="h-full w-full object-cover"
@@ -1314,6 +1355,7 @@ export default function CommunityWall() {
                             item={item}
                             currentUserId={currentUserId}
                             onSubmissionVote={handleSubmissionVote}
+                            onMediaUnavailable={handleMediaUnavailable}
                           />
                         </MotionBox>
                       )
@@ -1356,6 +1398,7 @@ export default function CommunityWall() {
                           onLoadMoreComments={() => loadPostComments(post.id)}
                           onEdit={isPlatformPost ? undefined : () => handleEditPost(post.id, post.content)}
                           onDelete={isPlatformPost ? undefined : () => handleDeletePost(post.id)}
+                          onMediaUnavailable={(postId) => handleMediaUnavailable(`post:${postId}`)}
                           isFollowingAuthor={followedMemberIds.has(post.userId)}
                           onToggleFollow={!isPlatformPost && post.userId !== currentUserId ? () => handleToggleFollow(post.userId) : undefined}
                           onShare={() => {

@@ -1,7 +1,7 @@
 'use client'
 
 import { useEffect, useMemo, useRef, useState, type CSSProperties, type FormEvent, type ReactNode } from 'react'
-import { Badge, Box, Button, Checkbox, Flex, Grid, Heading, HStack, Image, Input, SimpleGrid, Table, Text, VStack } from '@chakra-ui/react'
+import { Badge, Box, Button, Checkbox, Flex, Grid, Heading, HStack, Input, SimpleGrid, Table, Text, VStack } from '@chakra-ui/react'
 import { AnimatePresence, motion } from 'framer-motion'
 import { httpsCallable } from 'firebase/functions'
 import { Activity, AlertTriangle, Ban, Check, ChevronLeft, ChevronRight, CircleOff, Clock3, Copy, Download, ExternalLink, KeyRound, MoreHorizontal, Search, Send, UserPlus, UsersRound, X } from 'lucide-react'
@@ -10,6 +10,7 @@ import { useRealtimeCollection } from '@/hooks'
 import { PERMISSION_LABELS, ROLE_DEFINITIONS, roleLabel } from '@/lib/rbac'
 import { functions } from '../../../lib/config'
 import type { AuditLog, CreativePassport, QuestSubmission, SessionRegistration, User as FirestoreUser, UserAccountStatus, UserRole } from '../../../lib/schema'
+import { SafeImage } from '@/components/ui/SafeImage'
 
 const MotionBox = motion.create(Box)
 const saveUserFn = httpsCallable(functions, 'adminSaveUser')
@@ -64,7 +65,7 @@ export default function ManageUsers() {
 }
 
 function SummaryMetric({ icon, value, label, color }: { icon: ReactNode; value: number; label: string; color: string }) { return <HStack px={4} py={4} gap={3} borderRight="1px solid rgba(255,255,255,.07)" _last={{ borderRight: 0 }}><Box color={color}>{icon}</Box><Box><Text color="white" fontWeight="bold" lineHeight={1}>{value}</Text><Text color="whiteAlpha.500" fontSize="xs" mt={1}>{label}</Text></Box></HStack> }
-function Avatar({ user, size = 42 }: { user: ManagedUser; size?: number }) { return <Flex w={`${size}px`} h={`${size}px`} minW={`${size}px`} overflow="hidden" borderRadius="full" bg="whiteAlpha.100" border="1px solid rgba(255,255,255,.08)" align="center" justify="center" color="whiteAlpha.700" fontWeight="bold">{user.avatar ? <Image src={user.avatar} alt="" w="full" h="full" objectFit="cover" /> : user.displayName.charAt(0).toUpperCase()}</Flex> }
+function Avatar({ user, size = 42 }: { user: ManagedUser; size?: number }) { return <Flex w={`${size}px`} h={`${size}px`} minW={`${size}px`} overflow="hidden" borderRadius="full" bg="whiteAlpha.100" border="1px solid rgba(255,255,255,.08)" align="center" justify="center" color="whiteAlpha.700" fontWeight="bold"><SafeImage src={user.avatar} alt="" w="full" h="full" objectFit="cover" fallback={user.displayName.charAt(0).toUpperCase()} /></Flex> }
 function UserIdentity({ user, onOpen }: { user: ManagedUser; onOpen: (event: React.MouseEvent<HTMLButtonElement>) => void }) { return <Button onClick={onOpen} variant="ghost" h="auto" p={0} color="white" textAlign="left"><HStack gap={3}><Avatar user={user} /><Box minW={0}><Text fontWeight="semibold" fontSize="sm" truncate>{user.displayName}</Text><Text color="whiteAlpha.450" fontSize="xs" truncate>@{user.username}</Text></Box></HStack></Button> }
 function RoleBadge({ role }: { role: UserRole }) { return <Badge bg={role === 'admin' ? 'rgba(255,107,53,.14)' : 'rgba(255,255,255,.07)'} color={role === 'admin' ? '#ff9b76' : 'rgba(255,255,255,.74)'} border="1px solid rgba(255,255,255,.09)" px={2.5} py={1} borderRadius="full" textTransform="none">{roleLabel(role)}</Badge> }
 function StateCell({ user }: { user: ManagedUser }) { const colors: Record<UserState, string> = { active: '#65c466', onboarding: '#e4b93f', invited: '#77a7f5', suspended: '#ef6a62', closed: '#8b8b8b' }; return <Box><HStack gap={2}><Box w={2} h={2} borderRadius="full" bg={colors[user.state]} /><Text color={colors[user.state]} fontSize="sm">{stateLabels[user.state]}</Text></HStack>{user.state === 'active' && <Text pl={4} color="whiteAlpha.400" fontSize="xs">In good standing</Text>}</Box> }

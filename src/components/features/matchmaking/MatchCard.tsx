@@ -5,6 +5,7 @@ import { motion, AnimatePresence } from 'framer-motion';
 import { clsx } from 'clsx';
 import { twMerge } from 'tailwind-merge';
 import type { ArtMedium } from '../../../../lib/schema';
+import { SafeImage } from '@/components/ui/SafeImage';
 
 const cn = (...inputs: (string | undefined | null | false)[]) => twMerge(clsx(inputs));
 
@@ -125,19 +126,18 @@ export const MatchCard: React.FC<MatchCardProps> = ({
             className="relative flex-shrink-0"
             whileHover={{ scale: 1.05 }}
           >
-            {match.photoURL ? (
-              <img
-                src={match.photoURL}
-                alt={match.name}
-                className="w-20 h-20 rounded-xl object-cover border-2 border-bzr-gray-700"
-              />
-            ) : (
-              <div className="w-20 h-20 rounded-xl bg-gradient-to-br from-bzr-blue to-bzr-lavender flex items-center justify-center border-2 border-bzr-gray-700">
-                <span className="text-2xl font-bold text-bzr-white">
-                  {match.name.charAt(0)}
-                </span>
-              </div>
-            )}
+            <SafeImage
+              src={match.photoURL}
+              alt={match.name}
+              className="w-20 h-20 rounded-xl object-cover border-2 border-bzr-gray-700"
+              fallback={
+                <div className="w-20 h-20 rounded-xl bg-gradient-to-br from-bzr-blue to-bzr-lavender flex items-center justify-center border-2 border-bzr-gray-700">
+                  <span className="text-2xl font-bold text-bzr-white">
+                    {match.name.charAt(0)}
+                  </span>
+                </div>
+              }
+            />
 
             {/* Status indicator */}
             {status === 'connected' && (

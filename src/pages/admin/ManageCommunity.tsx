@@ -13,7 +13,6 @@ import {
   SimpleGrid,
   Badge,
   Input,
-  Image,
   Spinner,
 } from '@chakra-ui/react'
 import { motion, AnimatePresence } from 'framer-motion'
@@ -34,6 +33,7 @@ import { AdminLayout } from '@/components/layout/AdminLayout'
 import { useCollection } from '@/hooks'
 import { deleteDocument, updateDocument } from '../../../lib/firestore'
 import type { Comment, CommunityPost, UpdateDocument } from '../../../lib/schema'
+import { SafeImage } from '@/components/ui/SafeImage'
 
 const MotionBox = motion.create(Box)
 
@@ -184,11 +184,16 @@ function Avatar({ post }: { post: CommunityPost }) {
       border="1px solid"
       borderColor="whiteAlpha.100"
     >
-      {post.userPhotoURL ? (
-        <Image src={post.userPhotoURL} alt={post.userName} w="100%" h="100%" objectFit="cover" />
-      ) : (
-        <Text color="whiteAlpha.800" fontWeight="bold">{initial}</Text>
-      )}
+      <SafeImage
+        src={post.userPhotoURL}
+        alt={post.userName}
+        w="100%"
+        h="100%"
+        objectFit="cover"
+        fallback={
+          <Text color="whiteAlpha.800" fontWeight="bold">{initial}</Text>
+        }
+      />
     </Box>
   )
 }
@@ -289,7 +294,7 @@ function PostCard({
         <SimpleGrid columns={{ base: 1, sm: Math.min(post.mediaUrls.length, 2) }} gap={3} mb={4}>
           {post.mediaUrls.slice(0, 2).map((url) => (
             <Box key={url} borderRadius="xl" overflow="hidden" bg="blackAlpha.300" aspectRatio="16/10">
-              <Image src={url} alt="" w="100%" h="100%" objectFit="cover" />
+              <SafeImage src={url} alt="" w="100%" h="100%" objectFit="cover" />
             </Box>
           ))}
         </SimpleGrid>

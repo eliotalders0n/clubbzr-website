@@ -12,7 +12,6 @@ import {
   Grid,
   Heading,
   HStack,
-  Image,
   Input,
   SimpleGrid,
   Slider,
@@ -41,6 +40,7 @@ import { useAuth } from '@/contexts/AuthContext'
 import { useCollection } from '@/hooks/useFirestore'
 import { addToArray, incrementField, removeFromArray } from '../../lib'
 import type { RadioContent, RadioContentType, TracklistItem } from '../../lib'
+import { SafeImage } from '@/components/ui/SafeImage'
 
 const MotionBox = motion.create(Box)
 
@@ -314,7 +314,7 @@ function PlayerPanel({
       <Grid templateColumns={{ base: '1fr', md: 'auto 1fr auto' }} gap={5} alignItems="center">
         <HStack gap={4} minW={0}>
           <Box w={16} h={16} borderRadius="xl" overflow="hidden" flexShrink={0} bg="whiteAlpha.100">
-            <Image src={content.coverImage} alt={content.title} w="full" h="full" objectFit="cover" />
+            <SafeImage src={content.coverImage} alt={content.title} w="full" h="full" objectFit="cover" />
           </Box>
           <Box minW={0}>
             <Text color="white" fontWeight="semibold" truncate>
@@ -438,7 +438,7 @@ function ContentCard({
     >
       <Grid templateColumns={{ base: '104px minmax(0, 1fr)', md: '144px minmax(0, 1fr)' }}>
         <Box position="relative" bg="whiteAlpha.100">
-          <Image src={content.coverImage} alt={content.title} w="full" h="full" minH={{ base: 36, md: 40 }} objectFit="cover" />
+          <SafeImage src={content.coverImage} alt={content.title} w="full" h="full" minH={{ base: 36, md: 40 }} objectFit="cover" />
           <Flex position="absolute" inset={0} align="center" justify="center" bg="blackAlpha.500" opacity={isCurrent ? 1 : 0} _groupHover={{ opacity: 1 }} transition="opacity 0.2s">
             <Button
               onClick={() => onPlay(content)}
@@ -826,7 +826,7 @@ export default function Radio() {
                 overflow="hidden"
               >
                 <AspectRatio ratio={1}>
-                  <Image src={currentContent.coverImage} alt={currentContent.title} objectFit="cover" />
+                  <SafeImage src={currentContent.coverImage} alt={currentContent.title} objectFit="cover" />
                 </AspectRatio>
               </MotionBox>
 
