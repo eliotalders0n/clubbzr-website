@@ -38,6 +38,7 @@ import eventImg5 from '@/assets/images/events/IMG_9814.jpeg'
 import eventImg6 from '@/assets/images/events/IMG_7447.jpeg'
 import logoWhite from '@/assets/logos/Club BZR logo (WHITE).png'
 import type { Quest, Session } from '../../lib/schema'
+import { getSessionSeatCount } from '../../lib/sessionRegistrations'
 import { SafeImage } from '@/components/ui/SafeImage'
 
 const MotionBox = motion.create(Box)
@@ -183,7 +184,7 @@ function getSessionLocation(session: Session) {
 
 function sessionToEvent(session: Session): EventSummary {
   const date = toDate(session.date)
-  const attendeeCount = session.attendees?.length || 0
+  const attendeeCount = getSessionSeatCount(session)
   const spotsLeft = typeof session.capacity === 'number' ? Math.max(session.capacity - attendeeCount, 0) : null
 
   return {

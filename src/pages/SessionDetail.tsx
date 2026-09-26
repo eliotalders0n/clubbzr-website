@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useMemo, type ReactNode } from 'react'
+import { useEffect, useRef, useState, useMemo, type ReactNode } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import {
   Box,
@@ -18,7 +18,7 @@ import {
 } from '@chakra-ui/react'
 import { motion } from 'framer-motion'
 import { Timestamp, arrayUnion, arrayRemove } from 'firebase/firestore'
-import { Copy, Map as MapIcon, MessageCircle, Navigation } from 'lucide-react'
+import { Copy, Map as MapIcon, MessageCircle, Minus, Navigation, Plus } from 'lucide-react'
 
 import { Header } from '@/components/layout/Header'
 import { Footer } from '@/components/layout/Footer'
@@ -27,9 +27,15 @@ import { OpenStreetArtMap, type MapVenue } from '@/components/map'
 import { useAuth } from '@/contexts/AuthContext'
 import { useDocument, useMutation } from '@/hooks/useFirestore'
 import {
+  buildAddAttendeePatch,
+  buildRemoveAttendeePatch,
   createSessionRegistration,
   getInitialRegistrationState,
+  getMaxTicketsPerRegistration,
+  getRegistrationTicketQuantity,
   getSessionRegistrationId,
+  getSessionSeatCount,
+  getSessionTicketTotal,
   getUserWhatsAppPhone,
   hasUserWhatsAppPhone,
   normalizeSessionRegistrationConfig,
@@ -107,6 +113,76 @@ function PendingRegistrationState({
   )
 }
 
+function TicketQuantityPicker({
+  value,
+  max,
+  onChange,
+  disabled,
+  totalLabel,
+}: {
+  value: number
+  max: number
+  onChange: (value: number) => void
+  disabled?: boolean
+  totalLabel?: string
+}) {
+  return (
+    <Flex
+      w="full"
+      align="center"
+      justify="space-between"
+      gap={3}
+      p={3}
+      bg="whiteAlpha.50"
+      border="1px solid"
+      borderColor="whiteAlpha.100"
+      borderRadius="xl"
+    >
+      <Box minW={0}>
+        <Text color="white" fontSize="sm" fontWeight="semibold">Tickets</Text>
+        <Text color="whiteAlpha.500" fontSize="xs">
+          {totalLabel || `Up to ${max} per signup`}
+        </Text>
+      </Box>
+      <HStack gap={1}>
+        <Button
+          aria-label="Remove a ticket"
+          size="sm"
+          minW="36px"
+          h="36px"
+          p={0}
+          bg="whiteAlpha.100"
+          color="white"
+          borderRadius="lg"
+          _hover={{ bg: 'whiteAlpha.200' }}
+          onClick={() => onChange(value - 1)}
+          disabled={disabled || value <= 1}
+        >
+          <Minus size={16} />
+        </Button>
+        <Text color="white" fontWeight="semibold" minW="32px" textAlign="center" aria-live="polite">
+          {value}
+        </Text>
+        <Button
+          aria-label="Add a ticket"
+          size="sm"
+          minW="36px"
+          h="36px"
+          p={0}
+          bg="whiteAlpha.100"
+          color="white"
+          borderRadius="lg"
+          _hover={{ bg: 'whiteAlpha.200' }}
+          onClick={() => onChange(value + 1)}
+          disabled={disabled || value >= max}
+        >
+          <Plus size={16} />
+        </Button>
+      </HStack>
+    </Flex>
+  )
+}
+
 function WhatsAppRequiredState({ onUpdateProfile }: { onUpdateProfile: () => void }) {
   return (
     <Box
@@ -177,6 +253,16 @@ export default function SessionDetail() {
   const [submittingRegistration, setSubmittingRegistration] = useState(false)
   const [registrationError, setRegistrationError] = useState<string | null>(null)
   const [paymentModalOpen, setPaymentModalOpen] = useState(false)
+  const [requestedTickets, setRequestedTickets] = useState(1)
+  // Ticket count shown while a resize is waiting to save, so taps update instantly
+  const [ticketDraft, setTicketDraft] = useState<number | null>(null)
+  const [savingTickets, setSavingTickets] = useState(false)
+  const ticketSaveTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const latestTicketDraft = useRef<number | null>(null)
+
+  useEffect(() => () => {
+    if (ticketSaveTimer.current) clearTimeout(ticketSaveTimer.current)
+  }, [])
 
   // Computed values
   const sessionData = useMemo(() => {
@@ -184,7 +270,7 @@ export default function SessionDetail() {
 
     const sessionDate = toDate(session.date as Timestamp)
     const sessionEndDate = session.endDate ? toDate(session.endDate as Timestamp) : null
-    const attendeeCount = session.attendees?.length || 0
+    const attendeeCount = getSessionSeatCount(session)
     const waitlistCount = session.waitlist?.length || 0
     const spotsLeft = Math.max(session.capacity - attendeeCount, 0)
     const progressPercent = session.capacity > 0 ? (attendeeCount / session.capacity) * 100 : 0
@@ -200,6 +286,10 @@ export default function SessionDetail() {
     const isOnWaitlist = effectiveStatus === 'waitlisted'
     const isFull = spotsLeft <= 0
     const config = normalizeSessionRegistrationConfig(session)
+    const maxTickets = getMaxTicketsPerRegistration(session)
+    const registrationTickets = getRegistrationTicketQuantity(currentRegistration)
+    // Pending signups can resize up to what is still free; waitlist requests aren't capped by open seats.
+    const selectableTickets = isFull ? maxTickets : Math.max(Math.min(maxTickets, spotsLeft), 1)
 
     return {
       sessionDate,
@@ -215,8 +305,13 @@ export default function SessionDetail() {
       isRegistered,
       isOnWaitlist,
       isFull,
+      maxTickets,
+      registrationTickets,
+      selectableTickets,
     }
   }, [session, currentRegistration, userId])
+
+  const ticketQuantity = Math.min(requestedTickets, sessionData?.selectableTickets || 1)
 
   // Handle registration
   const handleRegister = async () => {
@@ -239,7 +334,7 @@ export default function SessionDetail() {
       return
     }
 
-    const initialState = getInitialRegistrationState(session, sessionData?.attendeeCount || 0)
+    const initialState = getInitialRegistrationState(session, sessionData?.attendeeCount || 0, ticketQuantity)
     const contactPatch = {
       displayName: user.displayName || 'Club BZR member',
       email: user.email || '',
@@ -250,11 +345,13 @@ export default function SessionDetail() {
     const result = sessionData?.currentRegistration
       ? await updateSessionRegistration(sessionData.currentRegistration.id, {
         ...contactPatch,
+        ticketQuantity,
+        ...(typeof session.price === 'number' ? { paymentAmount: getSessionTicketTotal(session, ticketQuantity) } : {}),
         status: initialState.status,
         paymentStatus: initialState.paymentStatus,
         requestedAt: Timestamp.now(),
       })
-      : await createSessionRegistration(session, user, sessionData?.attendeeCount || 0)
+      : await createSessionRegistration(session, user, sessionData?.attendeeCount || 0, ticketQuantity)
 
     if (!result.success) {
       setRegistrationError(result.error?.message || 'Unable to register for this session.')
@@ -263,9 +360,7 @@ export default function SessionDetail() {
     }
 
     if (initialState.status === 'confirmed') {
-      await updateSession(id, {
-        attendees: arrayUnion(userId) as unknown as string[],
-      })
+      await updateSession(id, buildAddAttendeePatch(userId, ticketQuantity))
       await refetch()
     }
 
@@ -305,9 +400,7 @@ export default function SessionDetail() {
       }
 
       if (previousStatus === 'confirmed') {
-        await updateSession(id, {
-          attendees: arrayRemove(userId) as unknown as string[],
-        })
+        await updateSession(id, buildRemoveAttendeePatch(userId))
       }
 
       if (previousStatus === 'waitlisted') {
@@ -332,9 +425,7 @@ export default function SessionDetail() {
         return
       }
     } else {
-      const result = await updateSession(id, {
-        attendees: arrayRemove(userId) as unknown as string[],
-      })
+      const result = await updateSession(id, buildRemoveAttendeePatch(userId))
       if (!result.success) {
         setRegistrationError(result.error?.message || 'Unable to cancel your registration.')
         setSubmittingRegistration(false)
@@ -343,6 +434,56 @@ export default function SessionDetail() {
     }
     await refetch()
     setSubmittingRegistration(false)
+  }
+
+  // Resize a signup that hasn't been paid yet
+  const saveRegistrationTickets = async (registrationId: string, quantity: number) => {
+    if (!session) return
+
+    setSavingTickets(true)
+    const result = await updateSessionRegistration(registrationId, {
+      ticketQuantity: quantity,
+      paymentAmount: getSessionTicketTotal(session, quantity),
+    })
+    if (!result.success) {
+      setRegistrationError(result.error?.message || 'Unable to update your tickets.')
+      latestTicketDraft.current = null
+      setTicketDraft(null)
+      setSavingTickets(false)
+      return
+    }
+
+    await refetchRegistration()
+    // A newer tap may have queued another save; keep showing that value until it lands
+    if (latestTicketDraft.current === quantity) {
+      latestTicketDraft.current = null
+      setTicketDraft(null)
+      setSavingTickets(false)
+    }
+  }
+
+  const handleChangeRegistrationTickets = (nextQuantity: number) => {
+    const registrationId = sessionData?.currentRegistration?.id
+    if (!registrationId || !sessionData) return
+    const maxTickets = Math.max(sessionData.selectableTickets, sessionData.registrationTickets)
+    const quantity = Math.min(Math.max(nextQuantity, 1), maxTickets)
+
+    setRegistrationError(null)
+    setTicketDraft(quantity)
+    latestTicketDraft.current = quantity
+    if (ticketSaveTimer.current) clearTimeout(ticketSaveTimer.current)
+
+    if (quantity === sessionData.registrationTickets && !savingTickets) {
+      latestTicketDraft.current = null
+      setTicketDraft(null)
+      return
+    }
+
+    // Save once the member stops tapping instead of on every step
+    setSavingTickets(true)
+    ticketSaveTimer.current = setTimeout(() => {
+      void saveRegistrationTickets(registrationId, quantity)
+    }, 500)
   }
 
   // Handle reflection submission
@@ -415,14 +556,22 @@ export default function SessionDetail() {
   const typeStyle = typeColors[session.type] || { bg: 'gray.500', text: 'white' }
   const sessionAbout = session.about?.trim()
   const registrationStatus = sessionData?.effectiveStatus
-  const registrationBusy = updating || submittingRegistration || registrationLoading
+  // Background refetches of an already-loaded signup shouldn't lock the panel
+  const registrationBusy =
+    updating || submittingRegistration || (registrationLoading && !currentRegistration)
   const isInviteOnly = sessionData?.config.accessMode === 'invite_only'
   const isPaidSession = sessionData?.config.paymentMode === 'paid'
   const isLencoPayment = isPaidSession && sessionData?.config.paymentProvider === 'lenco'
   const autoConfirmAfterOnlinePayment =
     isLencoPayment && sessionData?.config.approvalMode === 'auto' && !isInviteOnly
   const currency = session.currency || 'ZMW'
-  const paymentAmount = Number(session.price || 0)
+  const ticketPrice = Number(session.price || 0)
+  const savedRegistrationTickets = sessionData?.registrationTickets || 1
+  const registrationTickets = ticketDraft ?? savedRegistrationTickets
+  const paymentAmount = getSessionTicketTotal(session, registrationTickets)
+  const formatMoney = (value: number) => `${currency} ${value.toFixed(2)}`
+  const ticketLabel = (count: number) => `${count} ticket${count === 1 ? '' : 's'}`
+  const showTicketPicker = (sessionData?.maxTickets || 1) > 1
   const sessionCoordinates = session.location?.coordinates
   const sessionMapVenue: MapVenue | null = sessionCoordinates
     ? {
@@ -828,7 +977,7 @@ export default function SessionDetail() {
                       ) : sessionData?.isRegistered ? (
                         <VStack gap={2} w="full">
                           <Text color="green.400" fontWeight="medium">
-                            You're confirmed!
+                            You're confirmed!{registrationTickets > 1 ? ` · ${ticketLabel(registrationTickets)}` : ''}
                           </Text>
                           <Button
                             w="full"
@@ -848,7 +997,7 @@ export default function SessionDetail() {
                       ) : registrationStatus === 'requested' ? (
                         <PendingRegistrationState
                           title="Request received"
-                          description="An admin will review and confirm your spot."
+                          description={`An admin will review and confirm your ${registrationTickets > 1 ? ticketLabel(registrationTickets) : 'spot'}.`}
                           onCancel={handleUnregister}
                           busy={registrationBusy}
                         />
@@ -867,6 +1016,15 @@ export default function SessionDetail() {
                           onCancel={handleUnregister}
                           busy={registrationBusy}
                         >
+                          {showTicketPicker && !hasPendingOnlinePayment && (
+                            <TicketQuantityPicker
+                              value={registrationTickets}
+                              max={Math.max(sessionData.selectableTickets, savedRegistrationTickets)}
+                              onChange={handleChangeRegistrationTickets}
+                              disabled={registrationBusy}
+                              totalLabel={ticketPrice > 0 ? `Total ${formatMoney(paymentAmount)}` : undefined}
+                            />
+                          )}
                           {isLencoPayment && sessionData.currentRegistration && paymentAmount > 0 && (
                             <Button
                               w="full"
@@ -876,9 +1034,11 @@ export default function SessionDetail() {
                               borderRadius="xl"
                               _hover={{ bg: 'brand.600' }}
                               onClick={() => setPaymentModalOpen(true)}
-                              disabled={registrationBusy}
+                              disabled={registrationBusy || savingTickets}
                             >
-                              {hasPendingOnlinePayment ? 'Check Mobile Money Status' : 'Pay with Mobile Money'}
+                              {hasPendingOnlinePayment
+                                ? 'Check Mobile Money Status'
+                                : `Pay ${formatMoney(paymentAmount)} with Mobile Money`}
                             </Button>
                           )}
                         </PendingRegistrationState>
@@ -910,26 +1070,41 @@ export default function SessionDetail() {
                           </Button>
                         </VStack>
                       ) : (
-                        <Button
-                          w="full"
-                          bg={sessionData?.isFull ? 'orange.500' : 'brand.500'}
-                          color="white"
-                          size="lg"
-                          borderRadius="xl"
-                          _hover={{ bg: sessionData?.isFull ? 'orange.600' : 'brand.600' }}
-                          onClick={handleRegister}
-                          disabled={registrationBusy}
-                        >
-                          {registrationBusy ? (
-                            <Spinner size="sm" />
-                          ) : sessionData?.isFull ? (
-                            'Join Waitlist'
-                          ) : isPaidSession ? (
-                            'Request Spot'
-                          ) : (
-                            'Register Now'
+                        <VStack gap={3} w="full">
+                          {showTicketPicker && (
+                            <TicketQuantityPicker
+                              value={ticketQuantity}
+                              max={sessionData?.selectableTickets || 1}
+                              onChange={setRequestedTickets}
+                              disabled={registrationBusy}
+                              totalLabel={
+                                isPaidSession && ticketPrice > 0
+                                  ? `Total ${formatMoney(getSessionTicketTotal(session, ticketQuantity))}`
+                                  : undefined
+                              }
+                            />
                           )}
-                        </Button>
+                          <Button
+                            w="full"
+                            bg={sessionData?.isFull ? 'orange.500' : 'brand.500'}
+                            color="white"
+                            size="lg"
+                            borderRadius="xl"
+                            _hover={{ bg: sessionData?.isFull ? 'orange.600' : 'brand.600' }}
+                            onClick={handleRegister}
+                            disabled={registrationBusy}
+                          >
+                            {registrationBusy ? (
+                              <Spinner size="sm" />
+                            ) : sessionData?.isFull ? (
+                              'Join Waitlist'
+                            ) : isPaidSession ? (
+                              ticketQuantity > 1 ? `Request ${ticketLabel(ticketQuantity)}` : 'Request Spot'
+                            ) : (
+                              ticketQuantity > 1 ? `Register ${ticketLabel(ticketQuantity)}` : 'Register Now'
+                            )}
+                          </Button>
+                        </VStack>
                       )}
                       {registrationError && (
                         <Text color="red.300" fontSize="sm" textAlign="center" mt={3}>
@@ -969,7 +1144,7 @@ export default function SessionDetail() {
                   {isPaidSession && session.price && (
                     <Box mt={4} p={4} bg="whiteAlpha.50" border="1px solid" borderColor="whiteAlpha.100" borderRadius="xl">
                       <Text color="white" fontSize="sm" fontWeight="semibold">
-                        {currency} {session.price.toFixed(2)}
+                        {formatMoney(session.price)}{showTicketPicker ? ' per ticket' : ''}
                       </Text>
                       <Text color="whiteAlpha.500" fontSize="sm" mt={1}>
                         {autoConfirmAfterOnlinePayment
@@ -1135,7 +1310,7 @@ export default function SessionDetail() {
           }}
           sessionId={id}
           registrationId={sessionData.currentRegistration.id}
-          sessionTitle={session.title}
+          sessionTitle={registrationTickets > 1 ? `${session.title} · ${ticketLabel(registrationTickets)}` : session.title}
           amount={paymentAmount}
           currency={currency}
           autoConfirmOnSuccess={autoConfirmAfterOnlinePayment}

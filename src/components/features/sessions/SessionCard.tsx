@@ -5,6 +5,7 @@ import { motion, useMotionValue, useTransform, useSpring } from 'framer-motion';
 import { clsx } from 'clsx';
 import { twMerge } from 'tailwind-merge';
 import type { Session, SessionType, SessionStatus } from '../../../../lib/schema';
+import { getSessionSeatCount } from '../../../../lib/sessionRegistrations';
 import { Timestamp } from 'firebase/firestore';
 import { SafeImage } from '@/components/ui/SafeImage';
 
@@ -55,7 +56,7 @@ const getRegistrationStatus = (session: Session): {
   color: string;
   isFull: boolean;
 } => {
-  const attendeeCount = session.attendees?.length || 0;
+  const attendeeCount = getSessionSeatCount(session);
   const capacity = session.capacity || 0;
   const remaining = capacity - attendeeCount;
   const percentFull = capacity > 0 ? (attendeeCount / capacity) * 100 : 0;
@@ -80,7 +81,7 @@ const getRegistrationStatus = (session: Session): {
 
 // Capacity indicator component
 const CapacityIndicator: React.FC<{ session: Session }> = ({ session }) => {
-  const attendeeCount = session.attendees?.length || 0;
+  const attendeeCount = getSessionSeatCount(session);
   const capacity = session.capacity || 0;
   const percentFull = capacity > 0 ? (attendeeCount / capacity) * 100 : 0;
 

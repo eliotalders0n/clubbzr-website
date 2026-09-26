@@ -127,6 +127,25 @@ service cloud.firestore {
     }
 
     // Validate the current user is the only item removed from a list field
+    // Ticket count stored for the current user on a session's attendeeTickets map (missing = 1)
+    function requestedOwnTickets() {
+      return request.resource.data.get('attendeeTickets', {}).get(request.auth.uid, 1);
+    }
+
+    // Only the current user's entry in a session's attendeeTickets map may change
+    function onlyOwnAttendeeTicketsChanged() {
+      return request.resource.data.get('attendeeTickets', {})
+        .diff(resource.data.get('attendeeTickets', {}))
+        .affectedKeys()
+        .hasOnly([request.auth.uid]);
+    }
+
+    function isValidTicketQuantity(quantity, session) {
+      return quantity is int
+        && quantity >= 1
+        && quantity <= session.get('maxTicketsPerRegistration', 10);
+    }
+
     function currentUserRemovedFromList(field) {
       return resource.data[field] is list
         && request.resource.data[field] is list
@@ -287,14 +306,19 @@ service cloud.firestore {
         && isServerTimestamp('updatedAt')
         && (
           (
-            request.resource.data.diff(resource.data).affectedKeys().hasOnly(['attendees', 'updatedAt'])
+            request.resource.data.diff(resource.data).affectedKeys().hasOnly(['attendees', 'attendeeTickets', 'updatedAt'])
+            && onlyOwnAttendeeTicketsChanged()
             && (
               (
                 currentUserAddedToList('attendees')
                 && hasSavedWhatsAppPhone()
-                && request.resource.data.attendees.size() <= resource.data.capacity
+                && isValidTicketQuantity(requestedOwnTickets(), resource.data)
+                && request.resource.data.attendees.size() + requestedOwnTickets() - 1 <= resource.data.capacity
               )
-              || currentUserRemovedFromList('attendees')
+              || (
+                currentUserRemovedFromList('attendees')
+                && !(request.auth.uid in request.resource.data.get('attendeeTickets', {}))
+              )
             )
           )
           || (
@@ -327,6 +351,7 @@ service cloud.firestore {
           && (!('accessMode' in registrationSession()) || registrationSession().accessMode == 'open')
           && request.resource.data.status in ['requested', 'pending_payment', 'waitlisted', 'confirmed']
           && request.resource.data.paymentStatus in ['not_required', 'unpaid']
+          && isValidTicketQuantity(request.resource.data.get('ticketQuantity', 1), registrationSession())
           && (
             request.resource.data.status != 'confirmed'
             || (
@@ -335,6 +360,15 @@ service cloud.firestore {
               && (!('accessMode' in registrationSession()) || registrationSession().accessMode == 'open')
             )
           );
+      }
+
+      // Members can resize a signup until a payment is in flight or recorded
+      function canChangeSelfTicketQuantity() {
+        return isOwner(resource.data.userId)
+          && resource.data.status in ['requested', 'pending_payment']
+          && resource.data.paymentStatus in ['not_required', 'unpaid', 'failed']
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['ticketQuantity', 'paymentAmount', 'updatedAt'])
+          && isValidTicketQuantity(request.resource.data.get('ticketQuantity', 1), registrationSession());
       }
 
       function canCancelSelfRegistration() {
@@ -354,6 +388,8 @@ service cloud.firestore {
             'phone',
             'whatsappPhone',
             'photoURL',
+            'ticketQuantity',
+            'paymentAmount',
             'status',
             'paymentStatus',
             'requestedAt',
@@ -361,6 +397,7 @@ service cloud.firestore {
           ])
           && request.resource.data.status in ['requested', 'pending_payment', 'waitlisted', 'confirmed']
           && request.resource.data.paymentStatus in ['not_required', 'unpaid']
+          && isValidTicketQuantity(request.resource.data.get('ticketQuantity', 1), registrationSession())
           && (
             request.resource.data.status != 'confirmed'
             || (
@@ -373,7 +410,10 @@ service cloud.firestore {
 
       allow read: if isAdmin() || isOwner(resource.data.userId);
       allow create: if isAdmin() || canCreateSelfRegistration();
-      allow update: if isAdmin() || canCancelSelfRegistration() || canResubmitSelfRegistration();
+      allow update: if isAdmin()
+        || canCancelSelfRegistration()
+        || canResubmitSelfRegistration()
+        || canChangeSelfTicketQuantity();
       allow delete: if isAdmin();
     }
 

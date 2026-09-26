@@ -23,6 +23,7 @@ import { Header } from '@/components/layout/Header'
 import { Footer } from '@/components/layout/Footer'
 import { useCollection } from '@/hooks/useFirestore'
 import type { Session, SessionType } from '../../lib/schema'
+import { getSessionSeatCount } from '../../lib/sessionRegistrations'
 
 // Fallback image for sessions without cover
 import eventImgFallback from '@/assets/images/events/IMG_9074.jpeg'
@@ -49,7 +50,7 @@ const typeColors: Record<SessionType, { bg: string; text: string }> = {
 }
 
 function SessionCard({ session }: { session: Session }) {
-  const attendeeCount = session.attendees?.length || 0
+  const attendeeCount = getSessionSeatCount(session)
   const spotsLeft = session.capacity - attendeeCount
   const sessionDate = toDate(session.date as Timestamp)
 
@@ -272,7 +273,7 @@ export default function Sessions() {
           {/* Featured Session */}
           {featuredSession && (() => {
             const featuredDate = toDate(featuredSession.date as Timestamp)
-            const featuredAttendeeCount = featuredSession.attendees?.length || 0
+            const featuredAttendeeCount = getSessionSeatCount(featuredSession)
             const featuredSpotsLeft = featuredSession.capacity - featuredAttendeeCount
             const featuredTypeStyle = typeColors[featuredSession.type] || { bg: 'gray.500', text: 'white' }
 

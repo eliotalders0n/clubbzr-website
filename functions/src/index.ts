@@ -674,6 +674,41 @@ function canAutoConfirmPaidRegistration(
   return approvalMode === "auto" && accessMode === "open";
 }
 
+const DEFAULT_MAX_TICKETS_PER_REGISTRATION = 10;
+
+function toTicketCount(value: unknown): number {
+  const count = Math.floor(Number(value));
+  return Number.isFinite(count) && count >= 1 ? count : 1;
+}
+
+/** Tickets on a registration, clamped to the session's per-signup limit. */
+function getRegistrationTicketQuantity(
+  registrationData: FirebaseFirestore.DocumentData,
+  sessionData: FirebaseFirestore.DocumentData
+): number {
+  const maxTickets = sessionData.maxTicketsPerRegistration === undefined ?
+    DEFAULT_MAX_TICKETS_PER_REGISTRATION :
+    toTicketCount(sessionData.maxTicketsPerRegistration);
+  return Math.min(toTicketCount(registrationData.ticketQuantity), maxTickets);
+}
+
+/** Seats held by confirmed attendees other than `excludeUserId`. */
+function getSessionSeatsUsed(
+  sessionData: FirebaseFirestore.DocumentData,
+  excludeUserId?: string | null
+): number {
+  const attendees: unknown[] = Array.isArray(sessionData.attendees) ?
+    sessionData.attendees :
+    [];
+  const tickets = (sessionData.attendeeTickets || {}) as Record<string, unknown>;
+  return attendees.reduce<number>((total, attendee) => {
+    if (typeof attendee !== "string" || attendee === excludeUserId) {
+      return total;
+    }
+    return total + toTicketCount(tickets[attendee]);
+  }, 0);
+}
+
 function serializeForCallable(value: unknown): unknown {
   if (value instanceof admin.firestore.Timestamp) {
     return value.toDate().toISOString();
@@ -3496,11 +3531,18 @@ async function markRegistrationPaid(input: {
     const attendees = Array.isArray(sessionData.attendees) ?
       sessionData.attendees :
       [];
+    const ticketQuantity = getRegistrationTicketQuantity(
+      registrationData,
+      sessionData
+    );
     const alreadyConfirmed = registrationData.status === "confirmed";
     const alreadyAttending = userId ? attendees.includes(userId) : false;
     const capacity = Number(sessionData.capacity);
     const hasCapacity = alreadyAttending ||
-      (Number.isFinite(capacity) && capacity > attendees.length);
+      (
+        Number.isFinite(capacity) &&
+        capacity >= getSessionSeatsUsed(sessionData, userId) + ticketQuantity
+      );
     const shouldConfirm = alreadyConfirmed ||
       (canAutoConfirmPaidRegistration(sessionData) && hasCapacity);
 
@@ -3529,6 +3571,7 @@ async function markRegistrationPaid(input: {
         sessionRef,
         {
           attendees: admin.firestore.FieldValue.arrayUnion(userId),
+          attendeeTickets: {[userId]: ticketQuantity},
           waitlist: admin.firestore.FieldValue.arrayRemove(userId),
           updatedAt: admin.firestore.FieldValue.serverTimestamp(),
         },
@@ -4339,11 +4382,18 @@ export const adminResolvePaymentReconciliationIssue = onCall(
       const attendees = Array.isArray(sessionData.attendees) ?
         sessionData.attendees :
         [];
+      const ticketQuantity = getRegistrationTicketQuantity(
+        registrationData,
+        sessionData
+      );
       const alreadyConfirmed = registrationData.status === "confirmed";
       const alreadyAttending = userId ? attendees.includes(userId) : false;
       const capacity = Number(sessionData.capacity);
       const hasCapacity = alreadyAttending ||
-        (Number.isFinite(capacity) && capacity > attendees.length);
+        (
+          Number.isFinite(capacity) &&
+          capacity >= getSessionSeatsUsed(sessionData, userId) + ticketQuantity
+        );
       const shouldConfirm = alreadyConfirmed ||
         (sessionSnapshot?.exists === true &&
           canAutoConfirmPaidRegistration(sessionData) &&
@@ -4374,6 +4424,7 @@ export const adminResolvePaymentReconciliationIssue = onCall(
           sessionRef,
           {
             attendees: admin.firestore.FieldValue.arrayUnion(userId),
+            attendeeTickets: {[userId]: ticketQuantity},
             waitlist: admin.firestore.FieldValue.arrayRemove(userId),
             updatedAt: admin.firestore.FieldValue.serverTimestamp(),
           },
@@ -4804,9 +4855,6 @@ export const adminCollectSessionMobileMoney = onCall(
     }
 
     const sessionData = sessionSnapshot.data() || {};
-    const amount = data.amount === undefined || data.amount === "" ?
-      requirePositiveAmount(sessionData.price, "Collection amount is required.") :
-      requirePositiveAmount(data.amount, "Collection amount is invalid.");
     const currency = normalizeCurrency(data.currency ?? sessionData.currency);
 
     let registrationData: FirebaseFirestore.DocumentData | null = null;
@@ -4828,6 +4876,16 @@ export const adminCollectSessionMobileMoney = onCall(
         );
       }
     }
+
+    const ticketQuantity = registrationData ?
+      getRegistrationTicketQuantity(registrationData, sessionData) :
+      1;
+    const amount = data.amount === undefined || data.amount === "" ?
+      requirePositiveAmount(
+        roundCurrency(Number(sessionData.price) * ticketQuantity),
+        "Collection amount is required."
+      ) :
+      requirePositiveAmount(data.amount, "Collection amount is invalid.");
 
     const reference = normalizePaymentReference(data.reference) ??
       generateReference();
@@ -6061,7 +6119,11 @@ export const chargeSessionMobileMoney = onCall(
         "free"
     );
     const paymentProvider = sessionData.paymentProvider ?? "manual_external";
-    const amount = Number(sessionData.price);
+    const ticketQuantity = getRegistrationTicketQuantity(
+      registrationData,
+      sessionData
+    );
+    const amount = Number(sessionData.price) * ticketQuantity;
     const currency = normalizeOptionalString(data.currency) ??
       normalizeOptionalString(sessionData.currency) ??
       DEFAULT_CURRENCY;
@@ -6166,6 +6228,7 @@ export const chargeSessionMobileMoney = onCall(
       phone,
       operator,
       amount: roundedAmount,
+      ticketQuantity,
       currency: normalizedCurrency,
       gatewayStatus: "request_started",
       status: "pending",

@@ -19,7 +19,7 @@ import {
 } from '@chakra-ui/react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { BadgeCheck, CalendarDays, CheckCircle2, CreditCard, ImagePlus, Link as LinkIcon, MapPin, MessageCircle, MoreHorizontal, Pencil, Plus, RotateCcw, Search, Send, Trash2, UserRoundMinus, Users, X } from 'lucide-react'
-import { GeoPoint, Timestamp, arrayRemove, arrayUnion } from 'firebase/firestore'
+import { GeoPoint, Timestamp, arrayUnion } from 'firebase/firestore'
 import { useNavigate } from 'react-router-dom'
 
 import { AdminLayout } from '@/components/layout/AdminLayout'
@@ -29,7 +29,19 @@ import { useCollection } from '@/hooks'
 import { sendSessionConfirmationWhatsApp } from '../../../lib/adminNotifications'
 import { recordPaymentReturn } from '../../../lib/adminPayments'
 import { createDocument, createDocumentWithId, deleteDocument, updateDocument } from '../../../lib/firestore'
-import { getRegistrationCounts, getSessionRegistrationId, getUserWhatsAppPhone, normalizeSessionRegistrationConfig, updateSessionRegistration } from '../../../lib/sessionRegistrations'
+import {
+  DEFAULT_MAX_TICKETS_PER_REGISTRATION,
+  buildAddAttendeePatch,
+  buildRemoveAttendeePatch,
+  getMaxTicketsPerRegistration,
+  getRegistrationCounts,
+  getRegistrationTicketQuantity,
+  getSessionRegistrationId,
+  getSessionSeatCount,
+  getUserWhatsAppPhone,
+  normalizeSessionRegistrationConfig,
+  updateSessionRegistration,
+} from '../../../lib/sessionRegistrations'
 import { STORAGE_PATHS, uploadFileSimple, validateFile } from '../../../lib/storage'
 import type {
   CreateDocument,
@@ -73,6 +85,7 @@ interface SessionForm {
   locationSource: 'art_location' | 'custom'
   showOnCommunityMap: boolean
   capacity: string
+  maxTicketsPerRegistration: string
   accessMode: SessionAccessMode
   paymentMode: SessionPaymentMode
   paymentProvider: SessionPaymentProvider
@@ -112,6 +125,7 @@ const emptyForm: SessionForm = {
   locationSource: 'custom',
   showOnCommunityMap: true,
   capacity: '30',
+  maxTicketsPerRegistration: String(DEFAULT_MAX_TICKETS_PER_REGISTRATION),
   accessMode: 'open',
   paymentMode: 'free',
   paymentProvider: 'none',
@@ -341,7 +355,7 @@ const getSessionConfirmedCount = (
   const registrations = getSessionRegistrations(registrationsBySessionId, session.id)
   return registrations.length > 0
     ? getRegistrationCounts(registrations).confirmed
-    : session.attendees?.length || 0
+    : getSessionSeatCount(session)
 }
 
 const getSessionWaitlistCount = (
@@ -399,6 +413,7 @@ const toForm = (session: Session): SessionForm => ({
   locationSource: session.location?.source || (session.location?.artLocationId ? 'art_location' : 'custom'),
   showOnCommunityMap: session.location?.showOnCommunityMap ?? true,
   capacity: String(session.capacity || 0),
+  maxTicketsPerRegistration: String(getMaxTicketsPerRegistration(session)),
   accessMode: session.accessMode || 'open',
   paymentMode: session.paymentMode || (session.isFree === false || (session.price && session.price > 0) ? 'paid' : 'free'),
   paymentProvider: session.paymentProvider || (session.isFree === false || (session.price && session.price > 0) ? 'manual_external' : 'none'),
@@ -455,12 +470,14 @@ const buildPayload = (
     },
     isOnline,
     capacity: Number(form.capacity) || 0,
+    maxTicketsPerRegistration: Math.max(Math.floor(Number(form.maxTicketsPerRegistration)) || 1, 1),
     accessMode: form.accessMode,
     paymentMode: form.paymentMode,
     paymentProvider: isPaid ? form.paymentProvider : 'none',
     approvalMode: form.approvalMode,
     paymentInstructions: form.paymentInstructions.trim(),
     attendees: existing?.attendees || [],
+    ...(existing?.attendeeTickets ? { attendeeTickets: existing.attendeeTickets } : {}),
     waitlist: existing?.waitlist || [],
     facilitator: {
       userId: existing?.facilitator?.userId || currentUserId || 'admin',
@@ -695,15 +712,12 @@ export default function ManageSessions() {
     }
 
     if (status === 'confirmed') {
-      await updateDocument('sessions', session.id, {
-        attendees: arrayUnion(userId) as unknown as string[],
-        waitlist: arrayRemove(userId) as unknown as string[],
-      })
+      await updateDocument('sessions', session.id, buildAddAttendeePatch(userId, 1))
     }
 
     if (status === 'waitlisted') {
       await updateDocument('sessions', session.id, {
-        attendees: arrayRemove(userId) as unknown as string[],
+        ...buildRemoveAttendeePatch(userId),
         waitlist: arrayUnion(userId) as unknown as string[],
       })
     }
@@ -726,10 +740,11 @@ export default function ManageSessions() {
     })
       if (!success) return
 
-      await updateDocument('sessions', registration.sessionId, {
-        attendees: arrayUnion(registration.userId) as unknown as string[],
-        waitlist: arrayRemove(registration.userId) as unknown as string[],
-      })
+      await updateDocument(
+        'sessions',
+        registration.sessionId,
+        buildAddAttendeePatch(registration.userId, getRegistrationTicketQuantity(registration))
+      )
       void refetch()
     })()
   }
@@ -754,10 +769,11 @@ export default function ManageSessions() {
       })
       if (!success) return
 
-      await updateDocument('sessions', registration.sessionId, {
-        attendees: arrayUnion(registration.userId) as unknown as string[],
-        waitlist: arrayRemove(registration.userId) as unknown as string[],
-      })
+      await updateDocument(
+        'sessions',
+        registration.sessionId,
+        buildAddAttendeePatch(registration.userId, getRegistrationTicketQuantity(registration))
+      )
       void refetch()
     })()
   }
@@ -770,7 +786,7 @@ export default function ManageSessions() {
       if (!success) return
 
       await updateDocument('sessions', registration.sessionId, {
-        attendees: arrayRemove(registration.userId) as unknown as string[],
+        ...buildRemoveAttendeePatch(registration.userId),
         waitlist: arrayUnion(registration.userId) as unknown as string[],
       })
       void refetch()
@@ -786,10 +802,11 @@ export default function ManageSessions() {
       })
       if (!success) return
 
-      await updateDocument('sessions', registration.sessionId, {
-        attendees: arrayRemove(registration.userId) as unknown as string[],
-        waitlist: arrayRemove(registration.userId) as unknown as string[],
-      })
+      await updateDocument(
+        'sessions',
+        registration.sessionId,
+        buildRemoveAttendeePatch(registration.userId, { waitlist: true })
+      )
       void refetch()
     })()
   }
@@ -1554,6 +1571,7 @@ function RegistrationRow({
     : registration.confirmationWhatsAppFailedAt
       ? 'Retry WhatsApp'
       : 'Send WhatsApp'
+  const ticketQuantity = getRegistrationTicketQuantity(registration)
   const paymentAmountText = registration.paymentAmount
     ? `${registration.paymentCurrency || 'ZMW'} ${registration.paymentAmount.toFixed(2)}`
     : 'No amount'
@@ -1579,6 +1597,9 @@ function RegistrationRow({
           <Box minW={0}>
             <Text color="white" fontWeight="semibold" overflow="hidden" textOverflow="ellipsis" whiteSpace="nowrap">{registration.displayName}</Text>
             <Text color="whiteAlpha.500" fontSize="xs" overflow="hidden" textOverflow="ellipsis" whiteSpace="nowrap">{registration.email || registration.userId}</Text>
+            {ticketQuantity > 1 && (
+              <Text color="brand.200" fontSize="xs" fontWeight="semibold" mt={0.5}>{ticketQuantity} tickets</Text>
+            )}
           </Box>
         </HStack>
 
@@ -1899,9 +1920,10 @@ function SessionFormFields({
           <Field label="Start"><Input type="time" value={form.time} onChange={(e) => setForm((prev) => ({ ...prev, time: e.target.value }))} {...sessionInputProps} /></Field>
           <Field label="End"><Input type="time" value={form.endTime} onChange={(e) => setForm((prev) => ({ ...prev, endTime: e.target.value }))} {...sessionInputProps} /></Field>
         </SimpleGrid>
-        <Box maxW="320px">
+        <SimpleGrid columns={{ base: 1, md: 2 }} gap={4} maxW="660px">
           <Field label="Capacity"><Input type="number" value={form.capacity} onChange={(e) => setForm((prev) => ({ ...prev, capacity: e.target.value }))} {...sessionInputProps} /></Field>
-        </Box>
+          <Field label="Max tickets per signup"><Input type="number" min={1} step={1} value={form.maxTicketsPerRegistration} onChange={(e) => setForm((prev) => ({ ...prev, maxTicketsPerRegistration: e.target.value }))} {...sessionInputProps} /></Field>
+        </SimpleGrid>
         {form.type !== 'online' ? (
           <>
             <LocationPicker

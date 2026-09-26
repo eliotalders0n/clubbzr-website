@@ -483,6 +483,7 @@ export interface Session extends BaseDocument {
   capacity: number;
   attendees: string[]; // User IDs
   waitlist: string[]; // User IDs
+  attendeeTickets?: Record<string, number>; // Confirmed attendee user ID -> tickets held (missing = 1)
 
   // Organizer
   facilitator: FacilitatorInfo;
@@ -512,6 +513,7 @@ export interface Session extends BaseDocument {
   paymentProvider?: SessionPaymentProvider;
   approvalMode?: SessionApprovalMode;
   paymentInstructions?: string;
+  maxTicketsPerRegistration?: number;
   isFree: boolean;
   price?: number;
   currency?: string;
@@ -529,6 +531,7 @@ export interface SessionRegistration extends BaseDocument {
   phone?: string;
   whatsappPhone?: string;
   photoURL?: string | null;
+  ticketQuantity?: number; // Tickets on this registration (missing = 1)
 
   status: SessionRegistrationStatus;
   paymentStatus: SessionRegistrationPaymentStatus;
